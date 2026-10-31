@@ -1,0 +1,73 @@
+# tests/stats_test.nox — Verification of summary statistics, Welford's algorithm, and edge cases.
+
+import nox.test
+import nox.mathx
+import errors
+from errors import AggregationError
+import values
+from values import Cell, cell_int, cell_float, cell_null
+import stats
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
+
+# 1. Simple dataset: [10, 20, 30, 40, 50]
+c_odd: list[Cell] = [cell_int(10), cell_int(20), cell_int(30), cell_int(40), cell_int(50)]
+nox.test.assert_eq_float(stat_mean(c_odd), 30.0, "mean of 10..50 is 30")
+nox.test.assert_eq_float(stat_median(c_odd), 30.0, "median (odd) is 30")
+nox.test.assert_eq_float(stat_sum(c_odd), 150.0, "sum is 150")
+nox.test.assert_eq_int(stat_min(c_odd).as_int(), 10, "min is 10")
+nox.test.assert_eq_int(stat_max(c_odd).as_int(), 50, "max is 50")
+nox.test.assert_eq_int(stat_count(c_odd), 5, "count is 5")
+
+# Sample variance of [10, 20, 30, 40, 50]:
+# deviations: -20, -10, 0, 10, 20 -> sum of squares: 400 + 100 + 0 + 100 + 400 = 1000
+# sample variance = 1000 / 4 = 250.0
+# population variance = 1000 / 5 = 200.0
+nox.test.assert_eq_float(stat_variance(c_odd, True), 250.0, "sample variance is 250.0")
+nox.test.assert_eq_float(stat_variance(c_odd, False), 200.0, "population variance is 200.0")
+
+# StdDev
+# sqrt(250) approx 15.8113883
+std_s: float = stat_std(c_odd, True)
+nox.test.assert_true(std_s > 15.81 and std_s < 15.82, "sample stddev")
+
+# 2. Even length dataset: [10, 20, 30, 40] -> median is (20+30)/2 = 25.0
+c_even: list[Cell] = [cell_int(10), cell_int(20), cell_int(30), cell_int(40)]
+nox.test.assert_eq_float(stat_median(c_even), 25.0, "median (even) is 25.0")
+
+# 3. Missing values inside dataset: [10, null, 20, null, 30]
+c_with_null: list[Cell] = [cell_int(10), cell_null(), cell_int(20), cell_null(), cell_int(30)]
+nox.test.assert_eq_int(stat_count(c_with_null), 5, "total count is 5")
+nox.test.assert_eq_int(stat_count_non_missing(c_with_null), 3, "non-missing count is 3")
+nox.test.assert_eq_int(stat_count_missing(c_with_null), 2, "missing count is 2")
+nox.test.assert_eq_float(stat_mean(c_with_null), 20.0, "mean ignores nulls")
+nox.test.assert_eq_float(stat_median(c_with_null), 20.0, "median ignores nulls")
+
+# 4. Single element dataset: [100]
+c_single: list[Cell] = [cell_int(100)]
+nox.test.assert_eq_float(stat_mean(c_single), 100.0, "mean of single is 100")
+nox.test.assert_eq_float(stat_variance(c_single, False), 0.0, "population variance of single is 0")
+
+caught_sample_single: bool = False
+try:
+    bad_var: float = stat_variance(c_single, True)
+except AggregationError:
+    caught_sample_single = True
+nox.test.assert_true(caught_sample_single, "sample variance on single element must raise AggregationError")
+
+# 5. Empty or all-missing dataset
+c_all_null: list[Cell] = [cell_null(), cell_null()]
+caught_empty_mean: bool = False
+try:
+    bad_mean: float = stat_mean(c_all_null)
+except AggregationError:
+    caught_empty_mean = True
+nox.test.assert_true(caught_empty_mean, "mean on all-missing must raise AggregationError")
+
+# 6. Numerical stability / cancellation sensitivity test: [1e8 + 1, 1e8 + 2, 1e8 + 3]
+# Naive E[x^2] - E[x]^2 would lose precision on large numbers!
+# Welford's algorithm computes variance of [1e8+1, 1e8+2, 1e8+3] accurately as sample variance = 1.0!
+c_large: list[Cell] = [cell_float(100000001.0), cell_float(100000002.0), cell_float(100000003.0)]
+var_large: float = stat_variance(c_large, True)
+nox.test.assert_true(var_large > 0.999 and var_large < 1.001, "Welford computes variance of large numbers accurately (1.0)")
+
+print("stats_test passed")

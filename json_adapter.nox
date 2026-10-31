@@ -1,0 +1,195 @@
+# json_adapter.nox — JSON array-of-objects import, export, and CSV ↔ JSON conversion for Atlas.
+
+import nox.json
+from nox.json import JsonWriter, is_array, is_object, is_null, is_bool, is_number, is_string, as_bool, as_number, as_string, array_len, array_get, object_len, object_key, object_value
+import errors
+from errors import JsonImportError, ShapeError, TypeConversionError, MissingValueError
+import values
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+
+def _find_json_object_key_index(jv: JsonValue, key: str) -> int:
+    i: int = 0
+    n: int = object_len(jv)
+    while i < n:
+        if object_key(jv, i) == key:
+            return i
+        i = i + 1
+    return -1
+
+def table_from_json(json_text: str, explicit_schema: Schema | None = None) -> Table:
+    root: JsonValue = nox.json.parse(json_text)
+    if not is_array(root):
+        raise JsonImportError("root JSON value must be an array of objects")
+
+    num_items: int = array_len(root)
+    if num_items == 0:
+        if explicit_schema != None:
+            empty_rows: list[list[Cell]] = []
+            return Table(explicit_schema, empty_rows)
+        empty_cols: list[ColumnDef] = []
+        empty_schema: Schema = Schema(empty_cols)
+        empty_table_rows: list[list[Cell]] = []
+        return Table(empty_schema, empty_table_rows)
+
+    s: Schema = Schema([])
+    if explicit_schema != None:
+        s = explicit_schema
+    else:
+        # Collect distinct keys across all objects in array to determine schema
+        discovered_keys: list[str] = []
+        discovered_types: list[int] = []
+        item_idx: int = 0
+        while item_idx < num_items:
+            elem: JsonValue = array_get(root, item_idx)
+            if not is_object(elem):
+                raise JsonImportError("array element at index " + str(item_idx) + " is not a JSON object")
+            num_keys: int = object_len(elem)
+            k_idx: int = 0
+            while k_idx < num_keys:
+                k_name: str = object_key(elem, k_idx)
+                k_val: JsonValue = object_value(elem, k_idx)
+                # Check if k_name is already in discovered_keys
+                existing_idx: int = -1
+                scan: int = 0
+                while scan < len(discovered_keys):
+                    if discovered_keys[scan] == k_name:
+                        existing_idx = scan
+                    scan = scan + 1
+
+                val_type: int = TYPE_STR
+                if is_null(k_val):
+                    val_type = TYPE_NULL
+                elif is_bool(k_val):
+                    val_type = TYPE_BOOL
+                elif is_number(k_val):
+                    f_val: float = as_number(k_val)
+                    i_val: int = int(f_val)
+                    if float(i_val) == f_val:
+                        val_type = TYPE_INT
+                    else:
+                        val_type = TYPE_FLOAT
+                elif is_string(k_val):
+                    val_type = TYPE_STR
+
+                if existing_idx < 0:
+                    discovered_keys.append(k_name)
+                    discovered_types.append(val_type)
+                else:
+                    curr_type: int = discovered_types[existing_idx]
+                    if curr_type == TYPE_NULL and val_type != TYPE_NULL:
+                        discovered_types[existing_idx] = val_type
+                    elif curr_type == TYPE_INT and val_type == TYPE_FLOAT:
+                        discovered_types[existing_idx] = TYPE_FLOAT
+                    elif curr_type != val_type and val_type != TYPE_NULL:
+                        # Fallback to string if mixed
+                        discovered_types[existing_idx] = TYPE_STR
+                k_idx = k_idx + 1
+            item_idx = item_idx + 1
+
+        cols: list[ColumnDef] = []
+        c_i: int = 0
+        while c_i < len(discovered_keys):
+            t: int = discovered_types[c_i]
+            if t == TYPE_NULL:
+                t = TYPE_STR
+            cols.append(ColumnDef(discovered_keys[c_i], t, True))
+            c_i = c_i + 1
+        s = Schema(cols)
+
+    expected_cols: int = s.column_count()
+    rows: list[list[Cell]] = []
+    r_i: int = 0
+
+    while r_i < num_items:
+        elem_obj: JsonValue = array_get(root, r_i)
+        if not is_object(elem_obj):
+            raise JsonImportError("array element at index " + str(r_i) + " is not a JSON object")
+
+        row: list[Cell] = []
+        c_i = 0
+        while c_i < expected_cols:
+            col_def: ColumnDef = s.columns[c_i]
+            k_pos: int = _find_json_object_key_index(elem_obj, col_def.name)
+            cell: Cell = cell_null()
+            if k_pos >= 0:
+                jv_cell: JsonValue = object_value(elem_obj, k_pos)
+                if is_null(jv_cell):
+                    cell = cell_null()
+                elif is_bool(jv_cell):
+                    cell = cell_bool(as_bool(jv_cell))
+                elif is_number(jv_cell):
+                    num_val: float = as_number(jv_cell)
+                    if col_def.data_type == TYPE_INT:
+                        cell = cell_int(int(num_val))
+                    elif col_def.data_type == TYPE_FLOAT:
+                        cell = cell_float(num_val)
+                    else:
+                        i_cand: int = int(num_val)
+                        if float(i_cand) == num_val:
+                            cell = cell_int(i_cand)
+                        else:
+                            cell = cell_float(num_val)
+                elif is_string(jv_cell):
+                    cell = cell_str(as_string(jv_cell))
+                else:
+                    raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
+
+            if not col_def.nullable and cell.is_missing():
+                raise MissingValueError("column '" + col_def.name + "' is not nullable, but missing value found at row " + str(r_i))
+
+            row.append(cell)
+            c_i = c_i + 1
+
+        rows.append(row)
+        r_i = r_i + 1
+
+    return Table(s, rows)
+
+def table_to_json(t: Table) -> str:
+    w: JsonWriter = JsonWriter()
+    w.begin_array()
+
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+    num_cols: int = t.column_count()
+
+    while r_idx < num_rows:
+        row: list[Cell] = t.rows[r_idx]
+        w.begin_object()
+        c_idx: int = 0
+        while c_idx < num_cols:
+            col: ColumnDef = t.schema.columns[c_idx]
+            w.write_key(col.name)
+            c: Cell = row[c_idx]
+            if c.is_missing():
+                w.write_null()
+            elif c.kind == TYPE_INT:
+                w.write_int(c.i)
+            elif c.kind == TYPE_FLOAT:
+                w.write_float(c.f)
+            elif c.kind == TYPE_BOOL:
+                w.write_bool(c.b)
+            elif c.kind == TYPE_STR:
+                w.write_string(c.s)
+            else:
+                w.write_string(c.to_string())
+            c_idx = c_idx + 1
+        w.end_object()
+        r_idx = r_idx + 1
+
+    w.end_array()
+    return w.build()
+
+def csv_to_json(csv_text: str, has_header: bool = True) -> str:
+    t: Table = read_csv(csv_text, has_header)
+    return table_to_json(t)
+
+def json_to_csv(json_text: str, include_header: bool = True, safe_spreadsheet: bool = False) -> str:
+    t: Table = table_from_json(json_text)
+    return to_csv(t, include_header, safe_spreadsheet)

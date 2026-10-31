@@ -1,0 +1,76 @@
+# tests/csv_test.nox — Unit tests for CSV parsing, inference, quoting, injection safety, and round-trips.
+
+import nox.test
+import errors
+from errors import ShapeError, TypeConversionError, MissingValueError
+import values
+from values import Cell, cell_int, cell_str, cell_float, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+
+# 1. Type inference test
+csv_types: str = "id,active,weight,note\n" + "1,true,68.5,first\n" + "2,false,72.0,second\n" + "3,true,80.25,third\n"
+
+t_inf: Table = read_csv(csv_types, True)
+nox.test.assert_eq_int(t_inf.row_count(), 3, "3 rows inferred")
+nox.test.assert_eq_int(t_inf.schema.columns[0].data_type, TYPE_INT, "id inferred as int")
+nox.test.assert_eq_int(t_inf.schema.columns[1].data_type, TYPE_BOOL, "active inferred as bool")
+nox.test.assert_eq_int(t_inf.schema.columns[2].data_type, TYPE_FLOAT, "weight inferred as float")
+nox.test.assert_eq_int(t_inf.schema.columns[3].data_type, TYPE_STR, "note inferred as str")
+
+# 2. Quoted fields: embedded commas, escaped quotes, multiline
+csv_quoted: str = "id,description,location\n" + "1,\"Widget with, comma\",\"New York, NY\"\n" + "2,\"Quote \"\"test\"\" here\",\"London\"\n"
+
+t_quoted: Table = read_csv(csv_quoted, True)
+nox.test.assert_eq_int(t_quoted.row_count(), 2, "2 rows quoted")
+nox.test.assert_eq_str(t_quoted.cell(0, 1).to_string(), "Widget with, comma", "embedded comma preserved")
+nox.test.assert_eq_str(t_quoted.cell(0, 2).to_string(), "New York, NY", "embedded location comma")
+nox.test.assert_eq_str(t_quoted.cell(1, 1).to_string(), "Quote \"test\" here", "escaped quote preserved")
+
+# 3. Explicit schema
+s_explicit: Schema = Schema([ColumnDef("code", TYPE_STR, False), ColumnDef("val", TYPE_INT, False)])
+csv_exp: str = "code,val\n" + "00123,456\n"
+t_exp: Table = read_csv(csv_exp, True, s_explicit)
+# Leading zeros preserved as string
+nox.test.assert_eq_str(t_exp.cell(0, 0).to_string(), "00123", "leading zeros preserved by explicit schema")
+nox.test.assert_eq_int(t_exp.cell(0, 1).as_int(), 456, "explicit int parsed")
+
+# 4. Ragged row error
+csv_ragged: str = "a,b,c\n1,2\n"
+caught_ragged: bool = False
+try:
+    bad_t: Table = read_csv(csv_ragged, True)
+except ShapeError:
+    caught_ragged = True
+nox.test.assert_true(caught_ragged, "ragged CSV row must raise ShapeError")
+
+# 5. Formula injection safe export mode
+s_sec: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("payload", TYPE_STR)])
+r_inj1: list[Cell] = [cell_int(1), cell_str("=SUM(A1:A10)")]
+r_inj2: list[Cell] = [cell_int(2), cell_str("+cmd|' /C calc'!A0")]
+r_inj3: list[Cell] = [cell_int(3), cell_str("@special")]
+t_inj: Table = Table(s_sec, [r_inj1, r_inj2, r_inj3])
+
+raw_dump: str = to_csv(t_inj, True, False)
+# Raw dump preserves dangerous prefix
+nox.test.assert_true("=SUM" in raw_dump, "raw mode does not escape")
+
+safe_dump: str = to_csv(t_inj, True, True)
+# Safe dump prepends apostrophe
+nox.test.assert_true("'=SUM" in safe_dump, "safe mode prepends apostrophe to =")
+nox.test.assert_true("'+cmd" in safe_dump, "safe mode prepends apostrophe to +")
+nox.test.assert_true("'@special" in safe_dump, "safe mode prepends apostrophe to @")
+
+# 6. Round-trip CSV: Table -> CSV text -> Table
+rt_csv: str = to_csv(t_inf, True)
+t_recovered: Table = read_csv(rt_csv, True)
+nox.test.assert_eq_int(t_recovered.row_count(), 3, "recovered row count")
+nox.test.assert_eq_int(t_recovered.column_count(), 4, "recovered col count")
+nox.test.assert_eq_int(t_recovered.cell(0, 0).as_int(), 1, "recovered cell 0,0")
+nox.test.assert_eq_str(t_recovered.cell(2, 3).to_string(), "third", "recovered cell 2,3")
+
+print("csv_test passed")

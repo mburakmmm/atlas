@@ -1,0 +1,91 @@
+# tests/table_test.nox — Unit tests for Table creation, accessors, structural ops, and invariants.
+
+import nox.test
+import errors
+from errors import ShapeError, MissingValueError, ColumnNotFoundError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_bool, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table, create_table
+
+# 1. Setup sample table
+s: Schema = Schema([ColumnDef("id", TYPE_INT, False), ColumnDef("title", TYPE_STR, True), ColumnDef("price", TYPE_FLOAT, True)])
+
+r1: list[Cell] = [cell_int(1), cell_str("Book A"), cell_float(19.99)]
+r2: list[Cell] = [cell_int(2), cell_str("Book B"), cell_float(29.99)]
+r3: list[Cell] = [cell_int(3), cell_str("Book C"), cell_float(9.99)]
+r4: list[Cell] = [cell_int(4), cell_null(), cell_float(14.5)]
+r5: list[Cell] = [cell_int(5), cell_str("Book E"), cell_float(39.99)]
+
+t: Table = Table(s, [r1, r2, r3, r4, r5])
+
+# 2. Basic properties
+nox.test.assert_eq_int(t.row_count(), 5, "row count")
+nox.test.assert_eq_int(t.column_count(), 3, "col count")
+nox.test.assert_eq_str(t.cell(0, 1).to_string(), "Book A", "cell(0, 1)")
+nox.test.assert_eq_str(t.cell_by_name(1, "title").to_string(), "Book B", "cell_by_name")
+
+# 3. Shape validation: ragged row
+caught_ragged: bool = False
+try:
+    bad_r: list[Cell] = [cell_int(6), cell_str("Short")]
+    bad_t: Table = Table(s, [bad_r])
+except ShapeError:
+    caught_ragged = True
+nox.test.assert_true(caught_ragged, "ragged row must raise ShapeError")
+
+# 4. Non-nullable validation
+caught_null: bool = False
+try:
+    null_id_r: list[Cell] = [cell_null(), cell_str("Bad"), cell_float(1.0)]
+    bad_t2: Table = Table(s, [null_id_r])
+except MissingValueError:
+    caught_null = True
+nox.test.assert_true(caught_null, "null in non-nullable column must raise MissingValueError")
+
+# 5. Column cells
+prices: list[Cell] = t.column_cells("price")
+nox.test.assert_eq_int(len(prices), 5, "price cells len")
+nox.test.assert_true(prices[0].as_float() > 19.98 and prices[0].as_float() < 20.0, "price 0")
+
+# 6. Select and Drop
+sel: Table = t.select(["title", "id"])
+nox.test.assert_eq_int(sel.column_count(), 2, "selected 2 cols")
+nox.test.assert_eq_str(sel.column_names()[0], "title", "first col is title")
+nox.test.assert_eq_str(sel.cell(0, 0).to_string(), "Book A", "title cell preserved")
+nox.test.assert_eq_int(sel.cell(0, 1).as_int(), 1, "id cell preserved")
+
+drp: Table = t.drop(["price"])
+nox.test.assert_eq_int(drp.column_count(), 2, "dropped col count")
+nox.test.assert_true(not drp.schema.has_column("price"), "price absent")
+
+# 7. Rename
+ren: Table = t.rename("title", "book_title")
+nox.test.assert_true(ren.schema.has_column("book_title"), "new name exists")
+nox.test.assert_true(not ren.schema.has_column("title"), "old name absent")
+nox.test.assert_eq_str(ren.cell_by_name(0, "book_title").to_string(), "Book A", "data preserved")
+
+# 8. Head, Tail, Slice
+h: Table = t.head(2)
+nox.test.assert_eq_int(h.row_count(), 2, "head 2")
+nox.test.assert_eq_int(h.cell(0, 0).as_int(), 1, "head first")
+nox.test.assert_eq_int(h.cell(1, 0).as_int(), 2, "head second")
+
+tl: Table = t.tail(2)
+nox.test.assert_eq_int(tl.row_count(), 2, "tail 2")
+nox.test.assert_eq_int(tl.cell(0, 0).as_int(), 4, "tail first")
+nox.test.assert_eq_int(tl.cell(1, 0).as_int(), 5, "tail second")
+
+sl: Table = t.slice(1, 4)
+nox.test.assert_eq_int(sl.row_count(), 3, "slice 3 rows")
+nox.test.assert_eq_int(sl.cell(0, 0).as_int(), 2, "slice start at 2")
+nox.test.assert_eq_int(sl.cell(2, 0).as_int(), 4, "slice end at 4")
+
+# 9. Clone
+cl: Table = t.clone()
+nox.test.assert_eq_int(cl.row_count(), 5, "clone row count")
+nox.test.assert_eq_int(cl.column_count(), 3, "clone col count")
+
+print("table_test passed")

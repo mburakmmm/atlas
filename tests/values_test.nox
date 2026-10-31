@@ -1,0 +1,79 @@
+# tests/values_test.nox — Comprehensive tests for typed Cell values and conversions.
+
+import nox.test
+import errors
+from errors import TypeConversionError
+import values
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+
+# 1. Null cell
+c_null: Cell = cell_null()
+nox.test.assert_true(c_null.is_missing(), "c_null must be missing")
+nox.test.assert_true(not c_null.is_numeric(), "c_null is not numeric")
+nox.test.assert_eq_str(c_null.to_string(), "", "c_null to_string is empty")
+
+# 2. Int cell
+c_i: Cell = cell_int(42)
+nox.test.assert_true(not c_i.is_missing(), "c_i not missing")
+nox.test.assert_true(c_i.is_numeric(), "c_i is numeric")
+nox.test.assert_eq_int(c_i.as_int(), 42, "c_i as_int")
+nox.test.assert_eq_float(c_i.as_float(), 42.0, "c_i as_float")
+nox.test.assert_eq_str(c_i.to_string(), "42", "c_i to_string")
+
+# 3. Float cell
+c_f: Cell = cell_float(3.14)
+nox.test.assert_true(c_f.is_numeric(), "c_f is numeric")
+nox.test.assert_eq_int(c_f.as_int(), 3, "c_f as_int truncates")
+nox.test.assert_true(c_f.as_float() > 3.13 and c_f.as_float() < 3.15, "c_f as_float")
+
+# 4. String cell
+c_s: Cell = cell_str("hello")
+nox.test.assert_eq_str(c_s.as_str(), "hello", "c_s as_str")
+nox.test.assert_true(not c_s.is_numeric(), "c_s not numeric")
+
+# 5. Bool cell
+c_b_true: Cell = cell_bool(True)
+c_b_false: Cell = cell_bool(False)
+nox.test.assert_true(c_b_true.as_bool(), "c_b_true as_bool")
+nox.test.assert_true(not c_b_false.as_bool(), "c_b_false as_bool")
+nox.test.assert_eq_str(c_b_true.to_string(), "true", "c_b_true string")
+nox.test.assert_eq_str(c_b_false.to_string(), "false", "c_b_false string")
+
+# 6. Equality checks
+nox.test.assert_true(c_null.equals(cell_null()), "null equals null")
+nox.test.assert_true(not c_null.equals(cell_int(0)), "null != 0")
+nox.test.assert_true(cell_int(10).equals(cell_float(10.0)), "int 10 equals float 10.0")
+nox.test.assert_true(not cell_int(10).equals(cell_str("10")), "int 10 != str '10'")
+
+# 7. Comparison and ordering
+nox.test.assert_eq_int(cell_int(5).compare(cell_int(10)), -1, "5 < 10")
+nox.test.assert_eq_int(cell_int(10).compare(cell_int(5)), 1, "10 > 5")
+nox.test.assert_eq_int(cell_int(5).compare(cell_int(5)), 0, "5 == 5")
+nox.test.assert_eq_int(c_null.compare(cell_int(5), False), 1, "null is last by default")
+nox.test.assert_eq_int(c_null.compare(cell_int(5), True), -1, "null is first when nulls_first=True")
+
+# 8. Parsing
+p_int: Cell = parse_cell("123", TYPE_INT)
+nox.test.assert_eq_int(p_int.as_int(), 123, "parse int 123")
+
+p_flt: Cell = parse_cell("99.5", TYPE_FLOAT)
+nox.test.assert_true(p_flt.as_float() > 99.4 and p_flt.as_float() < 99.6, "parse float")
+
+p_bool: Cell = parse_cell("true", TYPE_BOOL)
+nox.test.assert_true(p_bool.as_bool(), "parse bool true")
+
+p_blank: Cell = parse_cell("", TYPE_INT, True)
+nox.test.assert_true(p_blank.is_missing(), "blank is missing")
+
+p_na: Cell = parse_cell("NA", TYPE_STR, True)
+nox.test.assert_true(p_na.is_missing(), "NA token is missing")
+
+# 9. TypeConversionError test
+caught_err: bool = False
+try:
+    bad_int: Cell = parse_cell("abc", TYPE_INT)
+except TypeConversionError:
+    caught_err = True
+nox.test.assert_true(caught_err, "must raise TypeConversionError on invalid int parse")
+
+print("values_test passed")

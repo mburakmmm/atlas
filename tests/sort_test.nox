@@ -1,0 +1,72 @@
+# tests/sort_test.nox — Unit tests for stable multi-key sorting, null positioning, and edge cases.
+
+import nox.test
+import errors
+from errors import ColumnNotFoundError, ShapeError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+
+s: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("dept", TYPE_STR), ColumnDef("salary", TYPE_FLOAT), ColumnDef("entry_order", TYPE_INT)])
+
+# Multiple employees in same department to test multi-key and stability
+r1: list[Cell] = [cell_int(1), cell_str("Sales"), cell_float(50000.0), cell_int(1)]
+r2: list[Cell] = [cell_int(2), cell_str("Eng"), cell_float(90000.0), cell_int(2)]
+r3: list[Cell] = [cell_int(3), cell_str("Sales"), cell_float(70000.0), cell_int(3)]
+r4: list[Cell] = [cell_int(4), cell_str("Eng"), cell_float(90000.0), cell_int(4)]
+r5: list[Cell] = [cell_int(5), cell_str("Marketing"), cell_null(), cell_int(5)]
+r6: list[Cell] = [cell_int(6), cell_str("Eng"), cell_float(85000.0), cell_int(6)]
+
+t: Table = Table(s, [r1, r2, r3, r4, r5, r6])
+
+# 1. Single-key sort by dept (ascending)
+t_dept: Table = t.sort_by(["dept"], True)
+# Dept order: Eng, Eng, Eng, Marketing, Sales, Sales
+nox.test.assert_eq_str(t_dept.cell(0, 1).to_string(), "Eng", "first dept is Eng")
+nox.test.assert_eq_str(t_dept.cell(1, 1).to_string(), "Eng", "second dept is Eng")
+nox.test.assert_eq_str(t_dept.cell(2, 1).to_string(), "Eng", "third dept is Eng")
+nox.test.assert_eq_str(t_dept.cell(3, 1).to_string(), "Marketing", "fourth dept is Marketing")
+nox.test.assert_eq_str(t_dept.cell(4, 1).to_string(), "Sales", "fifth dept is Sales")
+
+# 2. Stability check on Eng rows: r2(entry 2), r4(entry 4), r6(entry 6)
+nox.test.assert_eq_int(t_dept.cell(0, 3).as_int(), 2, "stable sort preserves entry 2 first")
+nox.test.assert_eq_int(t_dept.cell(1, 3).as_int(), 4, "stable sort preserves entry 4 second")
+nox.test.assert_eq_int(t_dept.cell(2, 3).as_int(), 6, "stable sort preserves entry 6 third")
+
+# 3. Multi-key sort: dept ASC, salary DESC
+# Eng salaries: 90000 (r2), 90000 (r4), 85000 (r6)
+t_multi: Table = t.sort_by_keys(["dept", "salary"], [True, False])
+nox.test.assert_eq_str(t_multi.cell(0, 1).to_string(), "Eng", "Eng first")
+nox.test.assert_eq_float(t_multi.cell(0, 2).as_float(), 90000.0, "Eng highest salary 90000")
+# Stability between r2 and r4 (both Eng 90000): r2 should be before r4
+nox.test.assert_eq_int(t_multi.cell(0, 3).as_int(), 2, "r2 before r4")
+nox.test.assert_eq_int(t_multi.cell(1, 3).as_int(), 4, "r4 second")
+nox.test.assert_eq_float(t_multi.cell(2, 2).as_float(), 85000.0, "r6 third (salary 85000)")
+
+# 4. Null positioning: nulls_first=False (default: nulls last) vs nulls_first=True
+t_nulls_last: Table = t.sort_by(["salary"], True, False)
+nox.test.assert_true(t_nulls_last.cell(5, 2).is_missing(), "last row has null salary when nulls_first=False")
+
+t_nulls_first: Table = t.sort_by(["salary"], True, True)
+nox.test.assert_true(t_nulls_first.cell(0, 2).is_missing(), "first row has null salary when nulls_first=True")
+
+# 5. Unknown column error
+caught_unknown: bool = False
+try:
+    bad_sort: Table = t.sort_by(["nonexistent_col"])
+except ColumnNotFoundError:
+    caught_unknown = True
+nox.test.assert_true(caught_unknown, "unknown sort column must raise ColumnNotFoundError")
+
+# 6. Mismatched keys and flags
+caught_shape: bool = False
+try:
+    bad_keys: Table = t.sort_by_keys(["dept", "salary"], [True])
+except ShapeError:
+    caught_shape = True
+nox.test.assert_true(caught_shape, "mismatched keys and flags must raise ShapeError")
+
+print("sort_test passed")

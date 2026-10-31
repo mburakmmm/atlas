@@ -1,0 +1,232 @@
+# groupby.nox — Group-by operations and multi-column aggregations for Atlas.
+
+import errors
+from errors import ColumnNotFoundError, AggregationError
+import values
+from values import Cell, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import stats
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing
+
+AGG_COUNT: int = 1
+AGG_SUM: int = 2
+AGG_MEAN: int = 3
+AGG_MEDIAN: int = 4
+AGG_STD: int = 5
+AGG_VARIANCE: int = 6
+AGG_MIN: int = 7
+AGG_MAX: int = 8
+AGG_COUNT_NON_MISSING: int = 9
+
+class AggregateDef:
+    agg_type: int
+    target_col: str
+    output_col: str
+    is_sample: bool
+
+    def __init__(self: AggregateDef, agg_type: int, target_col: str, output_col: str, is_sample: bool = True) -> None:
+        self.agg_type = agg_type
+        self.target_col = target_col
+        self.output_col = output_col
+        self.is_sample = is_sample
+
+def agg_count(output_col: str = "count") -> AggregateDef:
+    return AggregateDef(AGG_COUNT, "", output_col, True)
+
+def agg_sum(target_col: str, output_col: str) -> AggregateDef:
+    return AggregateDef(AGG_SUM, target_col, output_col, True)
+
+def agg_mean(target_col: str, output_col: str) -> AggregateDef:
+    return AggregateDef(AGG_MEAN, target_col, output_col, True)
+
+def agg_median(target_col: str, output_col: str) -> AggregateDef:
+    return AggregateDef(AGG_MEDIAN, target_col, output_col, True)
+
+def agg_std(target_col: str, output_col: str, is_sample: bool = True) -> AggregateDef:
+    return AggregateDef(AGG_STD, target_col, output_col, is_sample)
+
+def agg_variance(target_col: str, output_col: str, is_sample: bool = True) -> AggregateDef:
+    return AggregateDef(AGG_VARIANCE, target_col, output_col, is_sample)
+
+def agg_min(target_col: str, output_col: str) -> AggregateDef:
+    return AggregateDef(AGG_MIN, target_col, output_col, True)
+
+def agg_max(target_col: str, output_col: str) -> AggregateDef:
+    return AggregateDef(AGG_MAX, target_col, output_col, True)
+
+def agg_count_non_missing(target_col: str, output_col: str) -> AggregateDef:
+    return AggregateDef(AGG_COUNT_NON_MISSING, target_col, output_col, True)
+
+class GroupedTable:
+    source: Table
+    key_columns: list[str]
+    key_indices: list[int]
+    group_keys: list[list[Cell]]
+    group_rows: list[list[list[Cell]]]
+
+    def __init__(self: GroupedTable, source: Table, key_columns: list[str], key_indices: list[int], group_keys: list[list[Cell]], group_rows: list[list[list[Cell]]]) -> None:
+        self.source = source
+        self.key_columns = key_columns
+        self.key_indices = key_indices
+        self.group_keys = group_keys
+        self.group_rows = group_rows
+
+    def group_count(self: GroupedTable) -> int:
+
+        return len(self.group_keys)
+
+    def aggregate(self: GroupedTable, aggs: list[AggregateDef]) -> Table:
+
+        out_cols: list[ColumnDef] = []
+        # 1. Add key columns from source schema
+        k_idx: int = 0
+        num_keys: int = len(self.key_indices)
+        while k_idx < num_keys:
+            source_col: ColumnDef = self.source.schema.columns[self.key_indices[k_idx]]
+            out_cols.append(source_col.copy())
+            k_idx = k_idx + 1
+
+        # 2. Add aggregation output columns
+        agg_idx: int = 0
+        num_aggs: int = len(aggs)
+        while agg_idx < num_aggs:
+            ad: AggregateDef = aggs[agg_idx]
+            out_type: int = TYPE_FLOAT
+            if ad.agg_type == AGG_COUNT or ad.agg_type == AGG_COUNT_NON_MISSING:
+                out_type = TYPE_INT
+            elif ad.agg_type == AGG_MIN or ad.agg_type == AGG_MAX:
+                target_col_def: ColumnDef | None = self.source.schema.get_column_by_name(ad.target_col)
+                if target_col_def is None:
+                    raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                out_type = target_col_def.data_type
+            out_cols.append(ColumnDef(ad.output_col, out_type, True))
+            agg_idx = agg_idx + 1
+
+        out_schema: Schema = Schema(out_cols)
+
+        # 3. Compute rows for each group
+        out_rows: list[list[Cell]] = []
+        g_idx: int = 0
+        num_groups: int = len(self.group_keys)
+        while g_idx < num_groups:
+            k_cells: list[Cell] = self.group_keys[g_idx]
+            g_row_list: list[list[Cell]] = self.group_rows[g_idx]
+            new_r: list[Cell] = []
+
+            # Append key cells
+            ki: int = 0
+            while ki < num_keys:
+                new_r.append(k_cells[ki])
+                ki = ki + 1
+
+            # Compute each aggregation
+            ai: int = 0
+            while ai < num_aggs:
+                ad_cur: AggregateDef = aggs[ai]
+                if ad_cur.agg_type == AGG_COUNT:
+                    new_r.append(cell_int(len(g_row_list)))
+                else:
+                    target_idx: int = self.source.schema.index_of(ad_cur.target_col)
+                    if target_idx < 0:
+                        raise ColumnNotFoundError("aggregate target column not found: '" + ad_cur.target_col + "'")
+                    # Gather cells for target column
+                    target_cells: list[Cell] = []
+                    ri: int = 0
+                    num_g_rows: int = len(g_row_list)
+                    while ri < num_g_rows:
+                        target_cells.append(g_row_list[ri][target_idx])
+                        ri = ri + 1
+
+                    if ad_cur.agg_type == AGG_COUNT_NON_MISSING:
+                        new_r.append(cell_int(stat_count_non_missing(target_cells)))
+                    elif ad_cur.agg_type == AGG_SUM:
+                        new_r.append(cell_float(stat_sum(target_cells)))
+                    elif ad_cur.agg_type == AGG_MEAN:
+                        new_r.append(cell_float(stat_mean(target_cells)))
+                    elif ad_cur.agg_type == AGG_MEDIAN:
+                        new_r.append(cell_float(stat_median(target_cells)))
+                    elif ad_cur.agg_type == AGG_STD:
+                        new_r.append(cell_float(stat_std(target_cells, ad_cur.is_sample)))
+                    elif ad_cur.agg_type == AGG_VARIANCE:
+                        new_r.append(cell_float(stat_variance(target_cells, ad_cur.is_sample)))
+                    elif ad_cur.agg_type == AGG_MIN:
+                        new_r.append(stat_min(target_cells))
+                    elif ad_cur.agg_type == AGG_MAX:
+                        new_r.append(stat_max(target_cells))
+                    else:
+                        raise AggregationError("unknown aggregation type: " + str(ad_cur.agg_type))
+                ai = ai + 1
+
+            out_rows.append(new_r)
+            g_idx = g_idx + 1
+
+        return Table(out_schema, out_rows)
+
+    def count(self: GroupedTable, output_col: str = "count") -> Table:
+
+        aggs: list[AggregateDef] = []
+        aggs.append(agg_count(output_col))
+        return self.aggregate(aggs)
+
+def group_by(t: Table, keys: list[str]) -> GroupedTable:
+    if len(keys) == 0:
+        raise ColumnNotFoundError("group_by requires at least one key column")
+
+    key_indices: list[int] = []
+    i: int = 0
+    num_keys: int = len(keys)
+    while i < num_keys:
+        idx: int = t.schema.index_of(keys[i])
+        if idx < 0:
+            raise ColumnNotFoundError("group key column not found: '" + keys[i] + "'")
+        key_indices.append(idx)
+        i = i + 1
+
+    group_keys: list[list[Cell]] = []
+    group_rows: list[list[list[Cell]]] = []
+
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+    while r_idx < num_rows:
+        row: list[Cell] = t.rows[r_idx]
+        # Extract key cells
+        k_tuple: list[Cell] = []
+        ki: int = 0
+        while ki < num_keys:
+            k_tuple.append(row[key_indices[ki]])
+            ki = ki + 1
+
+        # Check if k_tuple matches any existing group in group_keys
+        match_idx: int = -1
+        g_scan: int = 0
+        num_existing_groups: int = len(group_keys)
+        while g_scan < num_existing_groups and match_idx < 0:
+            candidate: list[Cell] = group_keys[g_scan]
+            all_match: bool = True
+            c_check: int = 0
+            while c_check < num_keys and all_match:
+                if not candidate[c_check].equals(k_tuple[c_check]):
+                    all_match = False
+                c_check = c_check + 1
+            if all_match:
+                match_idx = g_scan
+            g_scan = g_scan + 1
+
+        if match_idx >= 0:
+            # Append row to existing group
+            g_list: list[list[Cell]] = group_rows[match_idx]
+            g_list.append(row)
+            group_rows[match_idx] = g_list
+        else:
+            # New group
+            group_keys.append(k_tuple)
+            first_row_list: list[list[Cell]] = []
+            first_row_list.append(row)
+            group_rows.append(first_row_list)
+
+        r_idx = r_idx + 1
+
+    return GroupedTable(t, keys, key_indices, group_keys, group_rows)

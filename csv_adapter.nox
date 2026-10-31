@@ -1,0 +1,175 @@
+# csv_adapter.nox — RFC 4180 CSV parsing, type inference, and serialization for Atlas.
+
+import nox.csv
+import errors
+from errors import CsvImportError, ShapeError, TypeConversionError, MissingValueError
+import values
+from values import Cell, cell_null, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef, schema_from_names
+import table
+from table import Table
+
+def _try_parse_int(s: str) -> bool:
+    if s == "":
+        return False
+    try:
+        val: int = int(s)
+        return True
+    except ValueError:
+        return False
+
+def _try_parse_float(s: str) -> bool:
+    if s == "":
+        return False
+    try:
+        val: float = float(s)
+        return True
+    except ValueError:
+        return False
+
+def _try_parse_bool(s: str) -> bool:
+    if s == "true" or s == "True" or s == "false" or s == "False":
+        return True
+    return False
+
+def infer_schema(headers: list[str], raw_rows: list[list[str]], blank_is_missing: bool = True) -> Schema:
+    num_cols: int = len(headers)
+    cols: list[ColumnDef] = []
+    c_idx: int = 0
+    while c_idx < num_cols:
+        col_name: str = headers[c_idx]
+        is_all_int: bool = True
+        is_all_float: bool = True
+        is_all_bool: bool = True
+        has_non_empty: bool = False
+        has_missing: bool = False
+
+        r_idx: int = 0
+        num_rows: int = len(raw_rows)
+        while r_idx < num_rows:
+            raw_val: str = ""
+            if c_idx < len(raw_rows[r_idx]):
+                raw_val = raw_rows[r_idx][c_idx]
+            if raw_val == "" or blank_is_missing and (raw_val == "NA" or raw_val == "null" or raw_val == "NULL"):
+                has_missing = True
+            else:
+                has_non_empty = True
+                if is_all_int and not _try_parse_int(raw_val):
+                    is_all_int = False
+                if is_all_float and not _try_parse_float(raw_val):
+                    is_all_float = False
+                if is_all_bool and not _try_parse_bool(raw_val):
+                    is_all_bool = False
+            r_idx = r_idx + 1
+
+        inferred_type: int = TYPE_STR
+        if has_non_empty:
+            if is_all_int:
+                inferred_type = TYPE_INT
+            elif is_all_float:
+                inferred_type = TYPE_FLOAT
+            elif is_all_bool:
+                inferred_type = TYPE_BOOL
+
+        cols.append(ColumnDef(col_name, inferred_type, True))
+        c_idx = c_idx + 1
+
+    return Schema(cols)
+
+def read_csv(text: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    raw_rows: list[list[str]] = nox.csv.parse(text)
+    if len(raw_rows) == 0:
+        if explicit_schema != None:
+            empty_rows: list[list[Cell]] = []
+            return Table(explicit_schema, empty_rows)
+        empty_cols: list[ColumnDef] = []
+        empty_schema: Schema = Schema(empty_cols)
+        empty_table_rows: list[list[Cell]] = []
+        return Table(empty_schema, empty_table_rows)
+
+    headers: list[str] = []
+    data_raw_rows: list[list[str]] = []
+
+    if has_header:
+        headers = raw_rows[0]
+        i: int = 1
+        n: int = len(raw_rows)
+        while i < n:
+            data_raw_rows.append(raw_rows[i])
+            i = i + 1
+    else:
+        # Generate default headers col_0, col_1, ...
+        num_cols: int = len(raw_rows[0])
+        i: int = 0
+        while i < num_cols:
+            headers.append("col_" + str(i))
+            i = i + 1
+        data_raw_rows = raw_rows
+
+    # Validate ragged rows before schema inference
+    r_check: int = 0
+    num_data_rows: int = len(data_raw_rows)
+    expected_num_cols: int = len(headers)
+    while r_check < num_data_rows:
+        if len(data_raw_rows[r_check]) != expected_num_cols:
+            raise ShapeError("CSV row " + str(r_check) + " length mismatch: expected " + str(expected_num_cols) + ", got " + str(len(data_raw_rows[r_check])))
+        r_check = r_check + 1
+
+    s: Schema = Schema([])
+    if explicit_schema != None:
+        s = explicit_schema
+    else:
+        s = infer_schema(headers, data_raw_rows, blank_is_missing)
+
+    expected_cols: int = s.column_count()
+    typed_rows: list[list[Cell]] = []
+    r_idx: int = 0
+    num_data_rows: int = len(data_raw_rows)
+
+    while r_idx < num_data_rows:
+        raw_r: list[str] = data_raw_rows[r_idx]
+        if len(raw_r) != expected_cols:
+            raise ShapeError("CSV row " + str(r_idx) + " length mismatch: expected " + str(expected_cols) + ", got " + str(len(raw_r)))
+
+        typed_r: list[Cell] = []
+        c_idx: int = 0
+        while c_idx < expected_cols:
+            col_def: ColumnDef = s.columns[c_idx]
+            raw_cell: str = raw_r[c_idx]
+            c: Cell = parse_cell(raw_cell, col_def.data_type, blank_is_missing)
+            if not col_def.nullable and c.is_missing():
+                raise MissingValueError("column '" + col_def.name + "' is not nullable, but missing value found at row " + str(r_idx))
+            typed_r.append(c)
+            c_idx = c_idx + 1
+
+        typed_rows.append(typed_r)
+        r_idx = r_idx + 1
+
+    return Table(s, typed_rows)
+
+def to_csv(t: Table, include_header: bool = True, safe_spreadsheet: bool = False) -> str:
+    string_rows: list[list[str]] = []
+    if include_header:
+        string_rows.append(t.column_names())
+
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+    num_cols: int = t.column_count()
+
+    while r_idx < num_rows:
+        row: list[Cell] = t.rows[r_idx]
+        s_row: list[str] = []
+        c_idx: int = 0
+        while c_idx < num_cols:
+            val_str: str = row[c_idx].to_string()
+            if safe_spreadsheet and len(val_str) > 0:
+                first_ch: str = val_str[0]
+                if first_ch == "=" or first_ch == "+" or first_ch == "-" or first_ch == "@":
+                    val_str = "'" + val_str
+            s_row.append(val_str)
+            c_idx = c_idx + 1
+        string_rows.append(s_row)
+        r_idx = r_idx + 1
+
+    return nox.csv.dump(string_rows)

@@ -1,0 +1,18 @@
+# examples/json_conversion.nox — JSON array of objects to Table and CSV conversion.
+
+import atlas
+from atlas import Table, table_from_json, table_to_json, csv_to_json, json_to_csv
+
+json_payload: str = "[" + "{\"item\": \"Keyboard\", \"stock\": 45, \"price\": 79.99, \"in_stock\": true}, " + "{\"item\": \"Monitor\", \"stock\": 12, \"price\": 299.50, \"in_stock\": true}, " + "{\"item\": \"Desk Mat\", \"stock\": 0, \"price\": 19.99, \"in_stock\": false}" + "]"
+
+print("1. Parsing JSON array of objects into Atlas Table:")
+t: Table = table_from_json(json_payload)
+t.print_preview(5)
+
+print("\n2. Direct conversion of JSON to RFC 4180 CSV text:")
+csv_text: str = json_to_csv(json_payload)
+print(csv_text)
+
+print("3. Converting CSV back to JSON:")
+json_back: str = csv_to_json(csv_text)
+print(json_back)

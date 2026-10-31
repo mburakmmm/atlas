@@ -1,0 +1,23 @@
+# examples/quickstart.nox — Quickstart demonstration of Atlas.
+
+import atlas
+from atlas import Table, read_csv, col_gt_int, group_by, GroupedTable, agg_count, agg_mean
+
+# 1. Parse CSV string
+csv_data: str = "name,role,department,salary\n" + "Alice,Lead Engineer,Tech,110000.0\n" + "Bob,Frontend Dev,Tech,85000.0\n" + "Charlie,Designer,Creative,75000.0\n" + "Diana,Copywriter,Creative,68000.0\n" + "Evan,Backend Dev,Tech,95000.0\n"
+
+t: Table = read_csv(csv_data, True)
+print("Loaded employees table:")
+t.print_preview(5)
+
+# 2. Filter high earners (> 80k)
+high_earners: Table = t.filter(col_gt_int("salary", 80000))
+print("\nHigh earners (> 80,000):")
+high_earners.print_preview(5)
+
+# 3. Group by department and compute average salary
+grouped: GroupedTable = group_by(t, ["department"])
+summary: Table = grouped.aggregate([agg_count("headcount"), agg_mean("salary", "avg_salary")])
+
+print("\nDepartment summary:")
+summary.print_preview(5)

@@ -1,0 +1,367 @@
+# table.nox — In-memory 2D tabular data structure for Atlas.
+
+import errors
+from errors import ShapeError, ColumnNotFoundError, MissingValueError, SchemaError
+import values
+from values import Cell, cell_null
+import schema
+from schema import Schema, ColumnDef
+import expr
+from expr import Expr
+import sort
+from sort import sort_rows
+import stats
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
+
+class Table:
+    schema: Schema
+    rows: list[list[Cell]]
+
+    def __init__(self: Table, s: Schema, rows: list[list[Cell]]) -> None:
+        expected_cols: int = s.column_count()
+        r_idx: int = 0
+        num_rows: int = len(rows)
+        while r_idx < num_rows:
+            r: list[Cell] = rows[r_idx]
+            if len(r) != expected_cols:
+                raise ShapeError("row length mismatch at row " + str(r_idx) + ": expected " + str(expected_cols) + ", got " + str(len(r)))
+            # Check non-nullable columns
+            c_idx: int = 0
+            while c_idx < expected_cols:
+                col: ColumnDef = s.columns[c_idx]
+                if not col.nullable and r[c_idx].is_missing():
+                    raise MissingValueError("column '" + col.name + "' is not nullable, but missing value found at row " + str(r_idx))
+                c_idx = c_idx + 1
+            r_idx = r_idx + 1
+        self.schema = s
+        self.rows = rows
+
+    def row_count(self: Table) -> int:
+
+        return len(self.rows)
+
+    def column_count(self: Table) -> int:
+
+        return self.schema.column_count()
+
+    def column_names(self: Table) -> list[str]:
+
+        return self.schema.column_names()
+
+    def column_types(self: Table) -> list[int]:
+
+        return self.schema.column_types()
+
+    def cell(self: Table, row_idx: int, col_idx: int) -> Cell:
+
+        if row_idx < 0 or row_idx >= len(self.rows):
+            raise ShapeError("row index out of bounds: " + str(row_idx))
+        if col_idx < 0 or col_idx >= self.schema.column_count():
+            raise ShapeError("column index out of bounds: " + str(col_idx))
+        return self.rows[row_idx][col_idx]
+
+    def cell_by_name(self: Table, row_idx: int, col_name: str) -> Cell:
+
+        col_idx: int = self.schema.index_of(col_name)
+        if col_idx < 0:
+            raise ColumnNotFoundError("column not found: '" + col_name + "'")
+        return self.cell(row_idx, col_idx)
+
+    def row(self: Table, row_idx: int) -> list[Cell]:
+
+        if row_idx < 0 or row_idx >= len(self.rows):
+            raise ShapeError("row index out of bounds: " + str(row_idx))
+        # Return a copy of the row
+        res: list[Cell] = []
+        i: int = 0
+        r: list[Cell] = self.rows[row_idx]
+        while i < len(r):
+            res.append(r[i])
+            i = i + 1
+        return res
+
+    def column_cells(self: Table, col_name: str) -> list[Cell]:
+
+        col_idx: int = self.schema.index_of(col_name)
+        if col_idx < 0:
+            raise ColumnNotFoundError("column not found: '" + col_name + "'")
+        cells: list[Cell] = []
+        i: int = 0
+        n: int = len(self.rows)
+        while i < n:
+            cells.append(self.rows[i][col_idx])
+            i = i + 1
+        return cells
+
+    def select(self: Table, col_names: list[str]) -> Table:
+
+        new_schema: Schema = self.schema.select_columns(col_names)
+        col_indices: list[int] = []
+        i: int = 0
+        n: int = len(col_names)
+        while i < n:
+            col_indices.append(self.schema.index_of(col_names[i]))
+            i = i + 1
+
+        new_rows: list[list[Cell]] = []
+        r_idx: int = 0
+        num_rows: int = len(self.rows)
+        while r_idx < num_rows:
+            old_row: list[Cell] = self.rows[r_idx]
+            new_row: list[Cell] = []
+            c_idx: int = 0
+            while c_idx < n:
+                new_row.append(old_row[col_indices[c_idx]])
+                c_idx = c_idx + 1
+            new_rows.append(new_row)
+            r_idx = r_idx + 1
+        return Table(new_schema, new_rows)
+
+    def drop(self: Table, col_names: list[str]) -> Table:
+
+        new_schema: Schema = self.schema.drop_columns(col_names)
+        return self.select(new_schema.column_names())
+
+    def rename(self: Table, old_name: str, new_name: str) -> Table:
+
+        new_schema: Schema = self.schema.rename_column(old_name, new_name)
+        # Rows remain identical
+        return Table(new_schema, self.rows)
+
+    def filter(self: Table, predicate: Expr) -> Table:
+
+        matched_rows: list[list[Cell]] = []
+        i: int = 0
+        n: int = len(self.rows)
+        while i < n:
+            r: list[Cell] = self.rows[i]
+            if predicate.evaluate(self.schema, r):
+                matched_rows.append(r)
+            i = i + 1
+        return Table(self.schema.copy(), matched_rows)
+
+    def sort_by(self: Table, col_names: list[str], ascending: bool = True, nulls_first: bool = False) -> Table:
+
+        col_indices: list[int] = []
+        asc_flags: list[bool] = []
+        i: int = 0
+        n: int = len(col_names)
+        while i < n:
+            idx: int = self.schema.index_of(col_names[i])
+            if idx < 0:
+                raise ColumnNotFoundError("sort column not found: '" + col_names[i] + "'")
+            col_indices.append(idx)
+            asc_flags.append(ascending)
+            i = i + 1
+        sorted_rows: list[list[Cell]] = sort_rows(self.schema, self.rows, col_indices, asc_flags, nulls_first)
+        return Table(self.schema.copy(), sorted_rows)
+
+    def sort_by_keys(self: Table, col_names: list[str], ascending_flags: list[bool], nulls_first: bool = False) -> Table:
+
+        if len(col_names) != len(ascending_flags):
+            raise ShapeError("col_names and ascending_flags must have identical lengths")
+        col_indices: list[int] = []
+        i: int = 0
+        n: int = len(col_names)
+        while i < n:
+            idx: int = self.schema.index_of(col_names[i])
+            if idx < 0:
+                raise ColumnNotFoundError("sort column not found: '" + col_names[i] + "'")
+            col_indices.append(idx)
+            i = i + 1
+        sorted_rows: list[list[Cell]] = sort_rows(self.schema, self.rows, col_indices, ascending_flags, nulls_first)
+        return Table(self.schema.copy(), sorted_rows)
+
+    def head(self: Table, n: int = 5) -> Table:
+
+        total: int = len(self.rows)
+        limit: int = n
+        if limit > total:
+            limit = total
+        sub_rows: list[list[Cell]] = []
+        i: int = 0
+        while i < limit:
+            sub_rows.append(self.rows[i])
+            i = i + 1
+        return Table(self.schema.copy(), sub_rows)
+
+    def tail(self: Table, n: int = 5) -> Table:
+
+        total: int = len(self.rows)
+        start: int = total - n
+        if start < 0:
+            start = 0
+        sub_rows: list[list[Cell]] = []
+        i: int = start
+        while i < total:
+            sub_rows.append(self.rows[i])
+            i = i + 1
+        return Table(self.schema.copy(), sub_rows)
+
+    def slice(self: Table, start: int, end: int) -> Table:
+
+        total: int = len(self.rows)
+        s: int = start
+        if s < 0:
+            s = 0
+        e: int = end
+        if e > total:
+            e = total
+        sub_rows: list[list[Cell]] = []
+        i: int = s
+        while i < e:
+            sub_rows.append(self.rows[i])
+            i = i + 1
+        return Table(self.schema.copy(), sub_rows)
+
+    def clone(self: Table) -> Table:
+
+        copied_rows: list[list[Cell]] = []
+        i: int = 0
+        n: int = len(self.rows)
+        while i < n:
+            r: list[Cell] = self.rows[i]
+            copied_r: list[Cell] = []
+            j: int = 0
+            m: int = len(r)
+            while j < m:
+                copied_r.append(r[j])
+                j = j + 1
+            copied_rows.append(copied_r)
+            i = i + 1
+        return Table(self.schema.copy(), copied_rows)
+
+    def count_missing(self: Table, col_name: str) -> int:
+
+        # Missing data operations
+        return stat_count_missing(self.column_cells(col_name))
+
+    def fill_missing(self: Table, col_name: str, fill_val: Cell) -> Table:
+
+        col_idx: int = self.schema.index_of(col_name)
+        if col_idx < 0:
+            raise ColumnNotFoundError("column not found to fill missing: '" + col_name + "'")
+        new_rows: list[list[Cell]] = []
+        i: int = 0
+        n: int = len(self.rows)
+        while i < n:
+            old_r: list[Cell] = self.rows[i]
+            new_r: list[Cell] = []
+            j: int = 0
+            m: int = len(old_r)
+            while j < m:
+                if j == col_idx and old_r[j].is_missing():
+                    new_r.append(fill_val)
+                else:
+                    new_r.append(old_r[j])
+                j = j + 1
+            new_rows.append(new_r)
+            i = i + 1
+        return Table(self.schema.copy(), new_rows)
+
+    def drop_missing(self: Table, col_names: list[str], how: str = "any") -> Table:
+
+        indices: list[int] = []
+        i: int = 0
+        n: int = len(col_names)
+        while i < n:
+            idx: int = self.schema.index_of(col_names[i])
+            if idx < 0:
+                raise ColumnNotFoundError("column not found to drop missing: '" + col_names[i] + "'")
+            indices.append(idx)
+            i = i + 1
+
+        filtered_rows: list[list[Cell]] = []
+        r_idx: int = 0
+        num_rows: int = len(self.rows)
+        while r_idx < num_rows:
+            r: list[Cell] = self.rows[r_idx]
+            missing_count: int = 0
+            j: int = 0
+            while j < n:
+                if r[indices[j]].is_missing():
+                    missing_count = missing_count + 1
+                j = j + 1
+
+            should_drop: bool = False
+            if how == "all":
+                should_drop = missing_count == n
+            else:
+                should_drop = missing_count > 0
+
+            if not should_drop:
+                filtered_rows.append(r)
+            r_idx = r_idx + 1
+
+        return Table(self.schema.copy(), filtered_rows)
+
+    def mean(self: Table, col_name: str) -> float:
+
+        # Summary statistics
+        return stat_mean(self.column_cells(col_name))
+
+    def median(self: Table, col_name: str) -> float:
+
+        return stat_median(self.column_cells(col_name))
+
+    def std(self: Table, col_name: str, is_sample: bool = True) -> float:
+
+        return stat_std(self.column_cells(col_name), is_sample)
+
+    def variance(self: Table, col_name: str, is_sample: bool = True) -> float:
+
+        return stat_variance(self.column_cells(col_name), is_sample)
+
+    def sum_val(self: Table, col_name: str) -> float:
+
+        return stat_sum(self.column_cells(col_name))
+
+    def min_val(self: Table, col_name: str) -> Cell:
+
+        return stat_min(self.column_cells(col_name))
+
+    def max_val(self: Table, col_name: str) -> Cell:
+
+        return stat_max(self.column_cells(col_name))
+
+    def count_val(self: Table, col_name: str) -> int:
+
+        return stat_count_non_missing(self.column_cells(col_name))
+
+    def print_preview(self: Table, max_rows: int = 10) -> None:
+
+        names: list[str] = self.column_names()
+        header_str: str = ""
+        sep_str: str = ""
+        i: int = 0
+        n: int = len(names)
+        while i < n:
+            header_str = header_str + names[i]
+            sep_str = sep_str + "---"
+            if i < n - 1:
+                header_str = header_str + " | "
+                sep_str = sep_str + " + "
+            i = i + 1
+        print(header_str)
+        print(sep_str)
+
+        limit: int = max_rows
+        if limit > len(self.rows):
+            limit = len(self.rows)
+        r_idx: int = 0
+        while r_idx < limit:
+            r: list[Cell] = self.rows[r_idx]
+            line: str = ""
+            c_idx: int = 0
+            while c_idx < n:
+                line = line + r[c_idx].to_string()
+                if c_idx < n - 1:
+                    line = line + " | "
+                c_idx = c_idx + 1
+            print(line)
+            r_idx = r_idx + 1
+        if len(self.rows) > limit:
+            print("... (" + str(len(self.rows) - limit) + " more rows)")
+
+def create_table(s: Schema, rows: list[list[Cell]]) -> Table:
+    return Table(s, rows)

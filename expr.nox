@@ -1,0 +1,200 @@
+# expr.nox — Declarative filter expressions and row predicates for Atlas.
+
+import nox.strings
+import errors
+from errors import ColumnNotFoundError
+import values
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool
+import schema
+from schema import Schema
+
+OP_EQ: int = 1
+OP_NEQ: int = 2
+OP_GT: int = 3
+OP_GTE: int = 4
+OP_LT: int = 5
+OP_LTE: int = 6
+OP_IS_MISSING: int = 7
+OP_NOT_MISSING: int = 8
+OP_CONTAINS: int = 9
+OP_STARTS_WITH: int = 10
+OP_IN: int = 11
+OP_AND: int = 12
+OP_OR: int = 13
+OP_NOT: int = 14
+
+class Expr:
+    op: int
+    col_name: str
+    val: Cell
+    val_list: list[Cell]
+    str_arg: str
+    left: Expr | None
+    right: Expr | None
+
+    def __init__(self: Expr, op: int, col_name: str, val: Cell, val_list: list[Cell], str_arg: str, left: Expr | None, right: Expr | None) -> None:
+        self.op = op
+        self.col_name = col_name
+        self.val = val
+        self.val_list = val_list
+        self.str_arg = str_arg
+        self.left = left
+        self.right = right
+
+    def evaluate(self: Expr, s: Schema, row: list[Cell]) -> bool:
+
+        if self.op == OP_AND:
+            l: Expr | None = self.left
+            r: Expr | None = self.right
+            if l != None and r != None:
+                return l.evaluate(s, row) and r.evaluate(s, row)
+            return False
+
+        if self.op == OP_OR:
+            l: Expr | None = self.left
+            r: Expr | None = self.right
+            if l != None and r != None:
+                return l.evaluate(s, row) or r.evaluate(s, row)
+            return False
+
+        if self.op == OP_NOT:
+            l: Expr | None = self.left
+            if l != None:
+                return not l.evaluate(s, row)
+            return False
+
+        col_idx: int = s.index_of(self.col_name)
+        if col_idx < 0:
+            raise ColumnNotFoundError("filter expression refers to unknown column: '" + self.col_name + "'")
+
+        cell: Cell = row[col_idx]
+
+        if self.op == OP_IS_MISSING:
+            return cell.is_missing()
+
+        if self.op == OP_NOT_MISSING:
+            return not cell.is_missing()
+
+        # For comparison operators, missing cells evaluate to False
+        if cell.is_missing():
+            return False
+
+        if self.op == OP_EQ:
+            return cell.equals(self.val)
+
+        if self.op == OP_NEQ:
+            return not cell.equals(self.val)
+
+        if self.op == OP_GT:
+            return cell.compare(self.val) > 0
+
+        if self.op == OP_GTE:
+            return cell.compare(self.val) >= 0
+
+        if self.op == OP_LT:
+            return cell.compare(self.val) < 0
+
+        if self.op == OP_LTE:
+            return cell.compare(self.val) <= 0
+
+        if self.op == OP_CONTAINS:
+            return nox.strings.contains(cell.to_string(), self.str_arg)
+
+        if self.op == OP_STARTS_WITH:
+            return nox.strings.starts_with(cell.to_string(), self.str_arg)
+
+        if self.op == OP_IN:
+            i: int = 0
+            n: int = len(self.val_list)
+            while i < n:
+                if cell.equals(self.val_list[i]):
+                    return True
+                i = i + 1
+            return False
+
+        return False
+
+def _empty_cells() -> list[Cell]:
+    empty: list[Cell] = []
+    return empty
+
+def col_eq(col: str, val: Cell) -> Expr:
+    return Expr(OP_EQ, col, val, _empty_cells(), "", None, None)
+
+def col_eq_int(col: str, i: int) -> Expr:
+    return col_eq(col, cell_int(i))
+
+def col_eq_str(col: str, s: str) -> Expr:
+    return col_eq(col, cell_str(s))
+
+def col_eq_bool(col: str, b: bool) -> Expr:
+    return col_eq(col, cell_bool(b))
+
+def col_neq(col: str, val: Cell) -> Expr:
+    return Expr(OP_NEQ, col, val, _empty_cells(), "", None, None)
+
+def col_neq_int(col: str, i: int) -> Expr:
+    return col_neq(col, cell_int(i))
+
+def col_neq_str(col: str, s: str) -> Expr:
+    return col_neq(col, cell_str(s))
+
+def col_gt(col: str, val: Cell) -> Expr:
+    return Expr(OP_GT, col, val, _empty_cells(), "", None, None)
+
+def col_gt_int(col: str, i: int) -> Expr:
+    return col_gt(col, cell_int(i))
+
+def col_gt_float(col: str, f: float) -> Expr:
+    return col_gt(col, cell_float(f))
+
+def col_gte(col: str, val: Cell) -> Expr:
+    return Expr(OP_GTE, col, val, _empty_cells(), "", None, None)
+
+def col_gte_int(col: str, i: int) -> Expr:
+    return col_gte(col, cell_int(i))
+
+def col_gte_float(col: str, f: float) -> Expr:
+    return col_gte(col, cell_float(f))
+
+def col_lt(col: str, val: Cell) -> Expr:
+    return Expr(OP_LT, col, val, _empty_cells(), "", None, None)
+
+def col_lt_int(col: str, i: int) -> Expr:
+    return col_lt(col, cell_int(i))
+
+def col_lt_float(col: str, f: float) -> Expr:
+    return col_lt(col, cell_float(f))
+
+def col_lte(col: str, val: Cell) -> Expr:
+    return Expr(OP_LTE, col, val, _empty_cells(), "", None, None)
+
+def col_lte_int(col: str, i: int) -> Expr:
+    return col_lte(col, cell_int(i))
+
+def col_lte_float(col: str, f: float) -> Expr:
+    return col_lte(col, cell_float(f))
+
+def col_is_missing(col: str) -> Expr:
+    return Expr(OP_IS_MISSING, col, cell_null(), _empty_cells(), "", None, None)
+
+def col_not_missing(col: str) -> Expr:
+    return Expr(OP_NOT_MISSING, col, cell_null(), _empty_cells(), "", None, None)
+
+def col_contains(col: str, sub: str) -> Expr:
+    return Expr(OP_CONTAINS, col, cell_null(), _empty_cells(), sub, None, None)
+
+def col_starts_with(col: str, prefix: str) -> Expr:
+    return Expr(OP_STARTS_WITH, col, cell_null(), _empty_cells(), prefix, None, None)
+
+def col_in(col: str, values_list: list[Cell]) -> Expr:
+    return Expr(OP_IN, col, cell_null(), values_list, "", None, None)
+
+def expr_and(left: Expr, right: Expr) -> Expr:
+    return Expr(OP_AND, "", cell_null(), _empty_cells(), "", left, right)
+
+def expr_or(left: Expr, right: Expr) -> Expr:
+    return Expr(OP_OR, "", cell_null(), _empty_cells(), "", left, right)
+
+def expr_not(inner: Expr) -> Expr:
+    return Expr(OP_NOT, "", cell_null(), _empty_cells(), "", inner, None)

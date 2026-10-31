@@ -1,0 +1,178 @@
+# schema.nox — Table schema, column definitions, and structural invariants for Atlas.
+
+import errors
+from errors import SchemaError, ColumnNotFoundError
+import values
+from values import TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+
+class ColumnDef:
+    name: str
+    data_type: int
+    nullable: bool
+
+    def __init__(self: ColumnDef, name: str, data_type: int, nullable: bool = True) -> None:
+        if name == "":
+            raise SchemaError("column name cannot be empty")
+        self.name = name
+        self.data_type = data_type
+        self.nullable = nullable
+
+    def copy(self: ColumnDef) -> ColumnDef:
+
+        return ColumnDef(self.name, self.data_type, self.nullable)
+
+class Schema:
+    columns: list[ColumnDef]
+
+    def __init__(self: Schema, columns: list[ColumnDef]) -> None:
+        i: int = 0
+        n: int = len(columns)
+        while i < n:
+            col_name: str = columns[i].name
+            if col_name == "":
+                raise SchemaError("column name at index " + str(i) + " is empty")
+            j: int = i + 1
+            while j < n:
+                if columns[j].name == col_name:
+                    raise SchemaError("duplicate column name: '" + col_name + "'")
+                j = j + 1
+            i = i + 1
+        self.columns = columns
+
+    def column_count(self: Schema) -> int:
+
+        return len(self.columns)
+
+    def column_names(self: Schema) -> list[str]:
+
+        names: list[str] = []
+        i: int = 0
+        n: int = len(self.columns)
+        while i < n:
+            names.append(self.columns[i].name)
+            i = i + 1
+        return names
+
+    def column_types(self: Schema) -> list[int]:
+
+        types: list[int] = []
+        i: int = 0
+        n: int = len(self.columns)
+        while i < n:
+            types.append(self.columns[i].data_type)
+            i = i + 1
+        return types
+
+    def has_column(self: Schema, name: str) -> bool:
+
+        return self.index_of(name) >= 0
+
+    def index_of(self: Schema, name: str) -> int:
+
+        i: int = 0
+        n: int = len(self.columns)
+        while i < n:
+            if self.columns[i].name == name:
+                return i
+            i = i + 1
+        return -1
+
+    def get_column(self: Schema, index: int) -> ColumnDef:
+
+        if index < 0 or index >= len(self.columns):
+            raise SchemaError("column index out of bounds: " + str(index))
+        return self.columns[index]
+
+    def get_column_by_name(self: Schema, name: str) -> ColumnDef | None:
+
+        idx: int = self.index_of(name)
+        if idx >= 0:
+            return self.columns[idx]
+        return None
+
+    def select_columns(self: Schema, names: list[str]) -> Schema:
+
+        new_cols: list[ColumnDef] = []
+        i: int = 0
+        n: int = len(names)
+        while i < n:
+            name: str = names[i]
+            col: ColumnDef | None = self.get_column_by_name(name)
+            if col is None:
+                raise ColumnNotFoundError("column not found in schema: '" + name + "'")
+            new_cols.append(col.copy())
+            i = i + 1
+        return Schema(new_cols)
+
+    def drop_columns(self: Schema, names: list[str]) -> Schema:
+
+        new_cols: list[ColumnDef] = []
+        i: int = 0
+        n: int = len(self.columns)
+        while i < n:
+            col: ColumnDef = self.columns[i]
+            # Check if col.name is in names
+            to_drop: bool = False
+            j: int = 0
+            m: int = len(names)
+            while j < m:
+                if names[j] == col.name:
+                    to_drop = True
+                j = j + 1
+            if not to_drop:
+                new_cols.append(col.copy())
+            i = i + 1
+        if len(new_cols) == 0:
+            raise SchemaError("cannot drop all columns: schema would be empty")
+        return Schema(new_cols)
+
+    def rename_column(self: Schema, old_name: str, new_name: str) -> Schema:
+
+        if new_name == "":
+            raise SchemaError("new column name cannot be empty")
+        if self.has_column(new_name) and old_name != new_name:
+            raise SchemaError("column name '" + new_name + "' already exists")
+        old_idx: int = self.index_of(old_name)
+        if old_idx < 0:
+            raise ColumnNotFoundError("column not found to rename: '" + old_name + "'")
+        new_cols: list[ColumnDef] = []
+        i: int = 0
+        n: int = len(self.columns)
+        while i < n:
+            c: ColumnDef = self.columns[i]
+            if i == old_idx:
+                new_cols.append(ColumnDef(new_name, c.data_type, c.nullable))
+            else:
+                new_cols.append(c.copy())
+            i = i + 1
+        return Schema(new_cols)
+
+    def copy(self: Schema) -> Schema:
+
+        new_cols: list[ColumnDef] = []
+        i: int = 0
+        n: int = len(self.columns)
+        while i < n:
+            new_cols.append(self.columns[i].copy())
+            i = i + 1
+        return Schema(new_cols)
+
+def schema_from_names_and_types(names: list[str], types: list[int]) -> Schema:
+    if len(names) != len(types):
+        raise SchemaError("names count (" + str(len(names)) + ") != types count (" + str(len(types)) + ")")
+    cols: list[ColumnDef] = []
+    i: int = 0
+    n: int = len(names)
+    while i < n:
+        cols.append(ColumnDef(names[i], types[i], True))
+        i = i + 1
+    return Schema(cols)
+
+def schema_from_names(names: list[str], default_type: int = 3) -> Schema:
+    cols: list[ColumnDef] = []
+    i: int = 0
+    n: int = len(names)
+    while i < n:
+        cols.append(ColumnDef(names[i], default_type, True))
+        i = i + 1
+    return Schema(cols)

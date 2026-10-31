@@ -1,0 +1,62 @@
+# atlas.nox — Unified top-level facade for the Atlas data analysis library.
+
+import errors
+from errors import AtlasError, SchemaError, ColumnNotFoundError, TypeConversionError, MissingValueError, CsvImportError, JsonImportError, ShapeError, AggregationError, SortError
+
+import values
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+
+import schema
+from schema import ColumnDef, Schema, schema_from_names_and_types, schema_from_names
+
+import expr
+from expr import Expr, col_eq, col_eq_int, col_eq_str, col_eq_bool, col_neq, col_neq_int, col_neq_str, col_gt, col_gt_int, col_gt_float, col_gte, col_gte_int, col_gte_float, col_lt, col_lt_int, col_lt_float, col_lte, col_lte_int, col_lte_float, col_is_missing, col_not_missing, col_contains, col_starts_with, col_in, expr_and, expr_or, expr_not
+
+import sort
+from sort import sort_rows
+
+import stats
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
+
+import table
+from table import Table, create_table
+
+import groupby
+from groupby import GroupedTable, AggregateDef, group_by, agg_count, agg_sum, agg_mean, agg_median, agg_std, agg_variance, agg_min, agg_max, agg_count_non_missing
+
+import csv_adapter
+from csv_adapter import read_csv, to_csv, infer_schema
+
+import json_adapter
+from json_adapter import table_from_json, table_to_json, csv_to_json, json_to_csv
+
+import io
+from io import read_csv_file, write_csv_file, read_json_file, write_json_file
+
+# Convenience functional statistics API matching AGENTS.md:
+def col_mean(t: Table, col_name: str) -> float:
+    return t.mean(col_name)
+
+def col_median(t: Table, col_name: str) -> float:
+    return t.median(col_name)
+
+def col_std(t: Table, col_name: str, is_sample: bool = True) -> float:
+    return t.std(col_name, is_sample)
+
+def col_variance(t: Table, col_name: str, is_sample: bool = True) -> float:
+    return t.variance(col_name, is_sample)
+
+def col_min(t: Table, col_name: str) -> Cell:
+    return t.min_val(col_name)
+
+def col_max(t: Table, col_name: str) -> Cell:
+    return t.max_val(col_name)
+
+def col_sum(t: Table, col_name: str) -> float:
+    return t.sum_val(col_name)
+
+def col_count(t: Table, col_name: str) -> int:
+    return t.count_val(col_name)
+
+def col_count_missing(t: Table, col_name: str) -> int:
+    return t.count_missing(col_name)

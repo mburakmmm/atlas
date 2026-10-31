@@ -1,0 +1,70 @@
+# tests/missing_test.nox — Unit tests for missing data handling, fill_missing, and drop_missing.
+
+import nox.test
+import errors
+from errors import ColumnNotFoundError, MissingValueError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+
+s: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("a", TYPE_INT), ColumnDef("b", TYPE_FLOAT)])
+
+# Rows:
+# r1: 1, 10, null
+# r2: 2, null, 2.5
+# r3: 3, null, null
+# r4: 4, 40, 4.5
+r1: list[Cell] = [cell_int(1), cell_int(10), cell_null()]
+r2: list[Cell] = [cell_int(2), cell_null(), cell_float(2.5)]
+r3: list[Cell] = [cell_int(3), cell_null(), cell_null()]
+r4: list[Cell] = [cell_int(4), cell_int(40), cell_float(4.5)]
+
+t: Table = Table(s, [r1, r2, r3, r4])
+
+# 1. count_missing
+nox.test.assert_eq_int(t.count_missing("id"), 0, "id has 0 missing")
+nox.test.assert_eq_int(t.count_missing("a"), 2, "a has 2 missing (r2, r3)")
+nox.test.assert_eq_int(t.count_missing("b"), 2, "b has 2 missing (r1, r3)")
+
+# 2. fill_missing
+filled_a: Table = t.fill_missing("a", cell_int(999))
+nox.test.assert_eq_int(filled_a.count_missing("a"), 0, "a has 0 missing after fill")
+nox.test.assert_eq_int(filled_a.cell(1, 1).as_int(), 999, "r2 a filled with 999")
+nox.test.assert_eq_int(filled_a.cell(2, 1).as_int(), 999, "r3 a filled with 999")
+nox.test.assert_eq_int(filled_a.cell(0, 1).as_int(), 10, "r1 a unchanged")
+
+# Original table unchanged (immutability)
+nox.test.assert_eq_int(t.count_missing("a"), 2, "original table still has 2 missing")
+
+# 3. drop_missing (how="any")
+# Dropping rows where 'a' is missing -> keeps r1 and r4 (2 rows)
+dropped_a: Table = t.drop_missing(["a"], "any")
+nox.test.assert_eq_int(dropped_a.row_count(), 2, "dropped_a has 2 rows")
+nox.test.assert_eq_int(dropped_a.cell(0, 0).as_int(), 1, "r1 kept")
+nox.test.assert_eq_int(dropped_a.cell(1, 0).as_int(), 4, "r4 kept")
+
+# Dropping rows where any of ['a', 'b'] is missing -> only r4 has neither missing (1 row)
+dropped_any: Table = t.drop_missing(["a", "b"], "any")
+nox.test.assert_eq_int(dropped_any.row_count(), 1, "only r4 has neither a nor b missing")
+nox.test.assert_eq_int(dropped_any.cell(0, 0).as_int(), 4, "r4 kept")
+
+# 4. drop_missing (how="all")
+# Dropping rows where BOTH 'a' and 'b' are missing -> only r3 is dropped (3 rows remain)
+dropped_all: Table = t.drop_missing(["a", "b"], "all")
+nox.test.assert_eq_int(dropped_all.row_count(), 3, "r1, r2, r4 remain")
+nox.test.assert_eq_int(dropped_all.cell(0, 0).as_int(), 1, "r1 kept")
+nox.test.assert_eq_int(dropped_all.cell(1, 0).as_int(), 2, "r2 kept")
+nox.test.assert_eq_int(dropped_all.cell(2, 0).as_int(), 4, "r4 kept")
+
+# 5. Column not found check
+caught_col: bool = False
+try:
+    bad_fill: Table = t.fill_missing("missing_col", cell_int(0))
+except ColumnNotFoundError:
+    caught_col = True
+nox.test.assert_true(caught_col, "fill_missing on unknown column raises ColumnNotFoundError")
+
+print("missing_test passed")

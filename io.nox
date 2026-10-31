@@ -1,0 +1,33 @@
+# io.nox — Filesystem CSV and JSON convenience operations with overwrite protection for Atlas.
+
+import nox.fs
+import errors
+from errors import AtlasError
+import schema
+from schema import Schema
+import table
+from table import Table
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+import json_adapter
+from json_adapter import table_from_json, table_to_json
+
+def read_csv_file(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    content: str = nox.fs.read_to_string(path)
+    return read_csv(content, has_header, explicit_schema, blank_is_missing)
+
+def write_csv_file(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None:
+    if not overwrite and nox.fs.exists(path):
+        raise AtlasError("file already exists (set overwrite=True to allow): '" + path + "'")
+    content: str = to_csv(t, include_header, safe_spreadsheet)
+    nox.fs.write_string(path, content)
+
+def read_json_file(path: str, explicit_schema: Schema | None = None) -> Table:
+    content: str = nox.fs.read_to_string(path)
+    return table_from_json(content, explicit_schema)
+
+def write_json_file(t: Table, path: str, overwrite: bool = False) -> None:
+    if not overwrite and nox.fs.exists(path):
+        raise AtlasError("file already exists (set overwrite=True to allow): '" + path + "'")
+    content: str = table_to_json(t)
+    nox.fs.write_string(path, content)

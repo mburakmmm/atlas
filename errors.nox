@@ -1,0 +1,31 @@
+# errors.nox — Atlas error hierarchy
+
+class AtlasError(Exception):
+    pass
+
+class SchemaError(AtlasError):
+    pass
+
+class ColumnNotFoundError(AtlasError):
+    pass
+
+class TypeConversionError(AtlasError):
+    pass
+
+class MissingValueError(AtlasError):
+    pass
+
+class CsvImportError(AtlasError):
+    pass
+
+class JsonImportError(AtlasError):
+    pass
+
+class ShapeError(AtlasError):
+    pass
+
+class AggregationError(AtlasError):
+    pass
+
+class SortError(AtlasError):
+    pass

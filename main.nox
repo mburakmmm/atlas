@@ -1,0 +1,91 @@
+# main.nox — Atlas demonstration CLI and interactive verification.
+
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, cell_float, cell_null, GroupedTable
+from atlas import read_csv, to_csv, table_from_json, table_to_json, csv_to_json, json_to_csv
+from atlas import col_gt_int, col_eq_str, col_is_missing, col_not_missing, expr_and, expr_or
+from atlas import group_by, agg_count, agg_mean, agg_median, agg_std, agg_sum, agg_min, agg_max
+from atlas import col_mean, col_median, col_std, col_min, col_max, col_sum, col_count, col_count_missing
+from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
+
+print("======================================================================")
+print("Atlas 0.1.0 — Lightweight Tabular Data Analysis & Statistics for Nox")
+print("======================================================================")
+
+# 1. Parse CSV dataset
+raw_csv: str = "id,name,department,salary,age,rating\n" + "1,Alice,Engineering,95000.0,30,4.8\n" + "2,Bob,Engineering,82000.0,24,4.2\n" + "3,Charlie,Marketing,65000.0,29,\n" + "4,Diana,Engineering,110000.0,35,4.9\n" + "5,Evan,Marketing,,22,3.8\n" + "6,Fiona,Sales,72000.0,28,4.5\n" + "7,George,Sales,78000.0,,4.1\n" + "8,Hannah,Engineering,99000.0,31,4.7\n"
+
+print("\n[1] Reading and inspecting CSV data...")
+t: Table = read_csv(raw_csv, True)
+print("Total rows loaded: " + str(t.row_count()))
+print("Total columns: " + str(t.column_count()))
+print("Columns: " + str(t.column_names()))
+print("\nInitial Table Preview:")
+t.print_preview(10)
+
+# 2. Filtering
+print("\n[2] Filtering rows: Engineering department and age >= 30...")
+eng_seniors: Table = t.filter(expr_and(col_eq_str("department", "Engineering"), col_gt_int("age", 29)))
+print("Matched rows: " + str(eng_seniors.row_count()))
+eng_seniors.print_preview(5)
+
+# 3. Column selection
+print("\n[3] Selecting specific columns: ['name', 'salary', 'rating']...")
+selected: Table = t.select(["name", "salary", "rating"])
+selected.print_preview(5)
+
+# 4. Sorting
+print("\n[4] Sorting by salary (descending)...")
+sorted_t: Table = t.sort_by(["salary"], False)
+sorted_t.print_preview(5)
+
+# 5. Missing value operations
+print("\n[5] Missing value inspection and cleaning:")
+print("Missing salary count: " + str(t.count_missing("salary")))
+print("Missing age count: " + str(t.count_missing("age")))
+print("Missing rating count: " + str(t.count_missing("rating")))
+
+print("\nFilling missing salary with 60000.0 and age with 25...")
+cleaned: Table = t.fill_missing("salary", cell_float(60000.0)).fill_missing("age", cell_int(25))
+print("Missing salary after fill: " + str(cleaned.count_missing("salary")))
+print("Missing age after fill: " + str(cleaned.count_missing("age")))
+
+print("\nDropping rows where rating is missing...")
+no_missing_rating: Table = cleaned.drop_missing(["rating"])
+print("Rows remaining: " + str(no_missing_rating.row_count()))
+
+# 6. Summary statistics
+print("\n[6] Computing summary statistics on cleaned salary:")
+salary_mean: float = cleaned.mean("salary")
+salary_median: float = cleaned.median("salary")
+salary_std: float = cleaned.std("salary")
+salary_min: Cell = cleaned.min_val("salary")
+salary_max: Cell = cleaned.max_val("salary")
+
+print("Salary Mean: " + str(salary_mean))
+print("Salary Median: " + str(salary_median))
+print("Salary StdDev (Sample): " + str(salary_std))
+print("Salary Min: " + salary_min.to_string())
+print("Salary Max: " + salary_max.to_string())
+
+# 7. Grouping & Aggregations
+print("\n[7] Grouping by department and computing aggregates...")
+grouped: GroupedTable = group_by(cleaned, ["department"])
+summary: Table = grouped.aggregate([agg_count("emp_count"), agg_mean("salary", "avg_salary"), agg_median("salary", "median_salary"), agg_std("salary", "std_salary"), agg_mean("age", "avg_age")])
+print("Group summary table:")
+summary.print_preview(10)
+
+# 8. JSON Conversion
+print("\n[8] Exporting summary to JSON...")
+json_out: str = table_to_json(summary)
+print(json_out)
+
+print("\n[9] Round-trip JSON back to Table and CSV...")
+t_from_json: Table = table_from_json(json_out)
+csv_from_json: str = to_csv(t_from_json)
+print("Recovered CSV:")
+print(csv_from_json)
+
+print("======================================================================")
+print("All Atlas 0.1.0 demonstration steps completed successfully!")
+print("======================================================================")

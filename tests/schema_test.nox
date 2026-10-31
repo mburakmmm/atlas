@@ -1,0 +1,79 @@
+# tests/schema_test.nox — Unit tests for Schema and ColumnDef invariants.
+
+import nox.test
+import errors
+from errors import SchemaError, ColumnNotFoundError
+import values
+from values import TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef, schema_from_names, schema_from_names_and_types
+
+# 1. Valid schema
+c1: ColumnDef = ColumnDef("id", TYPE_INT, False)
+c2: ColumnDef = ColumnDef("name", TYPE_STR, True)
+c3: ColumnDef = ColumnDef("score", TYPE_FLOAT, True)
+
+s: Schema = Schema([c1, c2, c3])
+nox.test.assert_eq_int(s.column_count(), 3, "column_count is 3")
+nox.test.assert_true(s.has_column("name"), "has column 'name'")
+nox.test.assert_true(not s.has_column("missing"), "does not have 'missing'")
+nox.test.assert_eq_int(s.index_of("score"), 2, "index of 'score'")
+
+# 2. Duplicate column check
+caught_dup: bool = False
+try:
+    bad_schema: Schema = Schema([ColumnDef("x", TYPE_INT), ColumnDef("x", TYPE_STR)])
+except SchemaError:
+    caught_dup = True
+nox.test.assert_true(caught_dup, "duplicate column must raise SchemaError")
+
+# 3. Empty column name check
+caught_empty: bool = False
+try:
+    bad_empty: Schema = Schema([ColumnDef("", TYPE_INT)])
+except SchemaError:
+    caught_empty = True
+nox.test.assert_true(caught_empty, "empty column name must raise SchemaError")
+
+# 4. Selection
+selected: Schema = s.select_columns(["score", "id"])
+nox.test.assert_eq_int(selected.column_count(), 2, "selected 2 columns")
+nox.test.assert_eq_str(selected.columns[0].name, "score", "first selected column is score")
+nox.test.assert_eq_str(selected.columns[1].name, "id", "second selected column is id")
+
+caught_sel_missing: bool = False
+try:
+    bad_sel: Schema = s.select_columns(["unknown_col"])
+except ColumnNotFoundError:
+    caught_sel_missing = True
+nox.test.assert_true(caught_sel_missing, "selecting missing column must raise ColumnNotFoundError")
+
+# 5. Drop
+dropped: Schema = s.drop_columns(["name"])
+nox.test.assert_eq_int(dropped.column_count(), 2, "dropped 1 column, 2 remain")
+nox.test.assert_true(not dropped.has_column("name"), "dropped column absent")
+nox.test.assert_true(dropped.has_column("id"), "id present")
+nox.test.assert_true(dropped.has_column("score"), "score present")
+
+# 6. Rename
+renamed: Schema = s.rename_column("name", "full_name")
+nox.test.assert_true(renamed.has_column("full_name"), "new name exists")
+nox.test.assert_true(not renamed.has_column("name"), "old name absent")
+nox.test.assert_eq_int(renamed.index_of("full_name"), 1, "renamed at same position")
+
+caught_rename_dup: bool = False
+try:
+    bad_rename: Schema = s.rename_column("id", "name")
+except SchemaError:
+    caught_rename_dup = True
+nox.test.assert_true(caught_rename_dup, "renaming to existing column must raise SchemaError")
+
+# 7. Helper constructors
+s_names: Schema = schema_from_names(["col_a", "col_b", "col_c"], TYPE_FLOAT)
+nox.test.assert_eq_int(s_names.column_count(), 3, "s_names count")
+nox.test.assert_eq_int(s_names.columns[0].data_type, TYPE_FLOAT, "s_names type")
+
+s_types: Schema = schema_from_names_and_types(["a", "b"], [TYPE_INT, TYPE_BOOL])
+nox.test.assert_eq_int(s_types.columns[1].data_type, TYPE_BOOL, "s_types bool")
+
+print("schema_test passed")

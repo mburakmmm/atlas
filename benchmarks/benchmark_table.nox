@@ -1,0 +1,69 @@
+# benchmarks/benchmark_table.nox — Performance benchmarks for Atlas operations.
+
+import nox.time
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, cell_float, cell_null
+from atlas import col_gt_int, group_by, GroupedTable, agg_count, agg_mean, agg_std, agg_sum
+from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
+
+print("==========================================================")
+print("Atlas Performance Benchmark (10,000 synthetic records)")
+print("==========================================================")
+
+# 1. Dataset Generation
+t0: int = nox.time.now_ms()
+s: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("category", TYPE_STR), ColumnDef("val_int", TYPE_INT), ColumnDef("val_float", TYPE_FLOAT)])
+
+rows: list[list[Cell]] = []
+i: int = 0
+n_records: int = 10000
+
+while i < n_records:
+    cat: str = "Cat_A"
+    mod: int = i % 4
+    if mod == 1:
+        cat = "Cat_B"
+    elif mod == 2:
+        cat = "Cat_C"
+    elif mod == 3:
+        cat = "Cat_D"
+
+    r: list[Cell] = [cell_int(i), cell_str(cat), cell_int(i * 3), cell_float(float(i) * 1.5)]
+    rows.append(r)
+    i = i + 1
+
+t: Table = Table(s, rows)
+t_gen: int = nox.time.now_ms() - t0
+print("[1] Generated " + str(n_records) + " rows in " + str(t_gen) + " ms")
+
+# 2. Filtering
+t0 = nox.time.now_ms()
+filtered: Table = t.filter(col_gt_int("val_int", 15000))
+t_filt: int = nox.time.now_ms() - t0
+print("[2] Filtered " + str(n_records) + " rows -> " + str(filtered.row_count()) + " rows in " + str(t_filt) + " ms")
+
+# 3. Summary Statistics
+t0 = nox.time.now_ms()
+m: float = t.mean("val_float")
+v: float = t.variance("val_float")
+std: float = t.std("val_float")
+med: float = t.median("val_float")
+t_stats: int = nox.time.now_ms() - t0
+print("[3] Computed Mean (" + str(m) + "), Median (" + str(med) + "), StdDev (" + str(std) + ") in " + str(t_stats) + " ms")
+
+# 4. GroupBy & Aggregations
+t0 = nox.time.now_ms()
+g: GroupedTable = group_by(t, ["category"])
+summary: Table = g.aggregate([agg_count("count"), agg_sum("val_float", "sum_val"), agg_mean("val_float", "avg_val"), agg_std("val_float", "std_val")])
+t_grp: int = nox.time.now_ms() - t0
+print("[4] GroupBy 4 categories and computed 4 aggregates in " + str(t_grp) + " ms")
+
+# 5. Stable Merge Sort
+t0 = nox.time.now_ms()
+sorted_t: Table = t.sort_by(["category", "val_int"], True)
+t_sort: int = nox.time.now_ms() - t0
+print("[5] Multi-key Stable Merge Sort on " + str(n_records) + " rows in " + str(t_sort) + " ms")
+
+print("==========================================================")
+print("Benchmark completed successfully.")
+print("==========================================================")

@@ -1,0 +1,17 @@
+# examples/group_summary.nox — Multi-metric group summary statistics and aggregations.
+
+import atlas
+from atlas import Table, read_csv, group_by, GroupedTable, agg_count, agg_mean, agg_median, agg_std, agg_min, agg_max
+
+sales_csv: str = "store_id,category,units_sold,revenue\n" + "S1,Electronics,12,3600.0\n" + "S2,Electronics,8,2400.0\n" + "S1,Furniture,5,2500.0\n" + "S2,Furniture,14,7000.0\n" + "S1,Electronics,20,6000.0\n" + "S2,Electronics,15,4500.0\n" + "S1,Furniture,7,3500.0\n" + "S2,Furniture,3,1500.0\n"
+
+t: Table = read_csv(sales_csv, True)
+print("Sales transactions:")
+t.print_preview(10)
+
+# Group by category and compute comprehensive financial metrics
+grouped: GroupedTable = group_by(t, ["category"])
+report: Table = grouped.aggregate([agg_count("transaction_count"), agg_mean("revenue", "avg_revenue"), agg_median("revenue", "median_revenue"), agg_std("revenue", "std_revenue"), agg_min("revenue", "min_revenue"), agg_max("revenue", "max_revenue")])
+
+print("\nCategory Financial Summary:")
+report.print_preview(5)

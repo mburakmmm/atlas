@@ -1,0 +1,69 @@
+# tests/json_test.nox — Unit tests for JSON ↔ Table ↔ CSV conversions and edge cases.
+
+import nox.test
+import errors
+from errors import JsonImportError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_bool, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import json_adapter
+from json_adapter import table_from_json, table_to_json, csv_to_json, json_to_csv
+
+# 1. Parse JSON array of objects
+json_input: str = "[{\"id\": 1, \"name\": \"Alice\", \"active\": true, \"score\": 95.5}, " + "{\"id\": 2, \"name\": \"Bob\", \"active\": false, \"score\": 88.0}, " + "{\"id\": 3, \"name\": \"Charlie\", \"active\": true, \"score\": null}]"
+
+t: Table = table_from_json(json_input)
+nox.test.assert_eq_int(t.row_count(), 3, "3 rows from JSON")
+nox.test.assert_eq_int(t.column_count(), 4, "4 columns from JSON")
+nox.test.assert_eq_int(t.cell(0, 0).as_int(), 1, "Alice id is 1")
+nox.test.assert_eq_str(t.cell(0, 1).to_string(), "Alice", "Alice name")
+nox.test.assert_true(t.cell(0, 2).as_bool(), "Alice active is true")
+nox.test.assert_true(t.cell(2, 3).is_missing(), "Charlie score is null")
+
+# 2. Table to JSON string
+json_out: str = table_to_json(t)
+# Verify json_out contains expected key-values
+nox.test.assert_true("\"id\":1" in json_out or "\"id\": 1" in json_out, "json_out has id 1")
+nox.test.assert_true("\"name\":\"Alice\"" in json_out, "json_out has Alice")
+nox.test.assert_true("\"active\":true" in json_out, "json_out has active true")
+nox.test.assert_true("\"score\":null" in json_out, "json_out has score null")
+
+# 3. Round-trip: Table -> JSON -> Table
+t_round: Table = table_from_json(json_out)
+nox.test.assert_eq_int(t_round.row_count(), 3, "round-trip row count")
+nox.test.assert_eq_int(t_round.column_count(), 4, "round-trip col count")
+nox.test.assert_eq_str(t_round.cell(1, 1).to_string(), "Bob", "round-trip Bob preserved")
+nox.test.assert_true(t_round.cell(2, 3).is_missing(), "round-trip null preserved")
+
+# 4. Direct CSV to JSON
+csv_data: str = "product,price\nLaptop,1200\nMouse,25\n"
+direct_json: str = csv_to_json(csv_data)
+nox.test.assert_true("\"product\":\"Laptop\"" in direct_json, "direct json has Laptop")
+nox.test.assert_true("\"price\":1200" in direct_json or "\"price\": 1200" in direct_json, "direct json has price 1200")
+
+# 5. Direct JSON to CSV
+json_data: str = "[{\"city\": \"Tokyo\", \"pop\": 37000000}, {\"city\": \"Delhi\", \"pop\": 31000000}]"
+direct_csv: str = json_to_csv(json_data)
+nox.test.assert_true("Tokyo" in direct_csv, "direct csv has Tokyo")
+nox.test.assert_true("Delhi" in direct_csv, "direct csv has Delhi")
+
+# 6. Rejection of invalid JSON root
+caught_root: bool = False
+try:
+    bad_root: Table = table_from_json("{\"not\": \"an array\"}")
+except JsonImportError:
+    caught_root = True
+nox.test.assert_true(caught_root, "object root must raise JsonImportError")
+
+# 7. Rejection of nested array or object in cell
+caught_nested: bool = False
+try:
+    bad_nested: Table = table_from_json("[{\"user\": \"test\", \"tags\": [1, 2, 3]}]")
+except JsonImportError:
+    caught_nested = True
+nox.test.assert_true(caught_nested, "nested array in cell must raise JsonImportError")
+
+print("json_test passed")

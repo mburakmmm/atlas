@@ -1,0 +1,67 @@
+# tests/regression_test.nox — End-to-end integration, complex pipelines, and edge-case regression tests.
+
+import nox.test
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, cell_float, cell_null
+from atlas import read_csv, to_csv, table_from_json, table_to_json, csv_to_json, json_to_csv
+from atlas import col_gt_int, col_eq_str, col_is_missing, col_not_missing, expr_and, expr_or
+from atlas import group_by, GroupedTable, agg_count, agg_mean, agg_median, agg_std, agg_sum, agg_min, agg_max
+from atlas import col_mean, col_median, col_std, col_min, col_max, col_sum, col_count, col_count_missing
+from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
+
+# 1. Pipeline test: CSV -> Filter -> Fill Missing -> Sort -> Select -> Group -> JSON
+raw_data: str = "order_id,region,amount,customer_age\n" + "1001,EMEA,250.0,34\n" + "1002,APAC,120.0,28\n" + "1003,EMEA,450.0,45\n" + "1004,AMER,300.0,\n" + "1005,APAC,,52\n" + "1006,EMEA,150.0,22\n" + "1007,AMER,800.0,61\n" + "1008,EMEA,50.0,19\n"
+
+t_initial: Table = read_csv(raw_data, True)
+nox.test.assert_eq_int(t_initial.row_count(), 8, "initial 8 orders")
+
+# Step 1: Filter customer_age >= 25 (or missing)
+t_filtered: Table = t_initial.filter(expr_or(col_gt_int("customer_age", 24), col_is_missing("customer_age")))
+nox.test.assert_eq_int(t_filtered.row_count(), 6, "6 orders matched age condition (1006 and 1008 excluded)")
+
+# Step 2: Clean missing data
+t_cleaned: Table = t_filtered.fill_missing("amount", cell_float(100.0)).fill_missing("customer_age", cell_int(30))
+nox.test.assert_eq_int(t_cleaned.count_missing("amount"), 0, "amount clean")
+nox.test.assert_eq_int(t_cleaned.count_missing("customer_age"), 0, "age clean")
+
+# Step 3: Sort by region ASC, amount DESC
+t_sorted: Table = t_cleaned.sort_by_keys(["region", "amount"], [True, False])
+nox.test.assert_eq_str(t_sorted.cell(0, 1).to_string(), "AMER", "AMER first")
+# In AMER: 800.0 (1007) and 300.0 (1004)
+nox.test.assert_eq_float(t_sorted.cell(0, 2).as_float(), 800.0, "highest AMER amount 800")
+nox.test.assert_eq_float(t_sorted.cell(1, 2).as_float(), 300.0, "second AMER amount 300")
+
+# Step 4: Group by region and aggregate
+g_region: GroupedTable = group_by(t_sorted, ["region"])
+t_summary: Table = g_region.aggregate([agg_count("order_count"), agg_sum("amount", "total_sales"), agg_mean("amount", "avg_order"), agg_median("amount", "median_order"), agg_max("amount", "max_order")])
+
+# Regions in order of appearance in t_sorted: AMER, APAC, EMEA
+nox.test.assert_eq_int(t_summary.row_count(), 3, "3 regions")
+nox.test.assert_eq_str(t_summary.cell(0, 0).to_string(), "AMER", "region 0 is AMER")
+nox.test.assert_eq_int(t_summary.cell(0, 1).as_int(), 2, "AMER count 2")
+nox.test.assert_eq_float(t_summary.cell(0, 2).as_float(), 1100.0, "AMER total 1100")
+nox.test.assert_eq_float(t_summary.cell(0, 3).as_float(), 550.0, "AMER avg 550")
+
+# Step 5: Convert summary to JSON and round-trip
+json_summary: str = table_to_json(t_summary)
+recovered_summary: Table = table_from_json(json_summary)
+nox.test.assert_eq_int(recovered_summary.row_count(), 3, "recovered summary 3 rows")
+nox.test.assert_eq_float(recovered_summary.cell(0, 2).as_float(), 1100.0, "recovered AMER total 1100")
+
+# 2. Empty dataset edge case
+s_empty: Schema = Schema([ColumnDef("x", TYPE_INT), ColumnDef("y", TYPE_STR)])
+empty_rows: list[list[Cell]] = []
+t_empty: Table = Table(s_empty, empty_rows)
+nox.test.assert_eq_int(t_empty.row_count(), 0, "empty row count")
+nox.test.assert_eq_int(t_empty.column_count(), 2, "empty col count")
+
+filtered_empty: Table = t_empty.filter(col_gt_int("x", 10))
+nox.test.assert_eq_int(filtered_empty.row_count(), 0, "filter on empty is empty")
+
+sorted_empty: Table = t_empty.sort_by(["x"])
+nox.test.assert_eq_int(sorted_empty.row_count(), 0, "sort on empty is empty")
+
+csv_empty: str = to_csv(t_empty, True)
+nox.test.assert_eq_str(csv_empty, "x,y\n", "header only on empty table")
+
+print("regression_test passed")

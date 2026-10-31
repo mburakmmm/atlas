@@ -1,0 +1,9 @@
+# Nox build artifacts and binaries
+bin/
+*.o
+*.a
+*.dylib
+*.so
+*.tmp
+*.nox-tmp
+.DS_Store

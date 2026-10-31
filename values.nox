@@ -1,0 +1,207 @@
+# values.nox — Typed cell value representation and missing value semantics for Atlas.
+
+import errors
+from errors import TypeConversionError
+
+TYPE_NULL: int = 0
+TYPE_INT: int = 1
+TYPE_FLOAT: int = 2
+TYPE_STR: int = 3
+TYPE_BOOL: int = 4
+
+class Cell:
+    kind: int
+    i: int
+    f: float
+    s: str
+    b: bool
+
+    def __init__(self: Cell, kind: int, i: int, f: float, s: str, b: bool) -> None:
+        self.kind = kind
+        self.i = i
+        self.f = f
+        self.s = s
+        self.b = b
+
+    def is_missing(self: Cell) -> bool:
+
+        return self.kind == TYPE_NULL
+
+    def is_numeric(self: Cell) -> bool:
+
+        return self.kind == TYPE_INT or self.kind == TYPE_FLOAT
+
+    def as_int(self: Cell) -> int:
+
+        if self.kind == TYPE_INT:
+            return self.i
+        if self.kind == TYPE_FLOAT:
+            return int(self.f)
+        if self.kind == TYPE_STR:
+            try:
+                return int(self.s)
+            except ValueError:
+                raise TypeConversionError("cannot convert string '" + self.s + "' to int")
+        if self.kind == TYPE_BOOL:
+            if self.b:
+                return 1
+            return 0
+        raise TypeConversionError("cannot convert missing Cell to int")
+
+    def as_float(self: Cell) -> float:
+
+        if self.kind == TYPE_FLOAT:
+            return self.f
+        if self.kind == TYPE_INT:
+            return self.f
+        if self.kind == TYPE_STR:
+            try:
+                return float(self.s)
+            except ValueError:
+                raise TypeConversionError("cannot convert string '" + self.s + "' to float")
+        if self.kind == TYPE_BOOL:
+            if self.b:
+                return 1.0
+            return 0.0
+        raise TypeConversionError("cannot convert missing Cell to float")
+
+    def as_str(self: Cell) -> str:
+
+        return self.to_string()
+
+    def as_bool(self: Cell) -> bool:
+
+        if self.kind == TYPE_BOOL:
+            return self.b
+        if self.kind == TYPE_INT:
+            return self.i != 0
+        if self.kind == TYPE_FLOAT:
+            return self.f != 0.0
+        if self.kind == TYPE_STR:
+            if self.s == "true" or self.s == "True" or self.s == "1" or self.s == "yes":
+                return True
+            if self.s == "false" or self.s == "False" or self.s == "0" or self.s == "no":
+                return False
+            raise TypeConversionError("cannot convert string '" + self.s + "' to bool")
+        raise TypeConversionError("cannot convert missing Cell to bool")
+
+    def to_string(self: Cell) -> str:
+
+        if self.kind == TYPE_NULL:
+            return ""
+        if self.kind == TYPE_INT:
+            return str(self.i)
+        if self.kind == TYPE_FLOAT:
+            return str(self.f)
+        if self.kind == TYPE_STR:
+            return self.s
+        if self.kind == TYPE_BOOL:
+            if self.b:
+                return "true"
+            return "false"
+        return ""
+
+    def equals(self: Cell, other: Cell) -> bool:
+
+        if self.kind == TYPE_NULL or other.kind == TYPE_NULL:
+            return self.kind == other.kind
+        if self.is_numeric() and other.is_numeric():
+            return self.as_float() == other.as_float()
+        if self.kind != other.kind:
+            return False
+        if self.kind == TYPE_STR:
+            return self.s == other.s
+        if self.kind == TYPE_BOOL:
+            return self.b == other.b
+        return False
+
+    def compare(self: Cell, other: Cell, nulls_first: bool = False) -> int:
+
+        # Returns -1 if self < other, 0 if equal, 1 if self > other
+        if self.is_missing() and other.is_missing():
+            return 0
+        if self.is_missing():
+            if nulls_first:
+                return -1
+            return 1
+        if other.is_missing():
+            if nulls_first:
+                return 1
+            return -1
+
+        if self.is_numeric() and other.is_numeric():
+            f1: float = self.as_float()
+            f2: float = other.as_float()
+            if f1 < f2:
+                return -1
+            if f1 > f2:
+                return 1
+            return 0
+
+        if self.kind == TYPE_STR and other.kind == TYPE_STR:
+            if self.s < other.s:
+                return -1
+            if self.s > other.s:
+                return 1
+            return 0
+
+        if self.kind == TYPE_BOOL and other.kind == TYPE_BOOL:
+            if not self.b and other.b:
+                return -1
+            if self.b and not other.b:
+                return 1
+            return 0
+
+        s1: str = self.to_string()
+        s2: str = other.to_string()
+        if s1 < s2:
+            return -1
+        if s1 > s2:
+            return 1
+        return 0
+
+def cell_null() -> Cell:
+    return Cell(TYPE_NULL, 0, 0.0, "", False)
+
+def cell_int(i: int) -> Cell:
+    return Cell(TYPE_INT, i, float(i), "", False)
+
+def cell_float(f: float) -> Cell:
+    return Cell(TYPE_FLOAT, 0, f, "", False)
+
+def cell_str(s: str) -> Cell:
+    return Cell(TYPE_STR, 0, 0.0, s, False)
+
+def cell_bool(b: bool) -> Cell:
+    return Cell(TYPE_BOOL, 0, 0.0, "", b)
+
+def parse_cell(text: str, target_type: int, blank_is_missing: bool = True) -> Cell:
+    if blank_is_missing and text == "":
+        return cell_null()
+    if text == "null" or text == "NULL" or text == "NA" or text == "N/A" or text == "NaN":
+        return cell_null()
+
+    if target_type == TYPE_INT:
+        try:
+            return cell_int(int(text))
+        except ValueError:
+            raise TypeConversionError("cannot parse '" + text + "' as int")
+
+    if target_type == TYPE_FLOAT:
+        try:
+            return cell_float(float(text))
+        except ValueError:
+            raise TypeConversionError("cannot parse '" + text + "' as float")
+
+    if target_type == TYPE_BOOL:
+        if text == "true" or text == "True" or text == "1" or text == "yes":
+            return cell_bool(True)
+        if text == "false" or text == "False" or text == "0" or text == "no":
+            return cell_bool(False)
+        raise TypeConversionError("cannot parse '" + text + "' as bool")
+
+    if target_type == TYPE_STR:
+        return cell_str(text)
+
+    # Fallback to string if target_type is TYPE_NULL or unknown
+    return cell_str(text)

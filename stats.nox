@@ -1,0 +1,143 @@
+# stats.nox — Numerically stable summary statistics for Atlas.
+
+import nox.mathx
+import errors
+from errors import AggregationError
+import values
+from values import Cell
+
+def stat_count(cells: list[Cell]) -> int:
+    return len(cells)
+
+def stat_count_non_missing(cells: list[Cell]) -> int:
+    cnt: int = 0
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        if not cells[i].is_missing():
+            cnt = cnt + 1
+        i = i + 1
+    return cnt
+
+def stat_count_missing(cells: list[Cell]) -> int:
+    cnt: int = 0
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        if cells[i].is_missing():
+            cnt = cnt + 1
+        i = i + 1
+    return cnt
+
+def stat_sum(cells: list[Cell]) -> float:
+    total: float = 0.0
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            total = total + c.as_float()
+        i = i + 1
+    return total
+
+def stat_mean(cells: list[Cell]) -> float:
+    total: float = 0.0
+    cnt: int = 0
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            total = total + c.as_float()
+            cnt = cnt + 1
+        i = i + 1
+    if cnt == 0:
+        raise AggregationError("cannot compute mean: no non-missing numeric observations")
+    return total / float(cnt)
+
+def stat_variance(cells: list[Cell], is_sample: bool = True) -> float:
+    # Welford's algorithm for numerical stability
+    cnt: int = 0
+    mean: float = 0.0
+    m2: float = 0.0
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            cnt = cnt + 1
+            x: float = c.as_float()
+            delta: float = x - mean
+            mean = mean + delta / float(cnt)
+            delta2: float = x - mean
+            m2 = m2 + delta * delta2
+        i = i + 1
+
+    if is_sample:
+        if cnt < 2:
+            raise AggregationError("sample variance requires at least 2 non-missing numeric observations")
+        return m2 / float(cnt - 1)
+
+    if cnt < 1:
+        raise AggregationError("population variance requires at least 1 non-missing numeric observation")
+    return m2 / float(cnt)
+
+def stat_std(cells: list[Cell], is_sample: bool = True) -> float:
+    v: float = stat_variance(cells, is_sample)
+    return nox.mathx.sqrt(v)
+
+def stat_median(cells: list[Cell]) -> float:
+    flts: list[float] = []
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            flts.append(c.as_float())
+        i = i + 1
+
+    m: int = len(flts)
+    if m == 0:
+        raise AggregationError("cannot compute median: no non-missing numeric observations")
+
+    flts.sort()
+    if m % 2 == 1:
+        return flts[m // 2]
+    mid: int = m // 2
+    return (flts[mid - 1] + flts[mid]) / 2.0
+
+def stat_min(cells: list[Cell]) -> Cell:
+    found: bool = False
+    best: Cell = cells[0]
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing():
+            if not found:
+                best = c
+                found = True
+            elif c.compare(best) < 0:
+                best = c
+        i = i + 1
+    if not found:
+        raise AggregationError("cannot compute min: all values are missing or table is empty")
+    return best
+
+def stat_max(cells: list[Cell]) -> Cell:
+    found: bool = False
+    best: Cell = cells[0]
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing():
+            if not found:
+                best = c
+                found = True
+            elif c.compare(best) > 0:
+                best = c
+        i = i + 1
+    if not found:
+        raise AggregationError("cannot compute max: all values are missing or table is empty")
+    return best

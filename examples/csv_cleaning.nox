@@ -1,0 +1,27 @@
+# examples/csv_cleaning.nox — Demonstrates data inspection, missing value cleaning, and filtering.
+
+import atlas
+from atlas import Table, read_csv, cell_float, cell_int, to_csv
+
+raw_dirty_csv: str = "sensor_id,location,temperature,humidity,status\n" + "S-01,Warehouse A,21.5,45.0,OK\n" + "S-02,Warehouse B,,52.0,OK\n" + "S-03,Office 1,23.1,,WARN\n" + "S-04,Office 2,24.0,48.0,OK\n" + "S-05,Warehouse A,,,\n" + "S-06,Cold Storage,4.2,85.0,OK\n"
+
+t: Table = read_csv(raw_dirty_csv, True)
+print("Initial raw sensor data:")
+t.print_preview(10)
+
+print("\nMissing value summary:")
+print("- Missing temperature: " + str(t.count_missing("temperature")))
+print("- Missing humidity: " + str(t.count_missing("humidity")))
+print("- Missing status: " + str(t.count_missing("status")))
+
+# 1. Fill missing temperature with nominal 20.0
+# 2. Fill missing humidity with nominal 50.0
+# 3. Drop rows where status is still missing
+cleaned: Table = t.fill_missing("temperature", cell_float(20.0)).fill_missing("humidity", cell_float(50.0)).drop_missing(["status"])
+
+print("\nCleaned sensor table:")
+cleaned.print_preview(10)
+
+print("\nExporting cleaned data as CSV:")
+csv_clean: str = to_csv(cleaned, True)
+print(csv_clean)

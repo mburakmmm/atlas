@@ -1,0 +1,80 @@
+# tests/filter_test.nox — Unit tests for row filtering and expression evaluation.
+
+import nox.test
+import errors
+from errors import ColumnNotFoundError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_bool, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import expr
+from expr import col_eq, col_eq_int, col_eq_str, col_neq_int, col_gt_int, col_gte_int, col_lt_int, col_lte_int, col_is_missing, col_not_missing, col_contains, col_starts_with, col_in, expr_and, expr_or, expr_not
+import table
+from table import Table
+
+# Setup dataset
+s: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("city", TYPE_STR), ColumnDef("temp", TYPE_FLOAT), ColumnDef("score", TYPE_INT)])
+
+r1: list[Cell] = [cell_int(1), cell_str("Istanbul"), cell_float(18.5), cell_int(85)]
+r2: list[Cell] = [cell_int(2), cell_str("Ankara"), cell_float(12.0), cell_int(90)]
+r3: list[Cell] = [cell_int(3), cell_str("Izmir"), cell_float(22.0), cell_int(75)]
+r4: list[Cell] = [cell_int(4), cell_str("Antalya"), cell_float(26.5), cell_null()]
+r5: list[Cell] = [cell_int(5), cell_str("Bursa"), cell_float(16.0), cell_int(60)]
+
+t: Table = Table(s, [r1, r2, r3, r4, r5])
+
+# 1. col_eq_str
+res_eq: Table = t.filter(col_eq_str("city", "Istanbul"))
+nox.test.assert_eq_int(res_eq.row_count(), 1, "exact 1 match for Istanbul")
+nox.test.assert_eq_int(res_eq.cell(0, 0).as_int(), 1, "matched id is 1")
+
+# 2. col_gt_int
+res_gt: Table = t.filter(col_gt_int("score", 80))
+nox.test.assert_eq_int(res_gt.row_count(), 2, "score > 80 has 2 rows (missing score excluded)")
+
+# 3. col_is_missing & col_not_missing
+res_miss: Table = t.filter(col_is_missing("score"))
+nox.test.assert_eq_int(res_miss.row_count(), 1, "1 row has missing score")
+nox.test.assert_eq_int(res_miss.cell(0, 0).as_int(), 4, "missing score row is id 4")
+
+res_not_miss: Table = t.filter(col_not_missing("score"))
+nox.test.assert_eq_int(res_not_miss.row_count(), 4, "4 rows have non-missing score")
+
+# 4. Strings: contains & starts_with
+res_contains: Table = t.filter(col_contains("city", "bul"))
+# Istanbul contains "bul"
+nox.test.assert_eq_int(res_contains.row_count(), 1, "1 city contains 'bul'")
+nox.test.assert_eq_str(res_contains.cell(0, 1).to_string(), "Istanbul", "matched Istanbul")
+
+res_starts: Table = t.filter(col_starts_with("city", "An"))
+# Ankara and Antalya start with "An"
+nox.test.assert_eq_int(res_starts.row_count(), 2, "2 cities start with 'An'")
+
+# 5. Compound: AND, OR, NOT
+# city starts with 'A' AND temp > 20.0 -> Antalya only (26.5 vs Ankara 12.0)
+res_and: Table = t.filter(expr_and(col_starts_with("city", "An"), col_gt_int("temp", 20)))
+nox.test.assert_eq_int(res_and.row_count(), 1, "AND filter matched 1 row")
+nox.test.assert_eq_str(res_and.cell(0, 1).to_string(), "Antalya", "matched Antalya")
+
+# OR filter: city == 'Izmir' OR city == 'Bursa'
+res_or: Table = t.filter(expr_or(col_eq_str("city", "Izmir"), col_eq_str("city", "Bursa")))
+nox.test.assert_eq_int(res_or.row_count(), 2, "OR filter matched 2 rows")
+
+# NOT filter: NOT (city == 'Istanbul') -> 4 rows
+res_not: Table = t.filter(expr_not(col_eq_str("city", "Istanbul")))
+nox.test.assert_eq_int(res_not.row_count(), 4, "NOT filter matched 4 rows")
+
+# 6. IN operator
+cities_list: list[Cell] = [cell_str("Ankara"), cell_str("Izmir")]
+res_in: Table = t.filter(col_in("city", cities_list))
+nox.test.assert_eq_int(res_in.row_count(), 2, "IN filter matched 2 rows")
+
+# 7. Unknown column error
+caught_unknown: bool = False
+try:
+    bad_filter: Table = t.filter(col_eq_int("nonexistent", 10))
+except ColumnNotFoundError:
+    caught_unknown = True
+nox.test.assert_true(caught_unknown, "filtering on nonexistent column must raise ColumnNotFoundError")
+
+print("filter_test passed")

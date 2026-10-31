@@ -1,0 +1,64 @@
+# tests/io_test.nox — Unit tests for filesystem I/O and overwrite safety.
+
+import nox.test
+import nox.fs
+import errors
+from errors import AtlasError
+import values
+from values import Cell, cell_int, cell_str
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import io
+from io import read_csv_file, write_csv_file, read_json_file, write_json_file
+
+test_csv_path: str = "/tmp/atlas_test_io.csv"
+test_json_path: str = "/tmp/atlas_test_io.json"
+
+# Clean up before running if left from previous runs
+if nox.fs.exists(test_csv_path):
+    nox.fs.remove_file(test_csv_path)
+if nox.fs.exists(test_json_path):
+    nox.fs.remove_file(test_json_path)
+
+# 1. Create table and write CSV file
+s: Schema = Schema([ColumnDef("id", 1), ColumnDef("name", 3)])
+r1: list[Cell] = [cell_int(101), cell_str("Alpha")]
+r2: list[Cell] = [cell_int(102), cell_str("Beta")]
+t: Table = Table(s, [r1, r2])
+
+write_csv_file(t, test_csv_path, True, False, False)
+nox.test.assert_true(nox.fs.exists(test_csv_path), "CSV file created")
+
+# 2. Overwrite protection test
+caught_overwrite: bool = False
+try:
+    write_csv_file(t, test_csv_path, True, False, False)
+except AtlasError:
+    caught_overwrite = True
+nox.test.assert_true(caught_overwrite, "must raise AtlasError when overwriting without permission")
+
+# 3. Read back CSV file
+t_read_csv: Table = read_csv_file(test_csv_path, True)
+nox.test.assert_eq_int(t_read_csv.row_count(), 2, "read 2 rows from CSV file")
+nox.test.assert_eq_str(t_read_csv.cell(0, 1).to_string(), "Alpha", "Alpha preserved")
+
+# 4. Write JSON file and overwrite with flag
+write_json_file(t, test_json_path, False)
+nox.test.assert_true(nox.fs.exists(test_json_path), "JSON file created")
+
+# Overwrite with overwrite=True
+write_json_file(t, test_json_path, True)
+nox.test.assert_true(nox.fs.exists(test_json_path), "JSON file overwritten cleanly")
+
+# 5. Read back JSON file
+t_read_json: Table = read_json_file(test_json_path)
+nox.test.assert_eq_int(t_read_json.row_count(), 2, "read 2 rows from JSON file")
+nox.test.assert_eq_int(t_read_json.cell(1, 0).as_int(), 102, "102 preserved")
+
+# Cleanup
+nox.fs.remove_file(test_csv_path)
+nox.fs.remove_file(test_json_path)
+
+print("io_test passed")
