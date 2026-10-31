@@ -62,6 +62,13 @@ table.count_val(col_name: str) -> int
 
 # Display
 table.print_preview(max_rows: int = 10) -> None
+table.print_grid(max_rows: int = 10, max_col_width: int = 30) -> None
+table.to_grid_string(max_rows: int = 10, max_col_width: int = 30) -> str
+
+# Quantiles & Outlier Detection
+table.quantile(col_name: str, q: float) -> float
+table.iqr(col_name: str) -> float
+table.filter_outliers_iqr(col_name: str, multiplier: float = 1.5, keep_missing: bool = True) -> Table
 ```
 
 ## 3. Filter Expressions
@@ -141,3 +148,61 @@ concat_rows(tables: list[Table]) -> Table
 # Horizontal Concatenation (Column-wise)
 concat_cols(tables: list[Table], suffix_collisions: bool = True) -> Table
 ```
+
+## 6. Custom Delimiters & TSV
+
+```nox
+# In-memory custom delimiters
+parse_delimited(text: str, delimiter: str = ",") -> list[list[str]]
+dump_delimited(rows: list[list[str]], delimiter: str = ",") -> str
+read_delimited(text: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table
+to_delimited(table: Table, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False) -> str
+
+# TSV convenience functions
+read_tsv(text: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table
+to_tsv(table: Table, include_header: bool = True, safe_spreadsheet: bool = False) -> str
+
+# Filesystem operations
+read_delimited_file(path: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table
+write_delimited_file(table: Table, path: str, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None
+read_tsv_file(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table
+write_tsv_file(table: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None
+```
+
+## 7. Relational SQL & Feather Bridge
+
+```nox
+# DDL & INSERT code generation
+table_to_create_table_sql(table: Table, table_name: str, dialect: str = "sqlite", primary_key_col: str = "") -> str
+table_to_insert_sql(table: Table, table_name: str) -> str
+
+# Record and DB Value mapping
+table_from_records(col_names: list[str], col_types: list[int], rows: list[list[Cell]]) -> Table
+cell_from_db_value(kind: int, i: int, f: float, s: str, b: bool, is_null: bool) -> Cell
+```
+
+## 8. Tabular Data Validation
+
+```nox
+validator = TableValidator()
+validator.add_rule(rule: ColumnRule) -> TableValidator
+
+# Rules
+rule_non_empty(col_name: str) -> ColumnRule
+rule_range(col_name: str, min_val: float, max_val: float) -> ColumnRule
+rule_min(col_name: str, min_val: float) -> ColumnRule
+rule_max(col_name: str, max_val: float) -> ColumnRule
+rule_length(col_name: str, min_len: int, max_len: int) -> ColumnRule
+rule_allowed_values(col_name: str, allowed: list[str]) -> ColumnRule
+rule_email(col_name: str) -> ColumnRule
+
+# Execution & Filtering
+report: ValidationReport = validator.validate(table: Table)
+report.is_valid() -> bool
+report.error_count() -> int
+report.errors_for_row(row_idx: int) -> list[ValidationError]
+report.errors_for_column(col_name: str) -> list[ValidationError]
+report.summary() -> str
+
+clean_table: Table = validator.filter_valid(table: Table)
+quarantine_table: Table = validator.filter_invalid(table: Table)

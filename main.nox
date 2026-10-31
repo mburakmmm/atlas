@@ -9,7 +9,7 @@ from atlas import col_mean, col_median, col_std, col_min, col_max, col_sum, col_
 from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
 
 print("======================================================================")
-print("Atlas 0.1.0 — Lightweight Tabular Data Analysis & Statistics for Nox")
+print("Atlas 0.5.0 — Lightweight Tabular Data Analysis & Statistics for Nox")
 print("======================================================================")
 
 # 1. Parse CSV dataset
@@ -20,8 +20,8 @@ t: Table = read_csv(raw_csv, True)
 print("Total rows loaded: " + str(t.row_count()))
 print("Total columns: " + str(t.column_count()))
 print("Columns: " + str(t.column_names()))
-print("\nInitial Table Preview:")
-t.print_preview(10)
+print("\nInitial Table Grid:")
+t.print_grid(10)
 
 # 2. Filtering
 print("\n[2] Filtering rows: Engineering department and age >= 30...")
@@ -87,5 +87,5 @@ print("Recovered CSV:")
 print(csv_from_json)
 
 print("======================================================================")
-print("All Atlas 0.1.0 demonstration steps completed successfully!")
+print("All Atlas 0.5.0 demonstration steps completed successfully!")
 print("======================================================================")

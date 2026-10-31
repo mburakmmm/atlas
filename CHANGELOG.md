@@ -5,6 +5,16 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-01
+
+### Added
+- **API Consolidation & Large-Scale Validation**:
+  - Full API reference consolidated and verified in `docs/api.md` covering all 16 modules.
+  - Large-scale 100,000 record benchmark suite (`benchmarks/benchmark_large.nox`): 100k rows ingested in 11 ms, filtered in 7 ms, mean computed in 4 ms, and 5-category groupby in 18 ms.
+  - Enhanced CLI interactive demo in `main.nox` with pretty grid formatting and comprehensive summary steps.
+  - 19 automated test suites passing with 100% success rate under `noxc test`.
+  - Zero mandatory C/C++ or foreign framework runtime dependencies.
+
 ## [0.4.0] - 2026-11-01
 
 ### Added

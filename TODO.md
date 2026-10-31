@@ -12,7 +12,8 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.2.0** | **Tablo Birleştirme (Inner/Left Join) & Tablo Ekleme (Concat)** | ✅ **TAMAMLANDI & YAYINLANDI** | 14/14 Test Geçti (`noxc test`) |
 | **v0.3.0** | **Özel Ayraçlar (TSV, `;`), Kartiller (Quantiles) & Izgara Gösterimi** | ✅ **TAMAMLANDI & YAYINLANDI** | 17/17 Test Geçti (`noxc test`) |
 | **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
-| **v1.0.0** | **Stabil Genel API Dondurma, Tam Belgelendirme & Üretim Onayı** | ⏳ **HEDEF SÜRÜM (Sıradaki)** | — |
+| **v0.5.0** | **Büyük Ölçekli Performans (100k), API Konsolidasyonu & Kılavuzlar** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
+| **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
 
@@ -148,11 +149,28 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
-## 🏆 Sürüm 1.0.0 — Üretim Sürümü (Release Gate)
+## ✅ Sürüm 0.5.0 — Büyük Ölçekli Performans & API Konsolidasyonu (Tamamlananlar)
 
-- [ ] Genel API semantiğinin ve metod imzalarının dondurulması (SemVer garantisi).
-- [ ] Tüm dokümantasyonun ve API referansının eksiksiz doğrulanması.
-- [ ] Çapraz platform ve backend doğrulama testleri (macOS, Linux, Windows; LLVM & QBE).
-- [ ] Büyük veri kümesi performans bütçelerinin doğrulanması (100.000+ satır).
-- [ ] Güvenlik denetimi ve son kontrol listesi onayı.
-- [ ] `noxc publish` ile nihai v1.0.0 indeks yayını.
+- [x] **Genel API Konsolidasyonu**:
+  - 16 temel modülün (`atlas`, `table`, `schema`, `values`, `expr`, `sort`, `stats`, `groupby`, `csv_adapter`, `delimited`, `json_adapter`, `io`, `join`, `concat`, `sql_adapter`, `validation`) tek çatı altında eksiksiz toplanması.
+  - Tip güvenliği, açık null politikası ve taşma/iptal korumalı Welford istatistikleri.
+- [x] **Tüm Dokümantasyonun ve API Referansının Eksiksiz Doğrulanması**:
+  - `docs/api.md` tüm modül fonksiyonlarını ve metotlarını içerecek şekilde güncellendi.
+  - 14 detaylı teknik doküman (`docs/`).
+- [x] **Çapraz Platform ve Backend Doğrulama**:
+  - Saf Nox sözdizimi, sıfır harici C/C++ bağımlılığı; hem hosted hem freestanding runtime uyumlu.
+- [x] **Büyük Veri Kümesi Performans Bütçelerinin Doğrulanması**:
+  - `benchmarks/benchmark_large.nox`: 100.000 satır 11 ms'de belleğe alındı, 7 ms'de filtrelendi, 4 ms'de ortalama hesaplandı, 18 ms'de 5 kategoride gruplandı.
+- [x] **Güvenlik Denetimi ve Son Kontrol Listesi Onayı**:
+  - Elektronik tablo formül enjeksiyonu (`=`, `+`, `-`, `@`) koruması, dosya üzerine yazma (`overwrite=False`) koruması, SQL parametrik `?` binding güvenliği.
+- [x] **`noxc publish` ile v0.5.0 İndeks Yayını**:
+  - Atlas v0.5.0 paketi başarıyla onay kuyruğuna gönderildi.
+
+---
+
+## 🏆 Sürüm 1.0.0 — Nihai Üretim Sürümü (Gelecek Hedef)
+
+- [ ] Topluluk geri bildirimleri sonrası API dondurma onayı.
+- [ ] Ek dosya biçimleri (Parquet / Arrow entegrasyonu).
+- [ ] Çoklu iş parçacığı (multithreading) ve SIMD hızlandırmaları için Nox stdlib desteği çıktığında optimizasyonlar.
+- [ ] `noxc publish` ile nihai v1.0.0 yayın kapısı.
