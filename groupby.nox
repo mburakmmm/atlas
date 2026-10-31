@@ -182,7 +182,8 @@ def _cell_hash_repr(c: Cell) -> str:
             return "I:" + str(int(f_val))
         return "F:" + str(f_val)
     if c.kind == 3: # TYPE_STR
-        return "S:" + c.to_string()
+        s_val: str = c.to_string()
+        return "S" + str(len(s_val)) + ":" + s_val
     if c.kind == 4: # TYPE_BOOL
         if c.as_bool():
             return "B:1"
@@ -194,9 +195,8 @@ def _cells_hash_repr(cells: list[Cell]) -> str:
     i: int = 0
     n: int = len(cells)
     while i < n:
-        res = res + _cell_hash_repr(cells[i])
-        if i < n - 1:
-            res = res + "\x1f"
+        part: str = _cell_hash_repr(cells[i])
+        res = res + "[" + str(len(part)) + "]" + part
         i = i + 1
     return res
 
@@ -214,7 +214,7 @@ def group_by(t: Table, keys: list[str]) -> GroupedTable:
         key_indices.append(idx)
         i = i + 1
 
-    group_map: dict[str, int] = {}
+    group_map: dict[str, list[int]] = {}
     group_keys: list[list[Cell]] = []
     group_rows: list[list[list[Cell]]] = []
 
@@ -231,32 +231,48 @@ def group_by(t: Table, keys: list[str]) -> GroupedTable:
 
         h_key: str = _cells_hash_repr(k_tuple)
         if h_key in group_map:
-            match_idx: int = group_map[h_key]
-            # Exact equality verification
-            candidate: list[Cell] = group_keys[match_idx]
-            all_match: bool = True
-            c_check: int = 0
-            while c_check < num_keys and all_match:
-                if not candidate[c_check].equals(k_tuple[c_check]):
-                    all_match = False
-                c_check = c_check + 1
+            candidate_indices: list[int] = group_map[h_key]
+            matched_group_idx: int = -1
+            cand_scan: int = 0
+            num_cands: int = len(candidate_indices)
 
-            if all_match:
-                g_list: list[list[Cell]] = group_rows[match_idx]
+            while cand_scan < num_cands and matched_group_idx < 0:
+                g_idx: int = candidate_indices[cand_scan]
+                candidate_cells: list[Cell] = group_keys[g_idx]
+
+                all_match: bool = True
+                c_check: int = 0
+                while c_check < num_keys and all_match:
+                    if not candidate_cells[c_check].equals(k_tuple[c_check]):
+                        all_match = False
+                    c_check = c_check + 1
+
+                if all_match:
+                    matched_group_idx = g_idx
+                cand_scan = cand_scan + 1
+
+            if matched_group_idx >= 0:
+                g_list: list[list[Cell]] = group_rows[matched_group_idx]
                 g_list.append(row)
-                group_rows[match_idx] = g_list
+                group_rows[matched_group_idx] = g_list
             else:
-                # Collision fallback
+                # Collision: new distinct group sharing the same hash signature
                 new_idx: int = len(group_keys)
                 group_keys.append(k_tuple)
                 first_row_list: list[list[Cell]] = []
                 first_row_list.append(row)
                 group_rows.append(first_row_list)
+                # Add new_idx to the bucket
+                candidate_indices.append(new_idx)
+                group_map[h_key] = candidate_indices
         else:
             new_idx: int = len(group_keys)
-            group_map[h_key] = new_idx
+            new_bucket: list[int] = []
+            new_bucket.append(new_idx)
+            group_map[h_key] = new_bucket
+
             group_keys.append(k_tuple)
-            first_row_list: list[list[Cell]] = []
+            first_row_list = []
             first_row_list.append(row)
             group_rows.append(first_row_list)
 

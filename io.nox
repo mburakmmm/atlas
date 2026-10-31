@@ -34,9 +34,9 @@ def write_json_file(t: Table, path: str, overwrite: bool = False) -> None:
     content: str = table_to_json(t)
     nox.fs.write_string(path, content)
 
-def read_delimited_file(path: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+def read_delimited_file(path: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table:
     content: str = nox.fs.read_to_string(path)
-    return read_delimited(content, delimiter, has_header, explicit_schema, blank_is_missing)
+    return read_delimited(content, delimiter, has_header, explicit_schema, blank_is_missing, strict)
 
 def write_delimited_file(t: Table, path: str, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None:
     if not overwrite and nox.fs.exists(path):
@@ -44,8 +44,8 @@ def write_delimited_file(t: Table, path: str, delimiter: str = ",", include_head
     content: str = to_delimited(t, delimiter, include_header, safe_spreadsheet)
     nox.fs.write_string(path, content)
 
-def read_tsv_file(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
-    return read_delimited_file(path, "\t", has_header, explicit_schema, blank_is_missing)
+def read_tsv_file(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table:
+    return read_delimited_file(path, "\t", has_header, explicit_schema, blank_is_missing, strict)
 
 def write_tsv_file(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None:
     write_delimited_file(t, path, "\t", include_header, safe_spreadsheet, overwrite)

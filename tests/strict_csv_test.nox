@@ -1,0 +1,60 @@
+# tests/strict_csv_test.nox — Strict RFC 4180 parsing validation.
+
+import nox.test
+import errors
+from errors import CsvImportError
+import delimited
+from delimited import parse_delimited, read_delimited
+import table
+from table import Table
+
+# 1. Valid quoted CSV with strict=True
+valid_csv: str = "id,name,city\n1,\"New York, NY\",\"USA\"\n2,\"London\",\"UK\""
+rows: list[list[str]] = parse_delimited(valid_csv, ",", True)
+nox.test.assert_eq_int(len(rows), 3, "3 rows parsed with strict=True")
+assert rows[1][1] == "New York, NY"
+
+# 2. Unescaped quote in unquoted field: "Alice" in middle: Al"ice
+bad_quote_csv: str = "name,score\nAl\"ice,90\n"
+
+# In permissive mode (strict=False), it does not throw
+perm_rows: list[list[str]] = parse_delimited(bad_quote_csv, ",", False)
+nox.test.assert_eq_int(len(perm_rows), 2, "permissive parses unescaped quote")
+assert perm_rows[1][0] == "Al\"ice"
+
+# In strict mode, it must raise CsvImportError
+strict_threw: bool = False
+try:
+    parse_delimited(bad_quote_csv, ",", True)
+except CsvImportError:
+    strict_threw = True
+
+assert strict_threw
+
+# 3. Trailing characters after closing quote: "Alice"xyz
+trailing_junk_csv: str = "name,score\n\"Alice\"xyz,95\n"
+
+# Permissive mode appends trailing junk
+perm_trailing: list[list[str]] = parse_delimited(trailing_junk_csv, ",", False)
+nox.test.assert_eq_int(len(perm_trailing), 2, "permissive parses trailing junk")
+assert perm_trailing[1][0] == "Alicexyz"
+
+# Strict mode must raise CsvImportError
+strict_trailing_threw: bool = False
+try:
+    parse_delimited(trailing_junk_csv, ",", True)
+except CsvImportError:
+    strict_trailing_threw = True
+
+assert strict_trailing_threw
+
+# 4. read_delimited with strict=True
+strict_read_threw: bool = False
+try:
+    read_delimited(trailing_junk_csv, ",", True, None, True, True)
+except CsvImportError:
+    strict_read_threw = True
+
+assert strict_read_threw
+
+print("strict_csv_test passed")

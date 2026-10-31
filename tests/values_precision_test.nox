@@ -17,6 +17,28 @@ assert not c1.equals(c2)
 assert c1.compare(c2) == -1
 assert c2.compare(c1) == 1
 
+# Mixed int vs float precision tests:
+# 9007199254740993 (int) vs 9007199254740992.0 (float) must NOT be equal:
+cf1: Cell = cell_float(9007199254740992.0)
+assert not c2.equals(cf1)
+assert not cf1.equals(c2)
+assert c2.compare(cf1) == 1
+assert cf1.compare(c2) == -1
+
+# Exact equal mixed int/float:
+assert c1.equals(cf1)
+assert cf1.equals(c1)
+assert c1.compare(cf1) == 0
+assert cf1.compare(c1) == 0
+
+# Fractional float vs int:
+c_frac: Cell = cell_float(5.5)
+c_5: Cell = cell_int(5)
+assert not c_5.equals(c_frac)
+assert not c_frac.equals(c_5)
+assert c_5.compare(c_frac) == -1
+assert c_frac.compare(c_5) == 1
+
 # Single canonical value test
 # If directly instantiated with mismatching f, as_float() must still use i
 bad_constructed: Cell = Cell(TYPE_INT, 100, 999.0, "", False)

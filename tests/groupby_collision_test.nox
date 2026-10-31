@@ -1,0 +1,67 @@
+# tests/groupby_collision_test.nox — Collision bucket indexing & multi-column length prefix verification.
+
+import nox.test
+import values
+from values import Cell, cell_int, cell_str, cell_float, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import groupby
+from groupby import group_by, GroupedTable, agg_count, agg_sum
+
+# Test 1: Multi-column keys that would collide under naive separator concatenation
+s: Schema = Schema([ColumnDef("k1", TYPE_STR), ColumnDef("k2", TYPE_STR), ColumnDef("val", TYPE_INT)])
+rows: list[list[Cell]] = [
+    [cell_str("a"), cell_str("b"), cell_int(10)],
+    [cell_str("ab"), cell_str(""), cell_int(20)],
+    [cell_str(""), cell_str("ab"), cell_int(30)],
+    [cell_str("a"), cell_str("b"), cell_int(40)], # belongs to group 1
+    [cell_str("ab"), cell_str(""), cell_int(50)], # belongs to group 2
+]
+
+t: Table = Table(s, rows)
+g: GroupedTable = group_by(t, ["k1", "k2"])
+res: Table = g.aggregate([agg_count("count"), agg_sum("val", "sum_val")])
+
+# Must have exactly 3 distinct groups!
+nox.test.assert_eq_int(g.group_count(), 3, "3 distinct groups for k1, k2")
+nox.test.assert_eq_int(res.row_count(), 3, "3 rows in aggregated table")
+
+# First group: ("a", "b") -> count=2, sum=50
+assert res.cell(0, 0).to_string() == "a"
+assert res.cell(0, 1).to_string() == "b"
+assert res.cell(0, 2).as_int() == 2
+assert res.cell(0, 3).as_float() == 50.0
+
+# Second group: ("ab", "") -> count=2, sum=70
+assert res.cell(1, 0).to_string() == "ab"
+assert res.cell(1, 1).to_string() == ""
+assert res.cell(1, 2).as_int() == 2
+assert res.cell(1, 3).as_float() == 70.0
+
+# Third group: ("", "ab") -> count=1, sum=30
+assert res.cell(2, 0).to_string() == ""
+assert res.cell(2, 1).to_string() == "ab"
+assert res.cell(2, 2).as_int() == 1
+assert res.cell(2, 3).as_float() == 30.0
+
+# Test 2: Repeat row assignment across multiple buckets
+rows2: list[list[Cell]] = []
+idx: int = 0
+while idx < 300:
+    # 3 alternating keys: "grp_0", "grp_1", "grp_2"
+    key: str = "grp_" + str(idx % 3)
+    rows2.append([cell_str(key), cell_str("sub"), cell_int(1)])
+    idx = idx + 1
+
+t2: Table = Table(s, rows2)
+g2: GroupedTable = group_by(t2, ["k1", "k2"])
+res2: Table = g2.aggregate([agg_count("cnt"), agg_sum("val", "total")])
+
+nox.test.assert_eq_int(g2.group_count(), 3, "3 alternating groups")
+nox.test.assert_eq_int(res2.cell(0, 2).as_int(), 100, "100 rows in grp_0")
+nox.test.assert_eq_int(res2.cell(1, 2).as_int(), 100, "100 rows in grp_1")
+nox.test.assert_eq_int(res2.cell(2, 2).as_int(), 100, "100 rows in grp_2")
+
+print("groupby_collision_test passed")

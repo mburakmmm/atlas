@@ -9,7 +9,12 @@ from schema import Schema, ColumnDef
 import table
 from table import Table
 
+def _validate_dialect(dialect: str) -> None:
+    if dialect != "sqlite" and dialect != "postgres" and dialect != "postgresql" and dialect != "mysql" and dialect != "ansi":
+        raise SchemaError("unsupported SQL dialect: '" + dialect + "'")
+
 def type_to_sql_type(data_type: int, dialect: str = "sqlite") -> str:
+    _validate_dialect(dialect)
     if data_type == TYPE_INT:
         return "INTEGER"
     if data_type == TYPE_FLOAT:
@@ -25,6 +30,7 @@ def type_to_sql_type(data_type: int, dialect: str = "sqlite") -> str:
     return "TEXT"
 
 def quote_identifier(name: str, dialect: str = "sqlite") -> str:
+    _validate_dialect(dialect)
     if len(name) == 0:
         raise SchemaError("SQL identifier cannot be empty")
     i: int = 0
@@ -58,6 +64,11 @@ def quote_identifier(name: str, dialect: str = "sqlite") -> str:
     return escaped
 
 def table_to_create_table_sql(t: Table, table_name: str, dialect: str = "sqlite", primary_key_col: str = "") -> str:
+    _validate_dialect(dialect)
+    if len(primary_key_col) > 0:
+        if not t.schema.has_column(primary_key_col):
+            raise ColumnNotFoundError("primary key column not found in table schema: '" + primary_key_col + "'")
+
     cols: list[ColumnDef] = t.schema.columns
     num_cols: int = len(cols)
     if num_cols == 0:
@@ -87,6 +98,7 @@ def table_to_create_table_sql(t: Table, table_name: str, dialect: str = "sqlite"
     return sql
 
 def table_to_insert_sql(t: Table, table_name: str, dialect: str = "sqlite") -> str:
+    _validate_dialect(dialect)
     names: list[str] = t.column_names()
     num_cols: int = len(names)
     if num_cols == 0:

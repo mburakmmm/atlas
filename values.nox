@@ -9,6 +9,33 @@ TYPE_FLOAT: int = 2
 TYPE_STR: int = 3
 TYPE_BOOL: int = 4
 
+def _int_float_equals(i: int, f: float) -> bool:
+    if f != float(int(f)):
+        return False
+    if f > 9223372036854775000.0 or f < -9223372036854775000.0:
+        return False
+    f_as_i: int = int(f)
+    return i == f_as_i
+
+def _int_float_compare(i: int, f: float) -> int:
+    if f > 9223372036854775000.0:
+        return -1
+    if f < -9223372036854775000.0:
+        return 1
+    if f == float(int(f)):
+        f_as_i: int = int(f)
+        if i < f_as_i:
+            return -1
+        if i > f_as_i:
+            return 1
+        return 0
+    f_i: float = float(i)
+    if f_i < f:
+        return -1
+    if f_i > f:
+        return 1
+    return 0
+
 class Cell:
     kind: int
     i: int
@@ -108,8 +135,12 @@ class Cell:
         # Direct 64-bit integer equality without IEEE-754 float precision loss:
         if self.kind == TYPE_INT and other.kind == TYPE_INT:
             return self.i == other.i
-        if self.is_numeric() and other.is_numeric():
-            return self.as_float() == other.as_float()
+        if self.kind == TYPE_FLOAT and other.kind == TYPE_FLOAT:
+            return self.f == other.f
+        if self.kind == TYPE_INT and other.kind == TYPE_FLOAT:
+            return _int_float_equals(self.i, other.f)
+        if self.kind == TYPE_FLOAT and other.kind == TYPE_INT:
+            return _int_float_equals(other.i, self.f)
         if self.kind != other.kind:
             return False
         if self.kind == TYPE_STR:
@@ -140,14 +171,18 @@ class Cell:
                 return 1
             return 0
 
-        if self.is_numeric() and other.is_numeric():
-            f1: float = self.as_float()
-            f2: float = other.as_float()
-            if f1 < f2:
+        if self.kind == TYPE_FLOAT and other.kind == TYPE_FLOAT:
+            if self.f < other.f:
                 return -1
-            if f1 > f2:
+            if self.f > other.f:
                 return 1
             return 0
+
+        if self.kind == TYPE_INT and other.kind == TYPE_FLOAT:
+            return _int_float_compare(self.i, other.f)
+
+        if self.kind == TYPE_FLOAT and other.kind == TYPE_INT:
+            return -_int_float_compare(other.i, self.f)
 
         if self.kind == TYPE_STR and other.kind == TYPE_STR:
             if self.s < other.s:

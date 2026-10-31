@@ -1,0 +1,63 @@
+# tests/sql_validation_test.nox — Validation of SQL dialect checks and primary key existence.
+
+import nox.test
+import errors
+from errors import SchemaError, ColumnNotFoundError
+import values
+from values import Cell, cell_int, cell_str, TYPE_INT, TYPE_STR
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import sql_adapter
+from sql_adapter import quote_identifier, type_to_sql_type, table_to_create_table_sql, table_to_insert_sql
+
+# 1. Unsupported dialect in quote_identifier
+dialect_threw: bool = False
+try:
+    quote_identifier("users", "oracle")
+except SchemaError:
+    dialect_threw = True
+
+assert dialect_threw
+
+# 2. Unsupported dialect in type_to_sql_type
+type_threw: bool = False
+try:
+    type_to_sql_type(TYPE_INT, "mongodb")
+except SchemaError:
+    type_threw = True
+
+assert type_threw
+
+# 3. Non-existent primary key in table_to_create_table_sql
+s: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("name", TYPE_STR)])
+t: Table = Table(s, [[cell_int(1), cell_str("alice")]])
+
+pk_threw: bool = False
+try:
+    table_to_create_table_sql(t, "users", "sqlite", "non_existent_col")
+except ColumnNotFoundError:
+    pk_threw = True
+
+assert pk_threw
+
+# 4. Valid dialect and valid primary key succeed
+sql: str = table_to_create_table_sql(t, "users", "sqlite", "id")
+assert len(sql) > 0
+assert "PRIMARY KEY" in sql
+
+# 5. Unsupported dialect in table_to_insert_sql
+insert_threw: bool = False
+try:
+    table_to_insert_sql(t, "users", "mssql")
+except SchemaError:
+    insert_threw = True
+
+assert insert_threw
+
+# 6. Valid ANSI dialect quotes with double quotes
+ansi_quoted: str = quote_identifier("users", "ansi")
+assert ansi_quoted == "\"users\""
+
+print("sql_validation_test passed")

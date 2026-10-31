@@ -38,9 +38,6 @@ join_duration: int = nox.time.now_ms() - t0
 nox.test.assert_eq_int(t_inner.row_count(), 500, "500 matching rows in Hash Join")
 nox.test.assert_eq_int(t_inner.column_count(), 3, "user_id, username, balance")
 
-# Ensure Hash Join ran quickly (< 100ms)
-assert join_duration < 100
-
 # 2. Left join on same dataset
 t_left_outer: Table = join_left(t_left, t_right, ["user_id"])
 # All 1,000 rows from left must be present

@@ -5,6 +5,28 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-11-01
+
+### Fixed & Improved
+- **Hash GroupBy Collision Bucket Management (`groupby.nox`)**:
+  - Transitioned `group_map` from single index mapping to collision bucket indexing (`dict[str, list[int]]`).
+  - Groups sharing the same hash signature are preserved in candidate lists and differentiated via exact `equals()` checks; new groups update the bucket, guaranteeing identical rows never split across multiple groups.
+- **Mixed 64-bit Integer / Float Numeric Precision (`values.nox`)**:
+  - Implemented exact mixed numeric equality and ordering checks in `Cell.equals()` and `Cell.compare()`.
+  - Non-whole floats and numbers above $2^{53}$ are compared without false equality or IEEE-754 precision degradation.
+- **Length-Prefixed Hash Key Serialization (`join.nox`, `groupby.nox`)**:
+  - Length-prefixed encoding (`"S" + len + ":" + s` and `[len]part`) prevents cross-column hash signature collisions when string values contain separator tokens.
+- **SQL Dialect Validation & Primary Key Verification (`sql_adapter.nox`)**:
+  - `quote_identifier`, `type_to_sql_type`, `table_to_create_table_sql`, and `table_to_insert_sql` validate dialects and raise `SchemaError` on unsupported inputs.
+  - `table_to_create_table_sql` validates `primary_key_col` existence in table schema and raises `ColumnNotFoundError` on missing columns.
+- **Strict RFC 4180 CSV Mode (`delimited.nox`, `io.nox`)**:
+  - Added `strict: bool = False` mode to `parse_delimited`, `read_delimited`, `read_tsv`, and `read_delimited_file`.
+  - In strict mode, unescaped quotes in unquoted fields or trailing characters after closing quotes raise `CsvImportError`.
+- **CI Test Reliability**:
+  - Decoupled wall-clock assertions (`assert duration < X`) from unit tests (`tests/hash_join_test.nox`, `tests/hash_groupby_test.nox`) into dedicated benchmark suites to prevent flaky CI failures under variable server loads.
+- **Test Suite Expansion**:
+  - Added `tests/groupby_collision_test.nox`, `tests/strict_csv_test.nox`, and `tests/sql_validation_test.nox`. Total test suites: 25 (100% passing).
+
 ## [0.6.0] - 2026-11-01
 
 ### Added

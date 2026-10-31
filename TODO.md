@@ -14,6 +14,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
 | **v0.5.0** | **Büyük Ölçekli Performans (100k), API Konsolidasyonu & Kılavuzlar** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
 | **v0.6.0** | **Veri Doğruluğu, Hash Join, Hash GroupBy & SQL Identifier Güvenliği** | ✅ **TAMAMLANDI & YAYINLANDI** | 22/22 Test Geçti (`noxc test`) |
+| **v0.6.1** | **GroupBy Collision Buckets, Karma Float/Int Hassasiyeti & Katı CSV** | ⏳ **PLANLANDI (Şu Anki Faz)** | — |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -198,6 +199,30 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - `docs/integrations.md` ve `sql_adapter.nox` üzerinden Feather oturum ve sorgu dönüştürme desenlerinin genişletilmesi.
 - [x] **Tüm Birim ve Regresyon Testlerinin Doğrulanması**:
   - `tests/hash_join_test.nox`, `tests/hash_groupby_test.nox`, `tests/values_precision_test.nox` dahil 22 test paketinin tamamının geçmesi.
+
+---
+
+## 🛠️ Sürüm 0.6.1 — Sağlamlaştırma, Çakışma Yönetimi & Veri Doğruluğu (Teknik İnceleme İyileştirmeleri)
+
+- [x] **Hash GroupBy Çakışma Yönetimi (Collision Bucket List) (🔴 P1)**:
+  - `groupby.nox`: `group_map: dict[str, int]` yerine bucket indekslemesi `dict[str, list[int]]` yapısına geçiş.
+  - Aynı hash anahtarına sahip farklı grupların (`k_tuple`) aday listesinde (`list[int]`) saklanması ve `equals()` ile taranması.
+  - Yeni çakışan grup eklendiğinde `group_map[h_key]` listesinin güncellenmesi; böylece aynı anahtara sahip satırların asla ayrı gruplara bölünmemesi garantisi.
+- [x] **Karma Integer/Float Karşılaştırma Doğruluğu (🔴 P1)**:
+  - `values.nox`: `Cell.equals()` ve `Cell.compare()` içinde biri `TYPE_INT`, diğeri `TYPE_FLOAT` olan karma karşılaştırmalarda $2^{53}$ üstü değerlerde IEEE-754 yuvarlama hatasını önleme.
+  - Float değerin tamsayı karşılığı tam olarak float'a eşit değilse (`float(int(f)) != f`), integer ile eşit olamayacağı kuralı; eşitse 64-bit integer dönüşümü üzerinden doğrudan integer eşitliği (`int(f) == i`).
+- [x] **Uzunluk Önekli / Delimiter-Güvenli Hash Anahtarı Kodlaması (🟠 P2)**:
+  - `join.nox` & `groupby.nox`: Çok sütunlu anahtar birleşiminde dize değerleri içindeki ayraçların (`\x1f`, `S:`) oluşturabileceği çapraz sütun hash çakışmalarını önlemek için uzunluk önekli (length-prefixed) kodlama formatı (`"S" + str(len(s)) + ":" + s`).
+- [x] **SQL Adaptörü Dialect ve Primary Key Doğrulaması (🟠 P2)**:
+  - `sql_adapter.nox`: Desteklenmeyen SQL dialect'leri için sessizce varsayılana geçmek yerine açık `SchemaError` fırlatılması.
+  - `table_to_create_table_sql`: Belirtilen `primary_key_col` tabloda yoksa sessizce atlamak yerine `ColumnNotFoundError` fırlatılması.
+- [x] **CI Test Kararlılığı: Süre Sınırı Assert'lerinin Ayrılması (🟠 P2)**:
+  - `tests/hash_join_test.nox` ve `tests/hash_groupby_test.nox`: CI ortamlarında sistem yükü dalgalanmalarında kırılganlık yaratabilecek duvar saati `assert duration < X` kontrollerinin birim testlerinden kaldırılıp `benchmarks/` dizinine taşınması.
+- [x] **Katı ve Toleranslı CSV Ayrıştırma Modu (`strict=True / False`) (🟡 P3)**:
+  - `delimited.nox`: `parse_delimited`, `read_delimited`, `read_tsv` fonksiyonlarına `strict: bool = False` parametresi ekleme.
+  - `strict=True` modunda alan ortasında kaçışsız tırnak veya kapanış tırnağı sonrasında geçersiz karakter tespitinde `CsvImportError` fırlatılması; `strict=False` modunda ise toleranslı gerçek dünya CSV desteğinin korunması.
+- [x] **Birim Testler & Doğrulama**:
+  - `tests/groupby_collision_test.nox`, `tests/values_precision_test.nox`, `tests/sql_validation_test.nox`, `tests/strict_csv_test.nox` dahil 25 test paketinin tamamının geçmesi.
 
 ---
 

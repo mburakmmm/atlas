@@ -38,7 +38,8 @@ def _cell_hash_key(c: Cell) -> str:
             return "I:" + str(int(f_val))
         return "F:" + str(f_val)
     if c.kind == 3: # TYPE_STR
-        return "S:" + c.to_string()
+        s_val: str = c.to_string()
+        return "S" + str(len(s_val)) + ":" + s_val
     if c.kind == 4: # TYPE_BOOL
         if c.as_bool():
             return "B:1"
@@ -50,9 +51,8 @@ def _cells_hash_key(cells: list[Cell]) -> str:
     i: int = 0
     n: int = len(cells)
     while i < n:
-        res = res + _cell_hash_key(cells[i])
-        if i < n - 1:
-            res = res + "\x1f"
+        part: str = _cell_hash_key(cells[i])
+        res = res + "[" + str(len(part)) + "]" + part
         i = i + 1
     return res
 
