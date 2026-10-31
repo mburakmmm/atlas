@@ -34,3 +34,11 @@ Audit performed against `noxc 2.0.86` on macOS (darwin).
 - Native `list.sort()` for primitive lists.
 - Integer division: `//`.
 - Exception hierarchy deriving from `Exception`.
+
+## 3. Streaming CSV & Memory Bounds Verified
+
+- `nox.fs.open_read(path)` and `reader.read_chunk(bytes)`: Incremental file streaming without loading the entire document into RAM.
+- `StreamingCsvReader`: Persistent RFC 4180 state machine processing chunks in $O(N)$ linear time without re-scanning buffers.
+- `max_record_bytes`: Enforces bounded memory buffer size (default 10 MB); prevents memory exhaustion on malformed unbounded records.
+- Online Welford / Chan algorithm: Numerically stable running mean, variance, and standard deviation with $O(1)$ memory usage.
+- `try...finally`: Guaranteed file descriptor closure and resource cleanup.

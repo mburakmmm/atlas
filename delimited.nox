@@ -17,16 +17,18 @@ class CsvOptions:
     blank_is_missing: bool
     strict: bool
     safe_spreadsheet: bool
+    max_record_bytes: int
 
-    def __init__(self: CsvOptions, delimiter: str = ",", has_header: bool = True, blank_is_missing: bool = True, strict: bool = False, safe_spreadsheet: bool = False) -> None:
+    def __init__(self: CsvOptions, delimiter: str = ",", has_header: bool = True, blank_is_missing: bool = True, strict: bool = False, safe_spreadsheet: bool = False, max_record_bytes: int = 10485760) -> None:
         self.delimiter = delimiter
         self.has_header = has_header
         self.blank_is_missing = blank_is_missing
         self.strict = strict
         self.safe_spreadsheet = safe_spreadsheet
+        self.max_record_bytes = max_record_bytes
 
-def csv_options(delimiter: str = ",", has_header: bool = True, blank_is_missing: bool = True, strict: bool = False, safe_spreadsheet: bool = False) -> CsvOptions:
-    return CsvOptions(delimiter, has_header, blank_is_missing, strict, safe_spreadsheet)
+def csv_options(delimiter: str = ",", has_header: bool = True, blank_is_missing: bool = True, strict: bool = False, safe_spreadsheet: bool = False, max_record_bytes: int = 10485760) -> CsvOptions:
+    return CsvOptions(delimiter, has_header, blank_is_missing, strict, safe_spreadsheet, max_record_bytes)
 
 def parse_delimited(text: str, delimiter: str = ",", strict: bool = False) -> list[list[str]]:
     rows: list[list[str]] = []

@@ -1,0 +1,277 @@
+# tests/streaming_edge_cases_test.nox — Comprehensive edge-case verification for StreamingCsvReader.
+
+import nox.test
+import nox.fs
+import errors
+from errors import AtlasError, CsvImportError, ShapeError
+import values
+from values import Cell, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import delimited
+from delimited import csv_options, CsvOptions
+import streaming
+from streaming import StreamingCsvReader, open_csv_stream, stream_count, stream_sum, stream_mean, stream_variance, stream_std
+
+def test_quote_and_escaped_quote_split() -> None:
+    # 1. Quote character split across byte chunks, escaped quotes across chunks
+    # We use a very small chunk_bytes (4 bytes) to force splits everywhere!
+    file_path: str = "temp_split_quotes.csv"
+    content: str = "id,name,notes\r\n1,\"Alice\",\"Line 1\r\nLine 2\"\r\n2,\"Bob with \"\"escaped\"\" quotes\",ok\r\n3,Charlie,done\r\n"
+    nox.fs.write_string(file_path, content)
+
+    try:
+        # Use chunk_bytes = 4 to guarantee chunk splits across quotes and newlines
+        reader: StreamingCsvReader = StreamingCsvReader(file_path, csv_options(), None, 2, 4)
+        tbl1: Table = reader.next_chunk()
+        nox.test.assert_eq_int(tbl1.row_count(), 2, "tbl1 has 2 rows")
+        assert tbl1.schema.columns[0].name == "id"
+        assert tbl1.schema.columns[1].name == "name"
+        assert tbl1.schema.columns[2].name == "notes"
+
+        # Check row 1
+        r0: list[Cell] = tbl1.row(0)
+        assert r0[0].as_int() == 1
+        assert r0[1].as_str() == "Alice"
+        assert r0[2].as_str() == "Line 1\r\nLine 2"
+
+        # Check row 2 with escaped quotes
+        r1: list[Cell] = tbl1.row(1)
+        assert r1[0].as_int() == 2
+        assert r1[1].as_str() == "Bob with \"escaped\" quotes"
+        assert r1[2].as_str() == "ok"
+
+        # Read next chunk
+        tbl2: Table = reader.next_chunk()
+        nox.test.assert_eq_int(tbl2.row_count(), 1, "tbl2 has 1 row")
+        r2: list[Cell] = tbl2.row(0)
+        assert r2[0].as_int() == 3
+        assert r2[1].as_str() == "Charlie"
+        assert r2[2].as_str() == "done"
+
+        reader.close()
+    finally:
+        if nox.fs.exists(file_path):
+            nox.fs.remove_file(file_path)
+
+def test_crlf_split_boundary() -> None:
+    # 2. CRLF split across chunk boundary: \r at end of chunk 1, \n at start of chunk 2
+    # "id,v\r\n1,10\r\n2,20\r\n"
+    # Length of "id,v\r" is 5 bytes. With chunk_bytes=5, \r is at byte 4 (0-indexed), \n is at byte 0 of chunk 2!
+    file_path: str = "temp_crlf_split.csv"
+    content: str = "id,v\r\n1,10\r\n2,20\r\n"
+    nox.fs.write_string(file_path, content)
+
+    try:
+        reader: StreamingCsvReader = StreamingCsvReader(file_path, csv_options(), None, 1, 5)
+        t1: Table = reader.next_chunk()
+        nox.test.assert_eq_int(t1.row_count(), 1, "t1 has 1 row")
+        assert t1.row(0)[0].as_int() == 1
+        assert t1.row(0)[1].as_int() == 10
+
+        t2: Table = reader.next_chunk()
+        nox.test.assert_eq_int(t2.row_count(), 1, "t2 has 1 row")
+        assert t2.row(0)[0].as_int() == 2
+        assert t2.row(0)[1].as_int() == 20
+
+        assert not reader.has_next()
+        reader.close()
+    finally:
+        if nox.fs.exists(file_path):
+            nox.fs.remove_file(file_path)
+
+def test_header_only_and_single_row() -> None:
+    # 3. Header-only CSV
+    h_path: str = "temp_header_only.csv"
+    nox.fs.write_string(h_path, "col_a,col_b,col_c\n")
+    try:
+        reader: StreamingCsvReader = open_csv_stream(h_path, 10)
+        tbl: Table = reader.next_chunk()
+        nox.test.assert_eq_int(tbl.row_count(), 0, "0 data rows for header only")
+        nox.test.assert_eq_int(tbl.column_count(), 3, "3 columns from header")
+        assert tbl.schema.columns[0].name == "col_a"
+        assert tbl.schema.columns[1].name == "col_b"
+        assert tbl.schema.columns[2].name == "col_c"
+        assert not reader.has_next()
+        reader.close()
+
+        count: int = stream_count(h_path)
+        nox.test.assert_eq_int(count, 0, "stream_count of header only is 0")
+    finally:
+        if nox.fs.exists(h_path):
+            nox.fs.remove_file(h_path)
+
+    # 4. Single row after header
+    s_path: str = "temp_single_row.csv"
+    nox.fs.write_string(s_path, "x,y\n100,200\n")
+    try:
+        reader_s: StreamingCsvReader = open_csv_stream(s_path, 10)
+        tbl_s: Table = reader_s.next_chunk()
+        nox.test.assert_eq_int(tbl_s.row_count(), 1, "1 row streamed")
+        assert tbl_s.row(0)[0].as_int() == 100
+        assert tbl_s.row(0)[1].as_int() == 200
+        assert not reader_s.has_next()
+        reader_s.close()
+
+        count_s: int = stream_count(s_path)
+        nox.test.assert_eq_int(count_s, 1, "stream_count is 1")
+    finally:
+        if nox.fs.exists(s_path):
+            nox.fs.remove_file(s_path)
+
+def test_empty_csv() -> None:
+    # 5. Empty CSV (0 bytes)
+    e_path: str = "temp_empty.csv"
+    nox.fs.write_string(e_path, "")
+    try:
+        reader: StreamingCsvReader = open_csv_stream(e_path, 10)
+        tbl: Table = reader.next_chunk()
+        nox.test.assert_eq_int(tbl.row_count(), 0, "empty table row count 0")
+        nox.test.assert_eq_int(tbl.column_count(), 0, "empty table col count 0")
+        assert not reader.has_next()
+        reader.close()
+
+        c: int = stream_count(e_path)
+        nox.test.assert_eq_int(c, 0, "stream_count is 0")
+        m: float = stream_mean(e_path, "col")
+        assert m == 0.0
+    finally:
+        if nox.fs.exists(e_path):
+            nox.fs.remove_file(e_path)
+
+def test_parameter_validation() -> None:
+    # 6. chunk_rows <= 0, chunk_bytes <= 0, max_record_bytes <= 0
+    dummy: str = "temp_dummy.csv"
+    nox.fs.write_string(dummy, "a,b\n1,2\n")
+    try:
+        caught_rows: bool = False
+        try:
+            StreamingCsvReader(dummy, csv_options(), None, 0, 1024)
+        except AtlasError as e:
+            caught_rows = True
+        assert caught_rows
+
+        caught_bytes: bool = False
+        try:
+            StreamingCsvReader(dummy, csv_options(), None, 10, -5)
+        except AtlasError as e:
+            caught_bytes = True
+        assert caught_bytes
+
+        caught_rec: bool = False
+        try:
+            StreamingCsvReader(dummy, csv_options(max_record_bytes=0), None, 10, 1024)
+        except AtlasError as e:
+            caught_rec = True
+        assert caught_rec
+    finally:
+        if nox.fs.exists(dummy):
+            nox.fs.remove_file(dummy)
+
+def test_max_record_bytes_limit() -> None:
+    # 7. Exceeding max_record_bytes raises CsvImportError
+    long_path: str = "temp_long_record.csv"
+    # Create a record of 100 bytes while max_record_bytes is set to 30
+    nox.fs.write_string(long_path, "id,desc\n1,\"This is a very long description that definitely exceeds thirty bytes of length for record testing!\"\n")
+    try:
+        opts: CsvOptions = csv_options(max_record_bytes=30)
+        reader: StreamingCsvReader = StreamingCsvReader(long_path, opts, None, 10, 16)
+        caught: bool = False
+        try:
+            reader.next_chunk()
+        except CsvImportError as e:
+            caught = True
+        assert caught
+        reader.close()
+    finally:
+        if nox.fs.exists(long_path):
+            nox.fs.remove_file(long_path)
+
+def test_stream_variance_and_std() -> None:
+    # 8. Test stream_variance and stream_std online algorithm with chunks
+    stats_path: str = "temp_streaming_stats.csv"
+    # Values: 10, 20, 30, 40, 50
+    # Mean: 30.0
+    # Sample Variance: ((10-30)^2 + (20-30)^2 + (30-30)^2 + (40-30)^2 + (50-30)^2) / 4 = (400 + 100 + 0 + 100 + 400) / 4 = 1000 / 4 = 250.0
+    # Population Variance: 1000 / 5 = 200.0
+    # Sample Std: sqrt(250) = 15.811388300841896
+    content: str = "num\n10\n20\n30\n40\n50\n"
+    nox.fs.write_string(stats_path, content)
+    try:
+        # Stream in chunks of 2 rows
+        opts: CsvOptions = csv_options()
+        m: float = stream_mean(stats_path, "num", opts)
+        assert m == 30.0
+
+        var_sample: float = stream_variance(stats_path, "num", opts, True)
+        assert var_sample == 250.0
+
+        var_pop: float = stream_variance(stats_path, "num", opts, False)
+        assert var_pop == 200.0
+
+        std_sample: float = stream_std(stats_path, "num", opts, True)
+        # Check within small tolerance
+        diff: float = std_sample - 15.811388300841896
+        if diff < 0.0:
+            diff = 0.0 - diff
+        assert diff < 0.0001
+    finally:
+        if nox.fs.exists(stats_path):
+            nox.fs.remove_file(stats_path)
+
+def test_resource_cleanup_on_error() -> None:
+    # 9. Verify reader is closed even if an error is raised during aggregation
+    err_path: str = "temp_err_resource.csv"
+    nox.fs.write_string(err_path, "id,val\n1,10\n2,invalid_float_val\n")
+    try:
+        # Request stream_sum on non-existent column to trigger error inside try block
+        caught: bool = False
+        try:
+            stream_sum(err_path, "non_existent_column")
+        except ColumnNotFoundError as e:
+            caught = True
+        assert caught
+        # File should be closed and safely deletable without handle lock
+    finally:
+        if nox.fs.exists(err_path):
+            nox.fs.remove_file(err_path)
+
+def test_explicit_schema_streaming() -> None:
+    # 10. Streaming with explicit schema
+    exp_path: str = "temp_explicit_schema.csv"
+    nox.fs.write_string(exp_path, "code,val\n001,10.5\n002,20.0\n")
+    try:
+        # Enforce code as TYPE_STR (preserving leading zeros) and val as TYPE_FLOAT
+        sch: Schema = Schema([
+            ColumnDef("code", TYPE_STR, False),
+            ColumnDef("val", TYPE_FLOAT, False),
+        ])
+        reader: StreamingCsvReader = open_csv_stream(exp_path, 10, csv_options(), sch)
+        tbl: Table = reader.next_chunk()
+        nox.test.assert_eq_int(tbl.row_count(), 2, "2 rows streamed")
+        r0: list[Cell] = tbl.row(0)
+        assert r0[0].as_str() == "001"
+        assert r0[1].as_float() == 10.5
+
+        r1: list[Cell] = tbl.row(1)
+        assert r1[0].as_str() == "002"
+        assert r1[1].as_float() == 20.0
+
+        reader.close()
+    finally:
+        if nox.fs.exists(exp_path):
+            nox.fs.remove_file(exp_path)
+
+test_quote_and_escaped_quote_split()
+test_crlf_split_boundary()
+test_header_only_and_single_row()
+test_empty_csv()
+test_parameter_validation()
+test_max_record_bytes_limit()
+test_stream_variance_and_std()
+test_resource_cleanup_on_error()
+test_explicit_schema_streaming()
+
+print("streaming_edge_cases_test passed")

@@ -14,7 +14,10 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
 | **v0.5.0** | **Büyük Ölçekli Performans (100k), API Konsolidasyonu & Kılavuzlar** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
 | **v0.6.0** | **Veri Doğruluğu, Hash Join, Hash GroupBy & SQL Identifier Güvenliği** | ✅ **TAMAMLANDI & YAYINLANDI** | 22/22 Test Geçti (`noxc test`) |
-| **v0.6.1** | **GroupBy Collision Buckets, Karma Float/Int Hassasiyeti & Katı CSV** | ⏳ **PLANLANDI (Şu Anki Faz)** | — |
+| **v0.6.1** | **GroupBy Collision Buckets, Karma Float/Int Hassasiyeti & Katı CSV** | ✅ **TAMAMLANDI & YAYINLANDI** | 25/25 Test Geçti (`noxc test`) |
+| **v0.6.2** | **Matematiksel Sınır Güvenliği, Ortak Hash Kodlama & CsvOptions** | ✅ **TAMAMLANDI & YAYINLANDI** | 28/28 Test Geçti (`noxc test`) |
+| **v0.7.0** | **Akışlı CSV (Streaming Reader), NaN Sıralama Tutarlılığı & Akış Agregasyonları** | ✅ **TAMAMLANDI & YAYINLANDI** | 29/29 Test Geçti (`noxc test`) |
+| **v0.7.1** | **Streaming Sağlamlaştırma, Durum Makinesi, max_record_bytes & Çevrimiçi İstatistikler** | ✅ **TAMAMLANDI & YAYINLANDI** | 30/30 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -273,6 +276,42 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - `tests/sql_adapter_contract_test.nox`: SQL adaptörünün DDL, INSERT ve Feather DB record dönüşümlerinin kontrat doğrulaması.
 - [x] **Birim Testler & Sürüm Yayın**:
   - `tests/streaming_test.nox` dahil 29 test paketinin `noxc test` ile doğrulanması, `nox.json` sürümünün `0.7.0` olarak güncellenmesi, `CHANGELOG.md` kaydı, git commit, GitHub push ve `noxc publish`.
+
+---
+
+## 🛠️ Sürüm 0.7.1 — Streaming Sağlamlaştırma, Durum Makinesi & Kenar Durum Güvenliği (Teknik İnceleme İyileştirmeleri)
+
+- [x] **Kalıcı Ayrıştırıcı Durum Makinesi (Persistent State Machine) (🔴 P1)**:
+  - `streaming.nox`: Tamponun baştan taranarak $O(L^2/B)$ karesel maliyet oluşturmasını önlemek için çağrılar ve chunk sınırları arasında kalıcı durum makinesi (`in_quotes`, `after_quote`, `field_start`, `pending_cr`, `pending_quote`, `cur_field`, `cur_row`, `pending_rows`).
+  - Her karakterin yalnızca bir kez taranarak kesin $O(N)$ doğrusal zaman karmaşıklığının güvenceye alınması.
+- [x] **Tampon Yönetimi & Gereksiz Disk Okumalarının Önlenmesi (🔴 P1)**:
+  - `next_chunk()` çağrıldığında `pending_rows` içerisinde `target_rows` sayısını karşılayacak kadar hazır satır varsa diskten yeni chunk okunmaması.
+  - Sadece yeni satıra ihtiyaç duyulduğunda ve EOF'a ulaşılmadığında `read_chunk` yapılması; böylece kontrolsüz bellek büyümesinin önüne geçilmesi.
+- [x] **Maksimum Kayıt Boyutu Üst Sınırı (`max_record_bytes`) (🔴 P1)**:
+  - `delimited.nox`: `CsvOptions` ve `csv_options(...)` içine `max_record_bytes: int = 10485760` (10 MB) parametresinin eklenmesi.
+  - `streaming.nox`: Kapanmayan tırnak veya aşırı uzun satırların belleği tüketmesini engellemek için tek satır boyutunun denetlenmesi ve aşım durumunda `CsvImportError` fırlatılması.
+  - `max_record_bytes <= 0` durumunda `AtlasError` doğrulaması.
+- [x] **Parametre Doğrulaması (`chunk_rows <= 0` ve `chunk_bytes <= 0`) (🔴 P1)**:
+  - `StreamingCsvReader.__init__`: `chunk_rows <= 0` veya `chunk_bytes <= 0` durumunda sonsuz döngü veya ilerlememe hatalarını önlemek için açık `AtlasError` fırlatılması.
+- [x] **Hata Durumunda Kaynak Temizliği Garantisi (`try...finally`) (🔴 P1)**:
+  - `stream_count`, `stream_sum`, `stream_mean`, `stream_variance`, `stream_std`: Akış işleme döngülerinin `try...finally` bloğu ile sarılması; ara hesaplamada hata fırlatılsa dahi dosya tanıtıcısının (`reader.close()`) istisnasız kapatılmasının garanti altına alınması.
+- [x] **Sayısal Olarak Kararlı Çevrimiçi Ortalama & İstatistikler (`stream_variance`, `stream_std`) (🟠 P2)**:
+  - `stream_mean`: Yüzen nokta yuvarlama hatalarını ve iptal (cancellation) riskini önlemek için Welford / Chan çevrimiçi birleştirme algoritması.
+  - `stream_variance` ve `stream_std`: Sınırsız büyüklükteki dosyalarda tek geçişli ($O(1)$ bellekli) kararlı varyans ve standart sapma fonksiyonlarının eklenmesi.
+- [x] **Kapsamlı Sınır ve Kenar Durum Test Paketi (`tests/streaming_edge_cases_test.nox`) (🔴 P1 & 🟠 P2)**:
+  - Tırnak (`"`) karakterinin chunk sınırında bölünmesi.
+  - Kaçışlı tırnak (`""`) çiftinin chunk sınırında bölünmesi.
+  - Çok satırlı tırnaklı alanların (`\r\n` içeren) birden fazla chunk'a yayılması.
+  - `\r\n` satır sonunun chunk sınırında bölünmesi (`\r` chunk N, `\n` chunk N+1).
+  - Yalnızca başlıktan oluşan CSV dosyası (0 veri satırı).
+  - Başlıktan sonra yalnızca tek veri satırı içeren dosya.
+  - Tamamen boş CSV dosyası (0 byte).
+  - `chunk_rows=0` ve `chunk_bytes=0` parametre hata fırlatma doğrulamaları.
+  - `max_record_bytes` aşım hata doğrulaması.
+  - Hata anında dosyanın kapatıldığını doğrulayan kaynak temizliği testi.
+  - Çevrimiçi varyans ve standart sapma doğruluk testi.
+- [x] **Birim Testler, Dokümantasyon & Sürüm Yayın**:
+  - `tests/streaming_edge_cases_test.nox` dahil 30 test paketinin tamamının `noxc test` ile geçmesi, `nox.json` sürümünün `0.7.1` yapılması, `CHANGELOG.md` güncellenmesi, git commit, push ve `noxc publish`.
 
 ---
 

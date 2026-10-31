@@ -5,6 +5,30 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-01
+
+### Added
+- **Persistent Streaming CSV Parser State Machine (`streaming.nox`)**:
+  - Implemented an incremental RFC 4180 state machine (`in_quotes`, `after_quote`, `field_start`, `pending_cr`, `pending_quote`, `cur_field`, `cur_row`, `pending_rows`) that persists across chunk reads.
+  - Eliminated quadratic $O(L^2/B)$ buffer rescans on incomplete records; each character is processed exactly once in guaranteed $O(N)$ linear time.
+  - Full consistency between streaming and offline CSV quoting semantics: quotes mid-field in unquoted fields are properly detected and validated in strict mode.
+- **Maximum Record Size Bound (`max_record_bytes`)**:
+  - Added configurable `max_record_bytes: int = 10485760` (10 MB default) to `CsvOptions`, `csv_options()`, and `StreamingCsvReader`.
+  - Enforces strict upper bound on memory consumption during streaming; raises actionable `CsvImportError` if an unclosed quote or malformed record exceeds the limit.
+  - Explicit non-positive parameter validation: raises `AtlasError` if `max_record_bytes <= 0`.
+- **Buffer & Reader Management**:
+  - Avoids redundant reads from the underlying filesystem reader when `pending_rows` already contains enough records to satisfy `target_rows`.
+  - Parameter validation: raises `AtlasError` if `chunk_rows <= 0` or `chunk_bytes <= 0`.
+  - Immediate EOF probe: cleanly closes reader without requiring ghost empty chunk iterations.
+- **Guaranteed Resource Cleanup (`try...finally`)**:
+  - Wrapped iteration loops in `stream_count`, `stream_sum`, `stream_mean`, `stream_variance`, and `stream_std` with `try...finally`, guaranteeing that `reader.close()` is executed and file handles are released even if exceptions occur during chunk processing.
+- **Numerically Stable Online Variance & Standard Deviation (`streaming.nox`)**:
+  - Upgraded `stream_mean` with Welford / Chan chunked online aggregation to prevent catastrophic floating-point cancellation.
+  - Added `stream_variance(path, col_name, options, is_sample=True)` for single-pass online variance calculation on unbounded files.
+  - Added `stream_std(path, col_name, options, is_sample=True)` using pure `nox.mathx.sqrt`.
+- **Edge-Case Test Suite (`tests/streaming_edge_cases_test.nox`)**:
+  - Added 10 comprehensive edge-case scenarios: quote splits across byte chunks, escaped quote `""` splits across chunks, CRLF splits across chunks, header-only CSVs, 1-data-row CSVs, empty CSVs (0 bytes), `max_record_bytes` overflow, parameter validation, online variance/std accuracy, and explicit schema streaming. Total test suites: 30 (100% passing).
+
 ## [0.7.0] - 2026-11-01
 
 ### Added

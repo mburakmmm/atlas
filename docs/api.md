@@ -206,3 +206,25 @@ report.summary() -> str
 
 clean_table: Table = validator.filter_valid(table: Table)
 quarantine_table: Table = validator.filter_invalid(table: Table)
+```
+
+## 9. Low-Memory Streaming CSV & Online Aggregations
+
+```nox
+# Streaming Reader with bounded memory and state machine
+reader: StreamingCsvReader = open_csv_stream(path: str, chunk_rows: int = 1000, options: CsvOptions | None = None, explicit_schema: Schema | None = None)
+
+while reader.has_next():
+    chunk: Table = reader.next_chunk()
+reader.close()
+
+# Online Aggregations (O(1) memory, numerically stable Welford/Chan algorithm)
+stream_count(path: str, options: CsvOptions | None = None) -> int
+stream_sum(path: str, col_name: str, options: CsvOptions | None = None) -> float
+stream_mean(path: str, col_name: str, options: CsvOptions | None = None) -> float
+stream_variance(path: str, col_name: str, options: CsvOptions | None = None, is_sample: bool = True) -> float
+stream_std(path: str, col_name: str, options: CsvOptions | None = None, is_sample: bool = True) -> float
+
+# Configurable options
+opts = csv_options(delimiter=",", has_header=True, blank_is_missing=True, strict=False, safe_spreadsheet=False, max_record_bytes=10485760)
+```
