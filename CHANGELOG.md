@@ -5,6 +5,32 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-01
+
+### Added
+- **Low-Memory Streaming CSV Reader (`streaming.nox`)**:
+  - Implemented `StreamingCsvReader` leveraging `nox.fs.open_read(path)` and chunked buffer parsing (`f.read_chunk(n)`).
+  - Processes multi-gigabyte CSV files in bounded chunks (`chunk_rows: int = 1000`) without loading the full file into memory.
+  - Line-by-line streaming parser correctly preserves quoted fields and multi-line values across byte chunk boundaries.
+  - Seamless schema determination: automatically infers schema from the first chunk or accepts an explicit schema.
+- **Streaming Aggregations (`streaming.nox`)**:
+  - Added `stream_count(path, options)` for $O(1)$ memory row counting.
+  - Added `stream_sum(path, col_name, options)` for running numerical summation across unbounded files.
+  - Added `stream_mean(path, col_name, options)` for online running mean computation across chunks.
+- **Portable IEEE-754 Functions (`values.nox`)**:
+  - Added portable constructor and detection helpers: `float_nan()`, `float_inf()`, `float_neg_inf()`, `cell_nan()`, `cell_inf()`, `cell_neg_inf()`, `is_nan()`, `is_inf()`.
+  - Replaced literal zero-division across tests and codebase to prevent compiler warnings and guarantee cross-backend portability (LLVM, QBE, WASM).
+
+### Fixed & Improved
+- **Universal Cross-Type NaN Sorting (`values.nox`)**:
+  - Updated `Cell.compare()` to evaluate `self_nan` and `other_nan` immediately following null checks, guaranteeing that `NaN` sorts last across all types (String, Boolean, Integer, Float, and custom Cell kinds).
+- **Collision-Resistant Custom Cell Encoding (`key_encoding.nox`)**:
+  - Replaced hardcoded `"X"` hash key for custom cell kinds with payload-aware encoding (`"U" + kind + ":" + i + ":" + len(s) + ":" + s`), maintaining $O(1)$ dictionary lookup performance.
+- **SQL Adapter Contract Testing**:
+  - Renamed and organized `tests/sql_adapter_contract_test.nox` verifying SQL generation and Feather DB bridges.
+- **Test Suite Expansion**:
+  - Added `tests/streaming_test.nox`. Total test suites: 29 (100% passing).
+
 ## [0.6.2] - 2026-11-01
 
 ### Fixed & Improved

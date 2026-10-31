@@ -176,6 +176,16 @@ class Cell:
                 return 1
             return -1
 
+        # Global NaN sorting: NaN sorts last across ALL types (int, float, str, bool, etc.)
+        self_nan: bool = self.kind == TYPE_FLOAT and not (self.f == self.f)
+        other_nan: bool = other.kind == TYPE_FLOAT and not (other.f == other.f)
+        if self_nan and other_nan:
+            return 0
+        if self_nan:
+            return 1 # NaN sorts last
+        if other_nan:
+            return -1
+
         # Direct 64-bit integer comparison without float conversion:
         if self.kind == TYPE_INT and other.kind == TYPE_INT:
             if self.i < other.i:
@@ -185,14 +195,6 @@ class Cell:
             return 0
 
         if self.kind == TYPE_FLOAT and other.kind == TYPE_FLOAT:
-            s_nan: bool = not (self.f == self.f)
-            o_nan: bool = not (other.f == other.f)
-            if s_nan and o_nan:
-                return 0
-            if s_nan:
-                return 1 # NaN sorts last
-            if o_nan:
-                return -1
             if self.f < other.f:
                 return -1
             if self.f > other.f:
@@ -241,6 +243,30 @@ def cell_str(s: str) -> Cell:
 
 def cell_bool(b: bool) -> Cell:
     return Cell(TYPE_BOOL, 0, 0.0, "", b)
+
+def is_nan(f: float) -> bool:
+    return not (f == f)
+
+def is_inf(f: float) -> bool:
+    return f >= 9223372036854775808.0 or f < -9223372036854775808.0
+
+def float_nan() -> float:
+    return 0.0 / 0.0
+
+def float_inf() -> float:
+    return 1.0 / 0.0
+
+def float_neg_inf() -> float:
+    return -1.0 / 0.0
+
+def cell_nan() -> Cell:
+    return cell_float(float_nan())
+
+def cell_inf() -> Cell:
+    return cell_float(float_inf())
+
+def cell_neg_inf() -> Cell:
+    return cell_float(float_neg_inf())
 
 def parse_cell(text: str, target_type: int, blank_is_missing: bool = True) -> Cell:
     if blank_is_missing and text == "":

@@ -65,9 +65,9 @@ nox.test.assert_eq_int(res2.cell(1, 2).as_int(), 100, "100 rows in grp_1")
 nox.test.assert_eq_int(res2.cell(2, 2).as_int(), 100, "100 rows in grp_2")
 
 # Test 3: Synthetic identical hash collision verification
-# Two distinct cells sharing the exact same hash representation ("X")
+# Two distinct cells sharing the exact same hash representation ("U99:1:1:a") but differing on boolean flag
 c_coll_a: Cell = Cell(99, 1, 0.0, "a", False)
-c_coll_b: Cell = Cell(98, 2, 0.0, "b", False)
+c_coll_b: Cell = Cell(99, 1, 0.0, "a", True)
 assert not c_coll_a.equals(c_coll_b)
 
 s3: Schema = Schema([ColumnDef("key", 99), ColumnDef("val", TYPE_INT)])

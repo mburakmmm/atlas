@@ -1,4 +1,4 @@
-# tests/sql_integration_test.nox — Comprehensive SQL dialect, Feather bridge and DDL verification.
+# tests/sql_adapter_contract_test.nox — Comprehensive SQL dialect, Feather bridge and DDL verification.
 
 import nox.test
 import errors

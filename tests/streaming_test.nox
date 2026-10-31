@@ -1,0 +1,66 @@
+# tests/streaming_test.nox — Verification of StreamingCsvReader and chunk-based aggregations.
+
+import nox.test
+import nox.fs
+import values
+from values import Cell
+import schema
+from schema import Schema
+import table
+from table import Table
+import delimited
+from delimited import csv_options, CsvOptions
+import streaming
+from streaming import StreamingCsvReader, open_csv_stream, stream_count, stream_sum, stream_mean
+
+test_csv_path: str = "temp_streaming_test_data.csv"
+
+# 1. Generate 2,500 records
+content: str = "id,name,amount\n"
+i: int = 1
+n: int = 2501
+expected_sum: float = 0.0
+while i < n:
+    amt: float = float(i) * 2.0
+    expected_sum = expected_sum + amt
+    content = content + str(i) + ",user_" + str(i) + "," + str(amt) + "\n"
+    i = i + 1
+
+nox.fs.write_string(test_csv_path, content)
+
+# 2. Test Streaming in chunks of 1000 rows
+reader: StreamingCsvReader = open_csv_stream(test_csv_path, 1000)
+total_streamed_rows: int = 0
+chunks_count: int = 0
+
+while reader.has_next():
+    chunk: Table = reader.next_chunk()
+    total_streamed_rows = total_streamed_rows + chunk.row_count()
+    chunks_count = chunks_count + 1
+    # Check schema consistency across chunks
+    assert chunk.column_count() == 3
+    assert chunk.schema.columns[0].name == "id"
+    assert chunk.schema.columns[2].name == "amount"
+
+reader.close()
+
+nox.test.assert_eq_int(total_streamed_rows, 2500, "2500 total rows streamed")
+assert chunks_count >= 3
+
+# 3. Test stream_count
+counted_rows: int = stream_count(test_csv_path)
+nox.test.assert_eq_int(counted_rows, 2500, "stream_count matches 2500")
+
+# 4. Test stream_sum
+sum_amt: float = stream_sum(test_csv_path, "amount")
+assert sum_amt == expected_sum
+
+# 5. Test stream_mean
+mean_amt: float = stream_mean(test_csv_path, "amount")
+expected_mean: float = expected_sum / 2500.0
+assert mean_amt == expected_mean
+
+# 6. Cleanup temporary file
+nox.fs.remove_file(test_csv_path)
+
+print("streaming_test passed")

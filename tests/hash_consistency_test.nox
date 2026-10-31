@@ -2,7 +2,7 @@
 
 import nox.test
 import values
-from values import Cell, cell_int, cell_float, cell_str, cell_bool, cell_null
+from values import Cell, cell_int, cell_float, cell_str, cell_bool, cell_null, float_nan
 import key_encoding
 from key_encoding import cell_hash_key, composite_hash_key
 
@@ -39,7 +39,7 @@ assert cell_hash_key(cell_bool(True)) == "B:1"
 assert cell_hash_key(cell_bool(False)) == "B:0"
 
 # 7. NaN representation is "F:nan"
-nan_val: float = 0.0 / 0.0
+nan_val: float = float_nan()
 assert cell_hash_key(cell_float(nan_val)) == "F:nan"
 
 print("hash_consistency_test passed")

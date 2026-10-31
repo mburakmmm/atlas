@@ -2,7 +2,7 @@
 
 import nox.test
 import values
-from values import Cell, cell_int, cell_float, TYPE_INT
+from values import Cell, cell_int, cell_float, cell_str, cell_bool, TYPE_INT, float_nan, float_inf, float_neg_inf, cell_nan, cell_inf, cell_neg_inf
 
 # 2^53 = 9007199254740992
 # In IEEE-754 double precision, 9007199254740992 and 9007199254740993 round to the same float!
@@ -65,11 +65,11 @@ assert c_near_max_f.equals(c_near_max_i)
 assert c_near_max_i.compare(c_near_max_f) == 0
 assert c_near_max_f.compare(c_near_max_i) == 0
 
-# 4. Positive and Negative Infinity
-pos_inf_f: float = 1.0 / 0.0
-neg_inf_f: float = -1.0 / 0.0
-c_pos_inf: Cell = cell_float(pos_inf_f)
-c_neg_inf: Cell = cell_float(neg_inf_f)
+# 4. Positive and Negative Infinity via explicit functions
+pos_inf_f: float = float_inf()
+neg_inf_f: float = float_neg_inf()
+c_pos_inf: Cell = cell_inf()
+c_neg_inf: Cell = cell_neg_inf()
 
 assert not c_5.equals(c_pos_inf)
 assert not c_max_i.equals(c_pos_inf)
@@ -83,17 +83,30 @@ assert c_5.compare(c_neg_inf) == 1
 assert c_min_i.compare(c_neg_inf) == 1
 assert c_neg_inf.compare(c_min_i) == -1
 
-# 5. NaN Behavior
-nan_val_f: float = 0.0 / 0.0
-c_nan1: Cell = cell_float(nan_val_f)
-c_nan2: Cell = cell_float(nan_val_f)
+# 5. NaN Behavior via explicit portable functions & cross-type sorting
+c_nan1: Cell = cell_nan()
+c_nan2: Cell = cell_nan()
 # Two NaNs equal each other in table operations:
 assert c_nan1.equals(c_nan2)
 assert c_nan1.compare(c_nan2) == 0
-# Number vs NaN: not equal, number < NaN (NaN sorts last):
+
+# Number vs NaN: not equal, number < NaN (NaN sorts last across ALL types):
 assert not c_5.equals(c_nan1)
 assert c_5.compare(c_nan1) == -1
 assert c_nan1.compare(c_5) == 1
+
+# Cross-type NaN sorting: String and Bool vs NaN:
+c_str: Cell = cell_str("abc")
+c_str_z: Cell = cell_str("zzz")
+c_bool: Cell = cell_bool(True)
+
+assert not c_str.equals(c_nan1)
+assert c_str.compare(c_nan1) == -1
+assert c_nan1.compare(c_str) == 1
+assert c_str_z.compare(c_nan1) == -1
+assert c_nan1.compare(c_str_z) == 1
+assert c_bool.compare(c_nan1) == -1
+assert c_nan1.compare(c_bool) == 1
 
 # 6. Large integer vs representable fractional float:
 c_large_i: Cell = cell_int(9007199254740993)

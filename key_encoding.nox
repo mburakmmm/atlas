@@ -23,7 +23,8 @@ def cell_hash_key(c: Cell) -> str:
         if c.as_bool():
             return "B:1"
         return "B:0"
-    return "X"
+    s_custom: str = c.to_string()
+    return "U" + str(c.kind) + ":" + str(c.i) + ":" + str(len(s_custom)) + ":" + s_custom
 
 def composite_hash_key(cells: list[Cell]) -> str:
     res: str = ""

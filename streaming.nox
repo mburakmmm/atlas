@@ -1,0 +1,238 @@
+# streaming.nox — Low-memory Streaming CSV reader and chunk-based processing for Atlas.
+
+import nox.fs
+import errors
+from errors import AtlasError, CsvImportError, ShapeError, MissingValueError, ColumnNotFoundError
+import values
+from values import Cell, cell_null, parse_cell, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import stats
+from stats import stat_sum, stat_count_non_missing
+import delimited
+from delimited import CsvOptions, csv_options, parse_delimited
+import csv_adapter
+from csv_adapter import infer_schema
+
+class StreamingCsvReader:
+    path: str
+    reader: nox.fs.FileReader
+    options: CsvOptions
+    chunk_rows: int
+    chunk_bytes: int
+    schema: Schema
+    headers: list[str]
+    buffer: str
+    eof: bool
+    closed: bool
+    has_more: bool
+
+    def __init__(self: StreamingCsvReader, path: str, options: CsvOptions | None = None, explicit_schema: Schema | None = None, chunk_rows: int = 1000, chunk_bytes: int = 65536) -> None:
+        self.path = path
+        if options != None:
+            self.options = options
+        else:
+            self.options = csv_options()
+        self.chunk_rows = chunk_rows
+        self.chunk_bytes = chunk_bytes
+        if explicit_schema != None:
+            self.schema = explicit_schema
+        else:
+            empty_cols: list[ColumnDef] = []
+            self.schema = Schema(empty_cols)
+        self.headers = []
+        self.buffer = ""
+        self.eof = False
+        self.closed = False
+        self.has_more = True
+
+        if not nox.fs.exists(path):
+            raise AtlasError("file not found: '" + path + "'")
+        self.reader = nox.fs.open_read(path)
+
+    def close(self: StreamingCsvReader) -> None:
+        if not self.closed:
+            self.closed = True
+            self.reader.close()
+            self.has_more = False
+
+    def has_next(self: StreamingCsvReader) -> bool:
+        if self.closed:
+            return False
+        return self.has_more
+
+    def next_chunk(self: StreamingCsvReader) -> Table:
+        if self.closed or not self.has_more:
+            raise AtlasError("no more chunks in stream: '" + self.path + "'")
+
+        parsed_lines: list[list[str]] = []
+        target_rows: int = self.chunk_rows
+
+        while len(parsed_lines) < target_rows:
+            # If buffer doesn't have complete lines or need more, read next byte chunk
+            if not self.eof:
+                chunk_str: str = self.reader.read_chunk(self.chunk_bytes)
+                if len(chunk_str) == 0:
+                    self.eof = True
+                else:
+                    self.buffer = self.buffer + chunk_str
+
+            # Parse lines out of self.buffer respecting quotes
+            buf_len: int = len(self.buffer)
+            i: int = 0
+            last_start: int = 0
+            in_quotes: bool = False
+
+            while i < buf_len:
+                ch: str = self.buffer[i]
+                if in_quotes:
+                    if ch == "\"":
+                        if i + 1 < buf_len and self.buffer[i + 1] == "\"":
+                            i = i + 2
+                        else:
+                            in_quotes = False
+                            i = i + 1
+                    else:
+                        i = i + 1
+                else:
+                    if ch == "\"":
+                        in_quotes = True
+                        i = i + 1
+                    elif ch == "\n":
+                        # Complete line boundary
+                        line_slice: str = self.buffer[last_start:i]
+                        # Trim trailing '\r' if present
+                        if len(line_slice) > 0 and line_slice[len(line_slice) - 1] == "\r":
+                            line_slice = line_slice[0:len(line_slice) - 1]
+                        
+                        if len(line_slice) > 0:
+                            row_fields: list[list[str]] = parse_delimited(line_slice, self.options.delimiter, self.options.strict)
+                            if len(row_fields) > 0:
+                                parsed_lines.append(row_fields[0])
+                        last_start = i + 1
+                        i = i + 1
+                        if len(parsed_lines) >= target_rows:
+                            i = buf_len # Break out of inner loop to yield chunk
+                    else:
+                        i = i + 1
+
+            if last_start > 0:
+                self.buffer = self.buffer[last_start:]
+
+            if self.eof:
+                if len(parsed_lines) < target_rows and len(self.buffer) > 0:
+                    rem_slice: str = self.buffer
+                    if len(rem_slice) > 0 and rem_slice[len(rem_slice) - 1] == "\r":
+                        rem_slice = rem_slice[0:len(rem_slice) - 1]
+                    if len(rem_slice) > 0:
+                        rem_fields: list[list[str]] = parse_delimited(rem_slice, self.options.delimiter, self.options.strict)
+                        if len(rem_fields) > 0:
+                            parsed_lines.append(rem_fields[0])
+                    self.buffer = ""
+                break
+
+        if self.eof and len(self.buffer) == 0:
+            self.has_more = False
+
+        if len(parsed_lines) == 0:
+            self.close()
+            empty_cols: list[ColumnDef] = []
+            return Table(Schema(empty_cols), [])
+
+        # Process headers on first chunk
+        data_rows: list[list[str]] = []
+        start_idx: int = 0
+        if len(self.headers) == 0:
+            if self.options.has_header:
+                self.headers = parsed_lines[0]
+                start_idx = 1
+            else:
+                num_c: int = len(parsed_lines[0])
+                ci: int = 0
+                while ci < num_c:
+                    self.headers.append("col_" + str(ci))
+                    ci = ci + 1
+
+        idx: int = start_idx
+        num_parsed: int = len(parsed_lines)
+        while idx < num_parsed:
+            data_rows.append(parsed_lines[idx])
+            idx = idx + 1
+
+        # Infer schema on first data rows if not already defined
+        if self.schema.column_count() == 0:
+            if len(data_rows) > 0:
+                self.schema = infer_schema(self.headers, data_rows, self.options.blank_is_missing)
+            else:
+                col_defs: list[ColumnDef] = []
+                hi: int = 0
+                while hi < len(self.headers):
+                    col_defs.append(ColumnDef(self.headers[hi], TYPE_STR, True))
+                    hi = hi + 1
+                self.schema = Schema(col_defs)
+
+        sch: Schema = self.schema
+        num_cols: int = sch.column_count()
+        typed_rows: list[list[Cell]] = []
+
+        r_idx: int = 0
+        num_data: int = len(data_rows)
+        while r_idx < num_data:
+            raw_r: list[str] = data_rows[r_idx]
+            if len(raw_r) != num_cols:
+                raise ShapeError("streaming row length mismatch: expected " + str(num_cols) + ", got " + str(len(raw_r)))
+            
+            typed_r: list[Cell] = []
+            c_idx: int = 0
+            while c_idx < num_cols:
+                col_def: ColumnDef = sch.columns[c_idx]
+                raw_cell: str = raw_r[c_idx]
+                c: Cell = parse_cell(raw_cell, col_def.data_type, self.options.blank_is_missing)
+                if not col_def.nullable and c.is_missing():
+                    raise MissingValueError("column '" + col_def.name + "' is not nullable, but missing value found in stream")
+                typed_r.append(c)
+                c_idx = c_idx + 1
+
+            typed_rows.append(typed_r)
+            r_idx = r_idx + 1
+
+        if not self.has_more and len(self.buffer) == 0:
+            self.close()
+
+        return Table(sch, typed_rows)
+
+def open_csv_stream(path: str, chunk_rows: int = 1000, options: CsvOptions | None = None, explicit_schema: Schema | None = None) -> StreamingCsvReader:
+    return StreamingCsvReader(path, options, explicit_schema, chunk_rows)
+
+def stream_count(path: str, options: CsvOptions | None = None) -> int:
+    reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
+    total: int = 0
+    while reader.has_next():
+        chunk_tbl: Table = reader.next_chunk()
+        total = total + chunk_tbl.row_count()
+    reader.close()
+    return total
+
+def stream_sum(path: str, col_name: str, options: CsvOptions | None = None) -> float:
+    reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
+    running_sum: float = 0.0
+    while reader.has_next():
+        chunk_tbl: Table = reader.next_chunk()
+        running_sum = running_sum + chunk_tbl.sum_val(col_name)
+    reader.close()
+    return running_sum
+
+def stream_mean(path: str, col_name: str, options: CsvOptions | None = None) -> float:
+    reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
+    running_sum: float = 0.0
+    running_count: int = 0
+    while reader.has_next():
+        chunk_tbl: Table = reader.next_chunk()
+        running_sum = running_sum + chunk_tbl.sum_val(col_name)
+        running_count = running_count + stat_count_non_missing(chunk_tbl.column_cells(col_name))
+    reader.close()
+    if running_count == 0:
+        return 0.0
+    return running_sum / float(running_count)

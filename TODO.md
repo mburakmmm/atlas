@@ -254,6 +254,28 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
+## 🚀 Sürüm 0.7.0 — Akışlı CSV (Streaming Reader), NaN Sıralama Tutarlılığı & Akış Agregasyonları
+
+- [x] **Tüm Türler Arasında NaN Sıralama Tutarlılığı (🔴 P1)**:
+  - `values.nox`: `Cell.compare` fonksiyonunda null denetiminden hemen sonra türden bağımsız `self_nan` ve `other_nan` denetimi.
+  - NaN hücresinin yalnızca sayılarla değil, String, Bool ve özel türler karşısında da daima en sona (`NaN sorts last`) yerleştirilmesi.
+- [x] **Taşınabilir IEEE-754 Sabit Fonksiyonları (🔴 P1)**:
+  - `values.nox`: Derleyici backend'leri (LLVM, QBE, WASM) arasında sıfıra bölme tutarsızlığını önlemek için `float_nan()`, `float_inf()`, `float_neg_inf()`, `cell_nan()`, `cell_inf()`, `cell_neg_inf()`, `is_nan()`, `is_inf()` fonksiyonlarının eklenmesi.
+  - Test ve kütüphane kodlarında ham sıfıra bölme ifadeleri yerine bu fonksiyonların kullanılması.
+- [x] **Genişletilmiş / Bilinmeyen Hücre Tiplerinde Hash Kodlama (🟠 P2)**:
+  - `key_encoding.nox`: Standart dışı hücre tiplerinde sabit `"X"` yerine `"U" + str(kind) + ":" + str(i) + ":" + to_string()` kodlaması ile özel türlerde hash çakışması yığılmasının önlenmesi.
+- [x] **Akışlı CSV Okuyucu (Streaming CSV Reader & Chunk Processing) (🔴 P1)**:
+  - `streaming.nox`: `nox.fs.open_read(path)` ve `read_chunk(n)` kullanan, tüm dosyayı belleğe almadan parça parça (chunk-by-chunk) okuyan `StreamingCsvReader` sınıfı.
+  - `read_csv_chunks(path, chunk_rows, options)`: Büyük CSV dosyalarını yapılandırılabilir satır blokları (`Table` parçaları) halinde dönen akış arayüzü.
+  - `stream_count(path, options)`: Tüm dosyayı belleğe yüklemeden satır sayısını sayan $O(1)$ bellekli akış fonksiyonu.
+  - `stream_sum(path, col_name, options)` ve `stream_mean(path, col_name, options)`: Akış üzerinde çalışan, sınırsız boyutlu dosyalarda çalışan istatistik agregasyonları.
+- [x] **SQL Kontrat ve Feather Köprü Testleri (🟠 P2)**:
+  - `tests/sql_adapter_contract_test.nox`: SQL adaptörünün DDL, INSERT ve Feather DB record dönüşümlerinin kontrat doğrulaması.
+- [x] **Birim Testler & Sürüm Yayın**:
+  - `tests/streaming_test.nox` dahil 29 test paketinin `noxc test` ile doğrulanması, `nox.json` sürümünün `0.7.0` olarak güncellenmesi, `CHANGELOG.md` kaydı, git commit, GitHub push ve `noxc publish`.
+
+---
+
 ## 🏆 Sürüm 1.0.0 — Nihai Üretim Sürümü (Gelecek Hedef)
 
 - [ ] Topluluk geri bildirimleri sonrası API dondurma onayı.
