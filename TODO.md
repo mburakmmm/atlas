@@ -18,6 +18,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.6.2** | **Matematiksel Sınır Güvenliği, Ortak Hash Kodlama & CsvOptions** | ✅ **TAMAMLANDI & YAYINLANDI** | 28/28 Test Geçti (`noxc test`) |
 | **v0.7.0** | **Akışlı CSV (Streaming Reader), NaN Sıralama Tutarlılığı & Akış Agregasyonları** | ✅ **TAMAMLANDI & YAYINLANDI** | 29/29 Test Geçti (`noxc test`) |
 | **v0.7.1** | **Streaming Sağlamlaştırma, Durum Makinesi, max_record_bytes & Çevrimiçi İstatistikler** | ✅ **TAMAMLANDI & YAYINLANDI** | 30/30 Test Geçti (`noxc test`) |
+| **v0.7.2** | **Çok Karakterli Delimiter, UTF-8 Bayt Sınırları, Bounded Memory & Diferansiyel Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -312,6 +313,30 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - Çevrimiçi varyans ve standart sapma doğruluk testi.
 - [x] **Birim Testler, Dokümantasyon & Sürüm Yayın**:
   - `tests/streaming_edge_cases_test.nox` dahil 30 test paketinin tamamının `noxc test` ile geçmesi, `nox.json` sürümünün `0.7.1` yapılması, `CHANGELOG.md` güncellenmesi, git commit, push ve `noxc publish`.
+
+---
+
+## 🛠️ Sürüm 0.7.2 — Çok Karakterli Delimiter, UTF-8 Bayt Sınırları & Diferansiyel Doğrulama (Teknik İnceleme İyileştirmeleri)
+
+- [x] **Çok Karakterli Delimiter'ların Chunk Sınırında Korunması (🔴 P1)**:
+  - `streaming.nox`: `||`, `::`, `---` gibi çok karakterli ayraçların chunk sonuna denk gelmesi durumunda (`rem_len < delim_len` ve `delim.startswith(suffix)`), ayracın parçalanıp `cur_field` içine metin olarak karışmasını önlemek.
+  - Eşleşen önekin `unconsumed_buffer` içinde saklanması ve sonraki chunk ile birleştirilerek $O(1)$ bayt seviyesinde kesintisiz ve doğru ayrıştırılması.
+  - `delimiter = "||"` ve `chunk_bytes = 1` gibi en zorlayıcı tek-baytlık okuma senaryosunda doğrulanması.
+- [x] **`max_record_bytes` Sınırının Gerçek UTF-8 Bayt Uzunluğuyla Ölçülmesi (🔴 P1)**:
+  - `streaming.nox`: `len(s)` kod noktası yerine `nox.strings.byte_len(ch)` kullanarak çok baytlı UTF-8 karakterlerin (Türkçe karakterler `ğ, ü, ş, ö, ç, ı`, emojiler `😊, 🚀`) gerçek bellek bayt boyutunu tam ölçmek.
+  - Çok baytlı karakterlerin kayıt sınırını sessizce aşmasının engellenmesi.
+- [x] **Büyük `chunk_bytes` Durumunda `pending_rows` Bellek Sınırı (Bounded Rows) (🟠 P1)**:
+  - `StreamingCsvReader.feed_chunk`: `len(self.pending_rows) >= target_rows` koşuluna ulaşıldığı anda chunk ayrıştırmasının durdurulması ve kalan karakterlerin `unconsumed_buffer` içine aktarılması.
+  - Böylece `chunk_bytes = 100_000_000` gibi devasa chunk boyutlarında dahi bellekte gereksiz satır yığılması engellenir; bellek kullanımı her zaman kesin $O(\text{chunk\_rows})$ ile sınırlandırılır.
+- [x] **Boş / Yetersiz Gözlem İstatistik Sözleşmesi (🟠 P2)**:
+  - `stream_mean`: Hiçbir geçerli sayısal değer bulunmadığında (`running_n == 0`), `stats.nox` ile tam tutarlı biçimde `AggregationError("cannot compute mean: no non-missing numeric observations")` fırlatılması.
+  - `stream_variance` ve `stream_std`: Yetersiz gözlemde (`is_sample` için $N < 2$, popülasyon için $N < 1$) sessizce `0.0` dönmek yerine `AggregationError` fırlatarak istatistiksel doğruluk sözleşmesine uyulması.
+- [x] **Diferansiyel ve Rastgele Chunk Boyutlu Test Paketi (`tests/streaming_differential_test.nox`) (🟠 P2)**:
+  - Aynı dosya `read_delimited()` (bellek içi standart ayrıştırıcı) ve `StreamingCsvReader()` ile okunarak karşılaştırılır.
+  - `chunk_bytes = 1, 2, 3, 5, 7, 13, 31, 64, 1024` gibi 10 farklı chunk boyutunda sonuçların birebir aynı satır, sütun ve hücre değerlerini ürettiğinin doğrulanması.
+  - Çok karakterli ayraç (`||`), çok satırlı tırnaklı alanlar, kaçışlı tırnaklar ve UTF-8 karakterlerin diferansiyel testi.
+- [x] **Birim Testler, Dokümantasyon & Sürüm Yayın**:
+  - `tests/streaming_differential_test.nox` dahil 31 test paketinin tamamının `noxc test` ile geçmesi, `nox.json` sürümünün `0.7.2` yapılması, `CHANGELOG.md` güncellenmesi, git commit, push ve `noxc publish`.
 
 ---
 

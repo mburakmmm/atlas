@@ -2,8 +2,9 @@
 
 import nox.fs
 import nox.mathx
+import nox.strings
 import errors
-from errors import AtlasError, CsvImportError, ShapeError, MissingValueError, ColumnNotFoundError
+from errors import AtlasError, CsvImportError, ShapeError, MissingValueError, ColumnNotFoundError, AggregationError
 import values
 from values import Cell, cell_null, parse_cell, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
 import schema
@@ -30,6 +31,7 @@ class StreamingCsvReader:
     has_more: bool
 
     # Persistent state machine across chunks
+    unconsumed_buffer: str
     pending_rows: list[list[str]]
     cur_row: list[str]
     cur_field: str
@@ -66,6 +68,7 @@ class StreamingCsvReader:
         self.has_more = True
 
         # Initialize persistent parser state
+        self.unconsumed_buffer = ""
         self.pending_rows = []
         self.cur_row = []
         self.cur_field = ""
@@ -89,13 +92,13 @@ class StreamingCsvReader:
     def has_next(self: StreamingCsvReader) -> bool:
         if self.closed:
             return False
-        if len(self.pending_rows) > 0:
+        if len(self.pending_rows) > 0 or len(self.unconsumed_buffer) > 0:
             return True
         if self.eof:
             return False
         return self.has_more
 
-    def feed_chunk(self: StreamingCsvReader, text: str) -> None:
+    def feed_chunk(self: StreamingCsvReader, text: str, target_rows: int) -> None:
         i: int = 0
         n: int = len(text)
         delim: str = self.options.delimiter
@@ -128,9 +131,10 @@ class StreamingCsvReader:
                     self.after_quote = True
                     # fall through to process ch in after_quote state
 
-            self.cur_record_bytes = self.cur_record_bytes + 1
+            ch_bytes: int = nox.strings.byte_len(ch)
+            self.cur_record_bytes = self.cur_record_bytes + ch_bytes
             if self.cur_record_bytes > max_rec:
-                raise CsvImportError("CSV record exceeds max_record_bytes limit: " + str(max_rec))
+                raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
 
             if self.in_quotes:
                 if ch == "\"":
@@ -151,6 +155,12 @@ class StreamingCsvReader:
                     self.cur_field = self.cur_field + ch
                     i = i + 1
             elif self.after_quote:
+                # If near end of chunk and remaining matches prefix of multi-char delimiter:
+                rem_len: int = n - i
+                if delim_len > 1 and rem_len < delim_len and delim[0:rem_len] == text[i:]:
+                    self.unconsumed_buffer = text[i:]
+                    return
+
                 if delim_len == 1 and ch == delim:
                     self.cur_row.append(self.cur_field)
                     self.cur_field = ""
@@ -177,6 +187,10 @@ class StreamingCsvReader:
                     self.field_start = True
                     self.cur_record_bytes = 0
                     i = i + 1
+                    if len(self.pending_rows) >= target_rows:
+                        if i < n:
+                            self.unconsumed_buffer = text[i:]
+                        return
                 elif ch == "\n":
                     self.cur_row.append(self.cur_field)
                     self.cur_field = ""
@@ -186,6 +200,10 @@ class StreamingCsvReader:
                     self.field_start = True
                     self.cur_record_bytes = 0
                     i = i + 1
+                    if len(self.pending_rows) >= target_rows:
+                        if i < n:
+                            self.unconsumed_buffer = text[i:]
+                        return
                 else:
                     if strict:
                         raise CsvImportError("unexpected character after closing quote in strict mode: '" + ch + "'")
@@ -194,6 +212,12 @@ class StreamingCsvReader:
                     i = i + 1
             else:
                 # Unquoted field
+                # Check for prefix of multi-char delimiter at end of chunk:
+                rem_len: int = n - i
+                if delim_len > 1 and rem_len < delim_len and delim[0:rem_len] == text[i:]:
+                    self.unconsumed_buffer = text[i:]
+                    return
+
                 if self.field_start and ch == "\"":
                     self.in_quotes = True
                     self.field_start = False
@@ -226,6 +250,10 @@ class StreamingCsvReader:
                     self.field_start = True
                     self.cur_record_bytes = 0
                     i = i + 1
+                    if len(self.pending_rows) >= target_rows:
+                        if i < n:
+                            self.unconsumed_buffer = text[i:]
+                        return
                 elif ch == "\n":
                     self.cur_row.append(self.cur_field)
                     self.cur_field = ""
@@ -234,12 +262,19 @@ class StreamingCsvReader:
                     self.field_start = True
                     self.cur_record_bytes = 0
                     i = i + 1
+                    if len(self.pending_rows) >= target_rows:
+                        if i < n:
+                            self.unconsumed_buffer = text[i:]
+                        return
                 else:
                     self.cur_field = self.cur_field + ch
                     self.field_start = False
                     i = i + 1
 
     def finish_parser(self: StreamingCsvReader) -> None:
+        if len(self.unconsumed_buffer) > 0:
+            self.cur_field = self.cur_field + self.unconsumed_buffer
+            self.unconsumed_buffer = ""
         if self.pending_quote:
             self.in_quotes = False
             self.after_quote = True
@@ -265,13 +300,29 @@ class StreamingCsvReader:
         if len(self.headers) == 0 and self.options.has_header:
             fetch_target = target_rows + 1
 
-        while len(self.pending_rows) < fetch_target and not self.eof:
-            chunk_str: str = self.reader.read_chunk(self.chunk_bytes)
-            if len(chunk_str) == 0:
-                self.eof = True
-                self.finish_parser()
+        dlen: int = len(self.options.delimiter)
+
+        while len(self.pending_rows) < fetch_target:
+            if len(self.unconsumed_buffer) >= dlen:
+                buf: str = self.unconsumed_buffer
+                self.unconsumed_buffer = ""
+                self.feed_chunk(buf, fetch_target)
+                if len(self.pending_rows) >= fetch_target:
+                    break
+
+            if not self.eof:
+                chunk_str: str = self.reader.read_chunk(self.chunk_bytes)
+                if len(chunk_str) == 0:
+                    self.eof = True
+                    self.finish_parser()
+                else:
+                    to_feed: str = self.unconsumed_buffer + chunk_str
+                    self.unconsumed_buffer = ""
+                    self.feed_chunk(to_feed, fetch_target)
             else:
-                self.feed_chunk(chunk_str)
+                if len(self.unconsumed_buffer) > 0:
+                    self.finish_parser()
+                break
 
         if len(self.pending_rows) == 0:
             self.close()
@@ -302,8 +353,18 @@ class StreamingCsvReader:
 
         self.pending_rows = self.pending_rows[take_count:]
 
-        if self.eof and len(self.pending_rows) == 0:
+        # Probe next bytes to detect EOF immediately if pending_rows and unconsumed_buffer are empty
+        if not self.eof and len(self.pending_rows) == 0 and len(self.unconsumed_buffer) == 0:
+            probe_chunk: str = self.reader.read_chunk(self.chunk_bytes)
+            if len(probe_chunk) == 0:
+                self.eof = True
+                self.finish_parser()
+            else:
+                self.feed_chunk(probe_chunk, fetch_target)
+
+        if self.eof and len(self.pending_rows) == 0 and len(self.unconsumed_buffer) == 0:
             self.has_more = False
+            self.close()
 
         # Infer schema on first data rows if not already defined
         if self.schema.column_count() == 0:
@@ -341,19 +402,6 @@ class StreamingCsvReader:
 
             typed_rows.append(typed_r)
             r_idx = r_idx + 1
-
-        # If pending_rows is empty, probe next bytes to detect EOF immediately
-        if not self.eof and len(self.pending_rows) == 0:
-            probe_chunk: str = self.reader.read_chunk(self.chunk_bytes)
-            if len(probe_chunk) == 0:
-                self.eof = True
-                self.finish_parser()
-            else:
-                self.feed_chunk(probe_chunk)
-
-        if self.eof and len(self.pending_rows) == 0:
-            self.has_more = False
-            self.close()
 
         return Table(sch, typed_rows)
 
@@ -417,6 +465,9 @@ def stream_mean(path: str, col_name: str, options: CsvOptions | None = None) -> 
     finally:
         reader.close()
 
+    if running_n == 0:
+        raise AggregationError("cannot compute mean: no non-missing numeric observations")
+
     return running_mean
 
 def stream_variance(path: str, col_name: str, options: CsvOptions | None = None, is_sample: bool = True) -> float:
@@ -461,15 +512,15 @@ def stream_variance(path: str, col_name: str, options: CsvOptions | None = None,
         reader.close()
 
     if running_n == 0:
-        return 0.0
+        raise AggregationError("cannot compute variance: no non-missing numeric observations")
     if is_sample:
-        if running_n <= 1:
-            return 0.0
+        if running_n < 2:
+            raise AggregationError("sample variance requires at least 2 non-missing numeric observations")
         return running_m2 / float(running_n - 1)
     return running_m2 / float(running_n)
 
 def stream_std(path: str, col_name: str, options: CsvOptions | None = None, is_sample: bool = True) -> float:
     v: float = stream_variance(path, col_name, options, is_sample)
-    if v <= 0.0:
+    if v < 0.0:
         return 0.0
     return nox.mathx.sqrt(v)

@@ -3,7 +3,7 @@
 import nox.test
 import nox.fs
 import errors
-from errors import AtlasError, CsvImportError, ShapeError
+from errors import AtlasError, CsvImportError, ShapeError, AggregationError
 import values
 from values import Cell, TYPE_STR, TYPE_FLOAT
 import schema
@@ -135,8 +135,21 @@ def test_empty_csv() -> None:
 
         c: int = stream_count(e_path)
         nox.test.assert_eq_int(c, 0, "stream_count is 0")
-        m: float = stream_mean(e_path, "col")
-        assert m == 0.0
+        
+        # Consistent AggregationError on empty data
+        caught_mean: bool = False
+        try:
+            stream_mean(e_path, "col")
+        except AggregationError as e:
+            caught_mean = True
+        assert caught_mean
+
+        caught_var: bool = False
+        try:
+            stream_variance(e_path, "col")
+        except AggregationError as e:
+            caught_var = True
+        assert caught_var
     finally:
         if nox.fs.exists(e_path):
             nox.fs.remove_file(e_path)
@@ -264,6 +277,82 @@ def test_explicit_schema_streaming() -> None:
         if nox.fs.exists(exp_path):
             nox.fs.remove_file(exp_path)
 
+def test_multi_char_delimiter_chunk_split() -> None:
+    # 11. Multi-character delimiter "||" split across 1-byte and 2-byte chunk boundaries
+    mc_path: str = "temp_mc_delim.csv"
+    content: str = "id||name||score\n1||Alice||95.5\n2||Bob||88.0\n"
+    nox.fs.write_string(mc_path, content)
+    try:
+        # Test with chunk_bytes = 1 to split every single byte of "||"
+        opts: CsvOptions = csv_options(delimiter="||")
+        reader1: StreamingCsvReader = StreamingCsvReader(mc_path, opts, None, 2, 1)
+        tbl1: Table = reader1.next_chunk()
+        nox.test.assert_eq_int(tbl1.row_count(), 2, "tbl1 has 2 rows")
+        assert tbl1.column_count() == 3
+        assert tbl1.schema.columns[0].name == "id"
+        assert tbl1.schema.columns[1].name == "name"
+        assert tbl1.schema.columns[2].name == "score"
+        assert tbl1.row(0)[0].as_int() == 1
+        assert tbl1.row(0)[1].as_str() == "Alice"
+        assert tbl1.row(0)[2].as_float() == 95.5
+        assert tbl1.row(1)[0].as_int() == 2
+        assert tbl1.row(1)[1].as_str() == "Bob"
+        assert tbl1.row(1)[2].as_float() == 88.0
+        assert not reader1.has_next()
+        reader1.close()
+    finally:
+        if nox.fs.exists(mc_path):
+            nox.fs.remove_file(mc_path)
+
+def test_utf8_multibyte_record_limit() -> None:
+    # 12. UTF-8 multi-byte characters counting true bytes against max_record_bytes
+    # Turkish characters like "ğ" are 2 bytes, "😊" is 4 bytes
+    utf8_path: str = "temp_utf8_limit.csv"
+    # "id,val\n1,ğğğğğğğğğğ\n" -> 10 'ğ' = 20 UTF-8 bytes!
+    # With header and prefix, total bytes of row 1 exceeds 25 bytes even though character count is under 20!
+    nox.fs.write_string(utf8_path, "id,val\n1,ğğğğğğğğğğğğğğğğ\n")
+    try:
+        # Set max_record_bytes = 25. 16 'ğ' characters = 32 bytes (+ prefix = ~36 bytes).
+        opts: CsvOptions = csv_options(max_record_bytes=25)
+        reader: StreamingCsvReader = open_csv_stream(utf8_path, 10, opts)
+        caught: bool = False
+        try:
+            reader.next_chunk()
+        except CsvImportError as e:
+            caught = True
+        assert caught
+        reader.close()
+    finally:
+        if nox.fs.exists(utf8_path):
+            nox.fs.remove_file(utf8_path)
+
+def test_large_chunk_bytes_bounded_memory() -> None:
+    # 13. Huge chunk_bytes (50,000) with small chunk_rows (2) pauses parsing to bound memory
+    bg_path: str = "temp_big_chunk.csv"
+    content: str = "num,val\n"
+    i: int = 1
+    while i <= 10:
+        content = content + str(i) + "," + str(i * 10) + "\n"
+        i = i + 1
+    nox.fs.write_string(bg_path, content)
+    try:
+        reader: StreamingCsvReader = StreamingCsvReader(bg_path, csv_options(), None, 2, 50000)
+        chunks_seen: int = 0
+        total_rows: int = 0
+        while reader.has_next():
+            chunk: Table = reader.next_chunk()
+            chunks_seen = chunks_seen + 1
+            total_rows = total_rows + chunk.row_count()
+            assert chunk.row_count() <= 2
+            # pending_rows must never bloat: at end of next_chunk it is bounded
+            assert len(reader.pending_rows) <= 2
+        reader.close()
+        nox.test.assert_eq_int(total_rows, 10, "10 total rows processed")
+        assert chunks_seen >= 5
+    finally:
+        if nox.fs.exists(bg_path):
+            nox.fs.remove_file(bg_path)
+
 test_quote_and_escaped_quote_split()
 test_crlf_split_boundary()
 test_header_only_and_single_row()
@@ -273,5 +362,8 @@ test_max_record_bytes_limit()
 test_stream_variance_and_std()
 test_resource_cleanup_on_error()
 test_explicit_schema_streaming()
+test_multi_char_delimiter_chunk_split()
+test_utf8_multibyte_record_limit()
+test_large_chunk_bytes_bounded_memory()
 
 print("streaming_edge_cases_test passed")

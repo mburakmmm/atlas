@@ -1,0 +1,104 @@
+# tests/streaming_differential_test.nox — Differential property-based verification between offline and streaming parsers.
+
+import nox.test
+import nox.fs
+import values
+from values import Cell
+import schema
+from schema import Schema
+import table
+from table import Table
+import delimited
+from delimited import read_delimited_options, csv_options, CsvOptions
+import streaming
+from streaming import StreamingCsvReader
+
+def verify_tables_identical(t1: Table, t2: Table, label: str) -> None:
+    nox.test.assert_eq_int(t1.row_count(), t2.row_count(), label + " row counts match")
+    nox.test.assert_eq_int(t1.column_count(), t2.column_count(), label + " column counts match")
+    
+    r: int = 0
+    num_r: int = t1.row_count()
+    num_c: int = t1.column_count()
+    while r < num_r:
+        c: int = 0
+        while c < num_c:
+            c1: Cell = t1.cell(r, c)
+            c2: Cell = t2.cell(r, c)
+            assert c1.equals(c2)
+            c = c + 1
+        r = r + 1
+
+def run_differential_test(file_path: str, content: str, opts: CsvOptions, test_name: str) -> None:
+    nox.fs.write_string(file_path, content)
+    try:
+        # 1. Parse offline using standard in-memory read_delimited_options
+        offline_tbl: Table = read_delimited_options(content, opts)
+
+        # 2. Test across 10 varied chunk sizes: from 1-byte stress tests to large buffers
+        chunk_sizes: list[int] = [1, 2, 3, 5, 7, 11, 23, 64, 256, 1024]
+        cs_idx: int = 0
+        num_cs: int = len(chunk_sizes)
+
+        while cs_idx < num_cs:
+            csize: int = chunk_sizes[cs_idx]
+            reader: StreamingCsvReader = StreamingCsvReader(file_path, opts, None, 2, csize)
+            streamed_rows: list[list[Cell]] = []
+            final_schema: Schema = Schema([])
+
+            while reader.has_next():
+                chunk_tbl: Table = reader.next_chunk()
+                if final_schema.column_count() == 0:
+                    final_schema = chunk_tbl.schema
+                ri: int = 0
+                nr: int = chunk_tbl.row_count()
+                while ri < nr:
+                    streamed_rows.append(chunk_tbl.row(ri))
+                    ri = ri + 1
+
+            reader.close()
+            streamed_tbl: Table = Table(final_schema, streamed_rows)
+            verify_tables_identical(offline_tbl, streamed_tbl, test_name + " (chunk_bytes=" + str(csize) + ")")
+            cs_idx = cs_idx + 1
+    finally:
+        if nox.fs.exists(file_path):
+            nox.fs.remove_file(file_path)
+
+def test_standard_csv_differential() -> None:
+    # Scenario A: Quotes, escaped quotes, multiline fields, CRLF
+    content: str = "id,name,bio,score\r\n"
+    content = content + "1,\"Alice\",\"Senior Engineer\r\nPlatform Team\",98.5\r\n"
+    content = content + "2,\"Bob \"\"The Builder\"\"\",Simple bio,87.0\r\n"
+    content = content + "3,\"Charlie, Jr.\",\"Line 1\nLine 2\nLine 3\",91.25\r\n"
+    content = content + "4,Dave,\"Plain\",75.0\r\n"
+    
+    opts: CsvOptions = csv_options(delimiter=",")
+    run_differential_test("temp_diff_standard.csv", content, opts, "Standard CSV Differential")
+
+def test_multichar_delim_differential() -> None:
+    # Scenario B: Multi-character delimiter "||"
+    content: str = "code||city||population\n"
+    content = content + "34||Istanbul||15840900\n"
+    content = content + "06||Ankara||5747325\n"
+    content = content + "35||Izmir||4425789\n"
+    content = content + "26||Eskisehir||898369\n"
+
+    opts: CsvOptions = csv_options(delimiter="||")
+    run_differential_test("temp_diff_multichar.csv", content, opts, "Multi-char Delim || Differential")
+
+def test_utf8_multibyte_differential() -> None:
+    # Scenario C: Turkish UTF-8 characters and emojis
+    content: str = "id,sehir,notlar,emoji\n"
+    content = content + "1,İzmir,\"Ege'nin incisi\",🌊\n"
+    content = content + "2,Ağrı,\"Dağı meşhur\",🏔️\n"
+    content = content + "3,Şanlıurfa,\"Tarihi kent\",🏛️\n"
+    content = content + "4,Eskişehir,\"Porsuk Çayı\",🛶\n"
+
+    opts: CsvOptions = csv_options(delimiter=",")
+    run_differential_test("temp_diff_utf8.csv", content, opts, "UTF-8 Multi-byte Differential")
+
+test_standard_csv_differential()
+test_multichar_delim_differential()
+test_utf8_multibyte_differential()
+
+print("streaming_differential_test passed")

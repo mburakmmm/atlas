@@ -5,6 +5,24 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-11-01
+
+### Added
+- **Multi-Character Delimiter Split Safety (`streaming.nox`)**:
+  - Implemented lookahead prefix-matching and `unconsumed_buffer` carry-over for multi-character delimiters (`||`, `::`, `---`).
+  - Delimiters split across chunk boundaries (even down to single-byte reads `chunk_bytes = 1`) are preserved without corrupting field values or falsely merging columns.
+- **True UTF-8 Multi-Byte Measurement for `max_record_bytes`**:
+  - Replaced code point counting (`len(s)`) with `nox.strings.byte_len(ch)` to accurately measure exact memory consumption for multi-byte UTF-8 text (e.g. Turkish characters `ğ, ü, ş, ö, ç, ı` and multi-byte emojis).
+  - Guarantees strict adherence to byte limits without silent buffer bloat on non-ASCII data.
+- **Bounded Row Buffering for Large `chunk_bytes`**:
+  - Modified `StreamingCsvReader.feed_chunk` to immediately pause processing as soon as `target_rows` are accumulated, storing remaining bytes in `unconsumed_buffer`.
+  - Memory consumption is strictly bounded by $O(\text{chunk\_rows})$ even when enormous read chunk sizes (e.g. 100 MB) are specified.
+- **Consistent Empty Statistics Contract (`streaming.nox`)**:
+  - Updated `stream_mean` and `stream_variance` to raise `AggregationError` when no non-missing observations exist (or $N < 2$ for sample variance), achieving 100% contract parity with `stats.nox` and `Table.mean()`.
+- **Differential & Property-Based Test Suite (`tests/streaming_differential_test.nox`)**:
+  - Added differential testing comparing `read_delimited_options()` (in-memory offline) against `StreamingCsvReader()` across 10 varied chunk sizes (`1, 2, 3, 5, 7, 11, 23, 64, 256, 1024` bytes).
+  - Verified 100% identical row, column, and cell equality across multi-line quoted fields, multi-char delimiters, and multi-byte UTF-8 content. Total test suites: 31 (100% passing).
+
 ## [0.7.1] - 2026-11-01
 
 ### Added
