@@ -1,0 +1,77 @@
+# tests/validation_test.nox — Unit tests for tabular validation, rule sets, error reporting, and row filtering.
+
+import nox.test
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import validation
+from validation import TableValidator, ValidationReport, ValidationError, rule_non_empty, rule_range, rule_length, rule_allowed_values, rule_email
+
+cols: list[ColumnDef] = [
+    ColumnDef("id", TYPE_INT, False),
+    ColumnDef("email", TYPE_STR, True),
+    ColumnDef("age", TYPE_INT, True),
+    ColumnDef("status", TYPE_STR, True),
+]
+s: Schema = Schema(cols)
+
+rows: list[list[Cell]] = [
+    # Row 0: Valid row
+    [cell_int(1), cell_str("alice@example.com"), cell_int(30), cell_str("active")],
+    # Row 1: Invalid email, age out of range (< 18), invalid status
+    [cell_int(2), cell_str("not-an-email"), cell_int(15), cell_str("unknown")],
+    # Row 2: Valid row
+    [cell_int(3), cell_str("charlie@domain.org"), cell_int(45), cell_str("pending")],
+    # Row 3: Empty email, negative age
+    [cell_int(4), cell_str(""), cell_int(-5), cell_str("active")],
+]
+
+t: Table = Table(s, rows)
+
+validator: TableValidator = TableValidator()
+validator.add_rule(rule_non_empty("email"))
+validator.add_rule(rule_email("email"))
+validator.add_rule(rule_range("age", 18.0, 100.0))
+validator.add_rule(rule_allowed_values("status", ["active", "pending", "closed"]))
+
+report: ValidationReport = validator.validate(t)
+
+# 1. Validation Report checks
+assert not report.is_valid()
+# Row 1 has 3 errors (email, age, status)
+# Row 3 has 3 errors (empty email, invalid email, negative age)
+# Total errors = 6
+nox.test.assert_eq_int(report.error_count(), 6, "6 validation errors found")
+
+row1_errs: list[ValidationError] = report.errors_for_row(1)
+nox.test.assert_eq_int(len(row1_errs), 3, "3 errors on row 1")
+
+email_errs: list[ValidationError] = report.errors_for_column("email")
+nox.test.assert_eq_int(len(email_errs), 3, "3 email errors")
+
+summary_text: str = report.summary()
+assert "Validation failed: 6 errors" in summary_text
+
+# 2. Filter valid rows
+t_valid: Table = validator.filter_valid(t)
+nox.test.assert_eq_int(t_valid.row_count(), 2, "2 rows are valid (row 0 and 2)")
+nox.test.assert_eq_str(t_valid.cell(0, 1).as_str(), "alice@example.com", "alice is valid")
+nox.test.assert_eq_str(t_valid.cell(1, 1).as_str(), "charlie@domain.org", "charlie is valid")
+
+# 3. Filter invalid rows
+t_invalid: Table = validator.filter_invalid(t)
+nox.test.assert_eq_int(t_invalid.row_count(), 2, "2 rows are invalid (row 1 and 3)")
+nox.test.assert_eq_int(t_invalid.cell(0, 0).as_int(), 2, "id 2 is invalid")
+nox.test.assert_eq_int(t_invalid.cell(1, 0).as_int(), 4, "id 4 is invalid")
+
+# 4. Perfectly valid table
+t_clean: Table = validator.filter_valid(t)
+clean_report: ValidationReport = validator.validate(t_clean)
+assert clean_report.is_valid()
+nox.test.assert_eq_int(clean_report.error_count(), 0, "0 errors in clean table")
+assert "Validation passed" in clean_report.summary()
+
+print("validation_test passed")

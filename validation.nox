@@ -1,0 +1,316 @@
+# validation.nox — Tabular schema validation framework inspired by Noxen for Atlas.
+
+import errors
+from errors import ColumnNotFoundError, SchemaError
+import values
+from values import Cell
+import schema
+from schema import Schema
+import table
+from table import Table
+
+RULE_NON_EMPTY: int = 1
+RULE_RANGE: int = 2
+RULE_MIN: int = 3
+RULE_MAX: int = 4
+RULE_LENGTH: int = 5
+RULE_ALLOWED_VALUES: int = 6
+RULE_EMAIL: int = 7
+
+def is_valid_email_str(s: str) -> bool:
+    if len(s) < 5:
+        return False
+    at_idx: int = -1
+    i: int = 0
+    n: int = len(s)
+    dot_after_at: bool = False
+
+    while i < n:
+        c: str = s[i]
+        if c == " " or c == "\t" or c == "\n" or c == "\r":
+            return False
+        if c == "@":
+            if at_idx >= 0:
+                return False
+            at_idx = i
+        elif at_idx >= 0 and c == ".":
+            dot_after_at = True
+        i = i + 1
+
+    if at_idx <= 0 or at_idx >= n - 1:
+        return False
+    if not dot_after_at:
+        return False
+    if s[n - 1] == ".":
+        return False
+    return True
+
+class ColumnRule:
+    col_name: str
+    rule_type: int
+    min_val: float
+    max_val: float
+    min_len: int
+    max_len: int
+    allowed_values: list[str]
+    rule_desc: str
+
+    def __init__(self: ColumnRule, col_name: str, rule_type: int, min_val: float, max_val: float, min_len: int, max_len: int, allowed: list[str], desc: str) -> None:
+        self.col_name = col_name
+        self.rule_type = rule_type
+        self.min_val = min_val
+        self.max_val = max_val
+        self.min_len = min_len
+        self.max_len = max_len
+        self.allowed_values = allowed
+        self.rule_desc = desc
+
+def rule_non_empty(col_name: str) -> ColumnRule:
+    empty_list: list[str] = []
+    return ColumnRule(col_name, RULE_NON_EMPTY, 0.0, 0.0, 0, 0, empty_list, "must not be null or empty")
+
+def rule_range(col_name: str, min_val: float, max_val: float) -> ColumnRule:
+    empty_list: list[str] = []
+    return ColumnRule(col_name, RULE_RANGE, min_val, max_val, 0, 0, empty_list, "must be between " + str(min_val) + " and " + str(max_val))
+
+def rule_min(col_name: str, min_val: float) -> ColumnRule:
+    empty_list: list[str] = []
+    return ColumnRule(col_name, RULE_MIN, min_val, 0.0, 0, 0, empty_list, "must be >= " + str(min_val))
+
+def rule_max(col_name: str, max_val: float) -> ColumnRule:
+    empty_list: list[str] = []
+    return ColumnRule(col_name, RULE_MAX, 0.0, max_val, 0, 0, empty_list, "must be <= " + str(max_val))
+
+def rule_length(col_name: str, min_len: int, max_len: int) -> ColumnRule:
+    empty_list: list[str] = []
+    return ColumnRule(col_name, RULE_LENGTH, 0.0, 0.0, min_len, max_len, empty_list, "length must be between " + str(min_len) + " and " + str(max_len))
+
+def rule_allowed_values(col_name: str, allowed: list[str]) -> ColumnRule:
+    desc: str = "must be one of: "
+    i: int = 0
+    while i < len(allowed):
+        desc = desc + allowed[i]
+        if i < len(allowed) - 1:
+            desc = desc + ", "
+        i = i + 1
+    return ColumnRule(col_name, RULE_ALLOWED_VALUES, 0.0, 0.0, 0, 0, allowed, desc)
+
+def rule_email(col_name: str) -> ColumnRule:
+    empty_list: list[str] = []
+    return ColumnRule(col_name, RULE_EMAIL, 0.0, 0.0, 0, 0, empty_list, "must be a valid email address")
+
+class ValidationError:
+    row_idx: int
+    col_name: str
+    rule_desc: str
+    message: str
+    actual_value: str
+
+    def __init__(self: ValidationError, row_idx: int, col_name: str, rule_desc: str, message: str, actual_value: str) -> None:
+        self.row_idx = row_idx
+        self.col_name = col_name
+        self.rule_desc = rule_desc
+        self.message = message
+        self.actual_value = actual_value
+
+    def to_string(self: ValidationError) -> str:
+        return "Row " + str(self.row_idx) + " column '" + self.col_name + "': " + self.message + " (actual: '" + self.actual_value + "')"
+
+class ValidationReport:
+    errors: list[ValidationError]
+    total_rows: int
+
+    def __init__(self: ValidationReport, errors: list[ValidationError], total_rows: int) -> None:
+        self.errors = errors
+        self.total_rows = total_rows
+
+    def is_valid(self: ValidationReport) -> bool:
+        return len(self.errors) == 0
+
+    def error_count(self: ValidationReport) -> int:
+        return len(self.errors)
+
+    def errors_for_row(self: ValidationReport, row_idx: int) -> list[ValidationError]:
+        res: list[ValidationError] = []
+        i: int = 0
+        n: int = len(self.errors)
+        while i < n:
+            e: ValidationError = self.errors[i]
+            if e.row_idx == row_idx:
+                res.append(e)
+            i = i + 1
+        return res
+
+    def errors_for_column(self: ValidationReport, col_name: str) -> list[ValidationError]:
+        res: list[ValidationError] = []
+        i: int = 0
+        n: int = len(self.errors)
+        while i < n:
+            e: ValidationError = self.errors[i]
+            if e.col_name == col_name:
+                res.append(e)
+            i = i + 1
+        return res
+
+    def summary(self: ValidationReport) -> str:
+        if len(self.errors) == 0:
+            return "Validation passed: 0 errors across " + str(self.total_rows) + " rows."
+        res: str = "Validation failed: " + str(len(self.errors)) + " errors found across " + str(self.total_rows) + " rows:\n"
+        limit: int = 10
+        if limit > len(self.errors):
+            limit = len(self.errors)
+        i: int = 0
+        while i < limit:
+            res = res + "  - " + self.errors[i].to_string() + "\n"
+            i = i + 1
+        if len(self.errors) > limit:
+            res = res + "  ... (" + str(len(self.errors) - limit) + " more errors)\n"
+        return res
+
+class TableValidator:
+    rules: list[ColumnRule]
+
+    def __init__(self: TableValidator) -> None:
+        self.rules = []
+
+    def add_rule(self: TableValidator, rule: ColumnRule) -> TableValidator:
+        self.rules.append(rule)
+        return self
+
+    def validate(self: TableValidator, t: Table) -> ValidationReport:
+        errs: list[ValidationError] = []
+        num_rows: int = t.row_count()
+        num_rules: int = len(self.rules)
+
+        rule_indices: list[int] = []
+        r_idx: int = 0
+        while r_idx < num_rules:
+            cname: str = self.rules[r_idx].col_name
+            cidx: int = t.schema.index_of(cname)
+            if cidx < 0:
+                raise ColumnNotFoundError("validation rule references unknown column: '" + cname + "'")
+            rule_indices.append(cidx)
+            r_idx = r_idx + 1
+
+        row_idx: int = 0
+        while row_idx < num_rows:
+            row: list[Cell] = t.rows[row_idx]
+            rule_idx: int = 0
+            while rule_idx < num_rules:
+                rule: ColumnRule = self.rules[rule_idx]
+                col_idx: int = rule_indices[rule_idx]
+                cell: Cell = row[col_idx]
+                val_str: str = cell.to_string()
+
+                if rule.rule_type == RULE_NON_EMPTY:
+                    if cell.is_missing() or val_str == "":
+                        errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "value is empty or missing", val_str))
+
+                elif rule.rule_type == RULE_RANGE:
+                    if not cell.is_missing() and cell.is_numeric():
+                        v: float = cell.as_float()
+                        if v < rule.min_val or v > rule.max_val:
+                            errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "value outside allowed range [" + str(rule.min_val) + ", " + str(rule.max_val) + "]", val_str))
+
+                elif rule.rule_type == RULE_MIN:
+                    if not cell.is_missing() and cell.is_numeric():
+                        v = cell.as_float()
+                        if v < rule.min_val:
+                            errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "value less than minimum " + str(rule.min_val), val_str))
+
+                elif rule.rule_type == RULE_MAX:
+                    if not cell.is_missing() and cell.is_numeric():
+                        v = cell.as_float()
+                        if v > rule.max_val:
+                            errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "value greater than maximum " + str(rule.max_val), val_str))
+
+                elif rule.rule_type == RULE_LENGTH:
+                    if not cell.is_missing():
+                        slen: int = len(val_str)
+                        if slen < rule.min_len or slen > rule.max_len:
+                            errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "string length (" + str(slen) + ") not in range [" + str(rule.min_len) + ", " + str(rule.max_len) + "]", val_str))
+
+                elif rule.rule_type == RULE_ALLOWED_VALUES:
+                    if not cell.is_missing():
+                        found: bool = False
+                        k: int = 0
+                        while k < len(rule.allowed_values):
+                            if val_str == rule.allowed_values[k]:
+                                found = True
+                            k = k + 1
+                        if not found:
+                            errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "value not in allowed list", val_str))
+
+                elif rule.rule_type == RULE_EMAIL:
+                    if not cell.is_missing():
+                        if not is_valid_email_str(val_str):
+                            errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "invalid email address format", val_str))
+
+                rule_idx = rule_idx + 1
+            row_idx = row_idx + 1
+
+        return ValidationReport(errs, num_rows)
+
+    def filter_valid(self: TableValidator, t: Table) -> Table:
+        report: ValidationReport = self.validate(t)
+        invalid_row_set: list[int] = []
+        i: int = 0
+        while i < len(report.errors):
+            ridx: int = report.errors[i].row_idx
+            already_in: bool = False
+            k: int = 0
+            while k < len(invalid_row_set):
+                if invalid_row_set[k] == ridx:
+                    already_in = True
+                k = k + 1
+            if not already_in:
+                invalid_row_set.append(ridx)
+            i = i + 1
+
+        valid_rows: list[list[Cell]] = []
+        r_idx: int = 0
+        num_rows: int = t.row_count()
+        while r_idx < num_rows:
+            is_invalid: bool = False
+            k = 0
+            while k < len(invalid_row_set):
+                if invalid_row_set[k] == r_idx:
+                    is_invalid = True
+                k = k + 1
+            if not is_invalid:
+                valid_rows.append(t.rows[r_idx])
+            r_idx = r_idx + 1
+
+        return Table(t.schema.copy(), valid_rows)
+
+    def filter_invalid(self: TableValidator, t: Table) -> Table:
+        report: ValidationReport = self.validate(t)
+        invalid_row_set: list[int] = []
+        i: int = 0
+        while i < len(report.errors):
+            ridx: int = report.errors[i].row_idx
+            already_in: bool = False
+            k: int = 0
+            while k < len(invalid_row_set):
+                if invalid_row_set[k] == ridx:
+                    already_in = True
+                k = k + 1
+            if not already_in:
+                invalid_row_set.append(ridx)
+            i = i + 1
+
+        invalid_rows: list[list[Cell]] = []
+        r_idx: int = 0
+        num_rows: int = t.row_count()
+        while r_idx < num_rows:
+            is_invalid: bool = False
+            k = 0
+            while k < len(invalid_row_set):
+                if invalid_row_set[k] == r_idx:
+                    is_invalid = True
+                k = k + 1
+            if is_invalid:
+                invalid_rows.append(t.rows[r_idx])
+            r_idx = r_idx + 1
+
+        return Table(t.schema.copy(), invalid_rows)

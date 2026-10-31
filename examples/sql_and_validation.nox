@@ -1,0 +1,41 @@
+# examples/sql_and_validation.nox — Demonstrates SQL DDL/INSERT generation and tabular data validation.
+
+import atlas
+from atlas import read_csv, Table, table_to_create_table_sql, table_to_insert_sql
+from atlas import TableValidator, ValidationReport, rule_non_empty, rule_range, rule_email, rule_allowed_values
+
+print("=== 1. SQL DDL & INSERT Kod Üretimi ===")
+csv_data: str = "id,name,role,salary\n1,Alice,Engineer,95000.0\n2,Bob,Manager,115000.0\n3,Charlie,Designer,82000.0\n"
+t_emp: Table = read_csv(csv_data)
+
+ddl_sqlite: str = table_to_create_table_sql(t_emp, "employees", dialect="sqlite", primary_key_col="id")
+print("SQLite DDL Şeması:\n" + ddl_sqlite)
+
+insert_stmt: str = table_to_insert_sql(t_emp, "employees")
+print("\nParametrik INSERT İfadesi:\n" + insert_stmt)
+
+print("\n=== 2. Noxen-Uyumlu Tablo Doğrulama (TableValidator) ===")
+dirty_csv: str = "id,email,age,role\n1,valid.user@work.com,29,Engineer\n2,broken-email,16,Intern\n3,director@corp.com,48,Director\n4,,35,UnknownRole\n"
+t_dirty: Table = read_csv(dirty_csv)
+print("Doğrulanacak Ham Tablo:")
+t_dirty.print_grid()
+
+validator: TableValidator = TableValidator()
+validator.add_rule(rule_non_empty("email"))
+validator.add_rule(rule_email("email"))
+validator.add_rule(rule_range("age", 18.0, 65.0))
+validator.add_rule(rule_allowed_values("role", ["Engineer", "Manager", "Designer", "Director", "Intern"]))
+
+report: ValidationReport = validator.validate(t_dirty)
+print("\nDoğrulama Raporu:")
+print(report.summary())
+
+print("Temizlenmiş (Sadece Geçerli) Satırlar:")
+t_valid: Table = validator.filter_valid(t_dirty)
+t_valid.print_grid()
+
+print("\nHatalı (İnceleme Gerektiren) Satırlar:")
+t_invalid: Table = validator.filter_invalid(t_dirty)
+t_invalid.print_grid()
+
+print("\nAtlas v0.4.0 SQL & Validation örneği başarıyla tamamlandı.")

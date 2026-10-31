@@ -1,0 +1,100 @@
+# sql_adapter.nox — Relational SQL and database mapper adapter for Atlas.
+
+import errors
+from errors import AtlasError, SchemaError, ColumnNotFoundError, ShapeError
+import values
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+
+def type_to_sql_type(data_type: int, dialect: str = "sqlite") -> str:
+    if data_type == TYPE_INT:
+        return "INTEGER"
+    if data_type == TYPE_FLOAT:
+        if dialect == "postgres" or dialect == "postgresql":
+            return "DOUBLE PRECISION"
+        return "REAL"
+    if data_type == TYPE_STR:
+        return "TEXT"
+    if data_type == TYPE_BOOL:
+        if dialect == "sqlite":
+            return "INTEGER"
+        return "BOOLEAN"
+    return "TEXT"
+
+def table_to_create_table_sql(t: Table, table_name: str, dialect: str = "sqlite", primary_key_col: str = "") -> str:
+    cols: list[ColumnDef] = t.schema.columns
+    num_cols: int = len(cols)
+    if num_cols == 0:
+        raise SchemaError("cannot generate CREATE TABLE for table with zero columns")
+
+    sql: str = "CREATE TABLE IF NOT EXISTS " + table_name + " (\n"
+    c_idx: int = 0
+    while c_idx < num_cols:
+        col: ColumnDef = cols[c_idx]
+        col_type_str: str = type_to_sql_type(col.data_type, dialect)
+        col_def_str: str = "    " + col.name + " " + col_type_str
+
+        if not col.nullable:
+            col_def_str = col_def_str + " NOT NULL"
+
+        if len(primary_key_col) > 0 and col.name == primary_key_col:
+            col_def_str = col_def_str + " PRIMARY KEY"
+
+        if c_idx < num_cols - 1:
+            col_def_str = col_def_str + ","
+        sql = sql + col_def_str + "\n"
+        c_idx = c_idx + 1
+
+    sql = sql + ");"
+    return sql
+
+def table_to_insert_sql(t: Table, table_name: str) -> str:
+    names: list[str] = t.column_names()
+    num_cols: int = len(names)
+    if num_cols == 0:
+        raise SchemaError("cannot generate INSERT statement for table with zero columns")
+
+    cols_part: str = ""
+    placeholders: str = ""
+    c_idx: int = 0
+    while c_idx < num_cols:
+        cols_part = cols_part + names[c_idx]
+        placeholders = placeholders + "?"
+        if c_idx < num_cols - 1:
+            cols_part = cols_part + ", "
+            placeholders = placeholders + ", "
+        c_idx = c_idx + 1
+
+    return "INSERT INTO " + table_name + " (" + cols_part + ") VALUES (" + placeholders + ");"
+
+def table_from_records(col_names: list[str], col_types: list[int], rows: list[list[Cell]]) -> Table:
+    num_names: int = len(col_names)
+    num_types: int = len(col_types)
+    if num_names != num_types:
+        raise SchemaError("column names count (" + str(num_names) + ") does not match column types count (" + str(num_types) + ")")
+
+    cols: list[ColumnDef] = []
+    i: int = 0
+    while i < num_names:
+        cols.append(ColumnDef(col_names[i], col_types[i], True))
+        i = i + 1
+
+    s: Schema = Schema(cols)
+    return Table(s, rows)
+
+def cell_from_db_value(kind: int, i: int, f: float, s: str, b: bool, is_null: bool) -> Cell:
+    # Feather and db-agnostic cell converter
+    if is_null or kind == 5: # VAL_NULL
+        return cell_null()
+    if kind == 1: # VAL_INT
+        return cell_int(i)
+    if kind == 2: # VAL_FLOAT
+        return cell_float(f)
+    if kind == 3: # VAL_STR
+        return cell_str(s)
+    if kind == 4: # VAL_BOOL
+        return cell_bool(b)
+    return cell_null()

@@ -42,6 +42,12 @@ from join import join_inner, join_inner_keys, join_left, join_left_keys
 import concat
 from concat import concat_rows, concat_cols
 
+import sql_adapter
+from sql_adapter import table_to_create_table_sql, table_to_insert_sql, table_from_records, cell_from_db_value
+
+import validation
+from validation import ColumnRule, ValidationError, ValidationReport, TableValidator, rule_non_empty, rule_range, rule_min, rule_max, rule_length, rule_allowed_values, rule_email
+
 # Convenience functional statistics API matching AGENTS.md:
 def col_mean(t: Table, col_name: str) -> float:
     return t.mean(col_name)

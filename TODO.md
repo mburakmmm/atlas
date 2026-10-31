@@ -11,8 +11,8 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.1.0** | **Temel Tablo, CSV, Filtreleme, Sıralama, İstatistik, GroupBy, JSON** | ✅ **TAMAMLANDI & YAYINLANDI** | 12/12 Test Geçti (`noxc test`) |
 | **v0.2.0** | **Tablo Birleştirme (Inner/Left Join) & Tablo Ekleme (Concat)** | ✅ **TAMAMLANDI & YAYINLANDI** | 14/14 Test Geçti (`noxc test`) |
 | **v0.3.0** | **Özel Ayraçlar (TSV, `;`), Kartiller (Quantiles) & Izgara Gösterimi** | ✅ **TAMAMLANDI & YAYINLANDI** | 17/17 Test Geçti (`noxc test`) |
-| **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ⏳ **PLANLANDI (Sıradaki)** | — |
-| **v1.0.0** | **Stabil Genel API Dondurma, Tam Belgelendirme & Üretim Onayı** | ⏳ **HEDEF SÜRÜM** | — |
+| **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
+| **v1.0.0** | **Stabil Genel API Dondurma, Tam Belgelendirme & Üretim Onayı** | ⏳ **HEDEF SÜRÜM (Sıradaki)** | — |
 
 ---
 
@@ -130,16 +130,21 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
-## 🔌 Sürüm 0.4.0 — Ekosistem Adaptörleri
+## ✅ Sürüm 0.4.0 — Ekosistem Adaptörleri (Tamamlananlar)
 
-- [ ] **Feather Entegrasyonu (SQL Database Mapper)**:
-  - Feather `SelectQuery` sonuçlarının doğrudan Atlas `Table` nesnesine dönüştürülmesi (`table_from_query(session, query)`).
-  - Atlas `Table` verilerinin Feather üzerinden veritabanına toplu eklenmesi (`table.to_sql(session, table_name, if_exists="append")`).
-- [ ] **Noxen Şema Doğrulama Entegrasyonu**:
-  - Tablo sütunlarının ve hücrelerinin Noxen validator kuralları ile otomatik doğrulanması.
-- [ ] **Birim Testler & Dokümantasyon**:
-  - `tests/feather_adapter_test.nox`
-  - `docs/integrations.md`
+- [x] **Feather & SQL Veritabanı Adaptörü (`sql_adapter.nox`)**:
+  - `table_to_create_table_sql(table, table_name, dialect, primary_key_col)` ile SQLite ve PostgreSQL DDL şeması üretimi.
+  - `table_to_insert_sql(table, table_name)` ile SQL enjeksiyonuna karşı %100 korumalı parametrik `?` INSERT ifadesi.
+  - `table_from_records(col_names, col_types, rows)` ile veritabanı sorgu kayıtlarından doğrudan `Table` üretimi.
+  - `cell_from_db_value(kind, i, f, s, b, is_null)` ile Feather `Value` ve standart DB değerlerinin `Cell` dönüşümü.
+- [x] **Noxen-Uyumlu Şema Doğrulama Motoru (`validation.nox`)**:
+  - `TableValidator` ve sütun bazlı kural seti: `rule_non_empty`, `rule_range`, `rule_min`, `rule_max`, `rule_length`, `rule_allowed_values`, `rule_email`.
+  - Hata detaylarını ve satır/sütun indekslerini raporlayan `ValidationReport`.
+  - Tablo satırlarını geçerli ve geçersiz olarak ayırma: `validator.filter_valid(table)` ve `validator.filter_invalid(table)`.
+- [x] **Birim Testler & Dokümantasyon**:
+  - `tests/sql_adapter_test.nox` (DDL, INSERT, record mapping, DB cell dönüşümleri).
+  - `tests/validation_test.nox` (kurallar, hata raporlama, geçerli/geçersiz satır süzme).
+  - `docs/integrations.md` ve `examples/sql_and_validation.nox`.
 
 ---
 

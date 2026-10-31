@@ -5,6 +5,22 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-01
+
+### Added
+- **Relational SQL & Feather Database Adapter (`sql_adapter.nox`)**:
+  - `table_to_create_table_sql(table, table_name, dialect, primary_key_col)` generating clean DDL for SQLite and PostgreSQL.
+  - `table_to_insert_sql(table, table_name)` generating injection-safe parameterized INSERT queries with `?` markers.
+  - `table_from_records(col_names, col_types, rows)` building tables directly from database result rowsets.
+  - `cell_from_db_value(kind, i, f, s, b, is_null)` providing Feather and generic DB value conversion.
+- **Noxen-Compatible Tabular Validation Engine (`validation.nox`)**:
+  - `TableValidator` configurable with column-specific rules.
+  - Rules: `rule_non_empty`, `rule_range`, `rule_min`, `rule_max`, `rule_length`, `rule_allowed_values`, and `rule_email`.
+  - Detailed `ValidationReport` with row/column error indexing and formatted summaries.
+  - Automatic row partitioning: `validator.filter_valid(table)` and `validator.filter_invalid(table)`.
+- **Tests**: `tests/sql_adapter_test.nox` and `tests/validation_test.nox` bringing test suite to 19 suites passing.
+- **Documentation & Examples**: `docs/integrations.md` and `examples/sql_and_validation.nox`.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added

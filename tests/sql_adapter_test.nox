@@ -1,0 +1,70 @@
+# tests/sql_adapter_test.nox — Unit tests for SQL schema generation, INSERT statements, and database record mapping.
+
+import nox.test
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_bool, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import sql_adapter
+from sql_adapter import table_to_create_table_sql, table_to_insert_sql, table_from_records, cell_from_db_value
+
+# 1. DDL CREATE TABLE generation
+cols: list[ColumnDef] = [
+    ColumnDef("id", TYPE_INT, False),
+    ColumnDef("username", TYPE_STR, False),
+    ColumnDef("score", TYPE_FLOAT, True),
+    ColumnDef("is_active", TYPE_BOOL, False),
+]
+s: Schema = Schema(cols)
+rows: list[list[Cell]] = [
+    [cell_int(1), cell_str("alice"), cell_float(98.5), cell_bool(True)],
+    [cell_int(2), cell_str("bob"), cell_null(), cell_bool(False)],
+]
+t: Table = Table(s, rows)
+
+# SQLite DDL with primary key
+sql_sqlite: str = table_to_create_table_sql(t, "users", dialect="sqlite", primary_key_col="id")
+assert "CREATE TABLE IF NOT EXISTS users (" in sql_sqlite
+assert "id INTEGER NOT NULL PRIMARY KEY" in sql_sqlite
+assert "username TEXT NOT NULL" in sql_sqlite
+assert "score REAL" in sql_sqlite
+assert "is_active INTEGER NOT NULL" in sql_sqlite
+
+# PostgreSQL DDL
+sql_pg: str = table_to_create_table_sql(t, "users", dialect="postgres")
+assert "score DOUBLE PRECISION" in sql_pg
+assert "is_active BOOLEAN NOT NULL" in sql_pg
+
+# 2. Parameterized INSERT statement generation
+insert_sql: str = table_to_insert_sql(t, "users")
+assert insert_sql == "INSERT INTO users (id, username, score, is_active) VALUES (?, ?, ?, ?);"
+
+# 3. Table creation from database records
+col_names: list[str] = ["product_id", "name", "price"]
+col_types: list[int] = [TYPE_INT, TYPE_STR, TYPE_FLOAT]
+db_rows: list[list[Cell]] = [
+    [cell_int(101), cell_str("Keyboard"), cell_float(49.99)],
+    [cell_int(102), cell_str("Monitor"), cell_float(199.50)],
+]
+t_from_db: Table = table_from_records(col_names, col_types, db_rows)
+nox.test.assert_eq_int(t_from_db.row_count(), 2, "2 rows from records")
+nox.test.assert_eq_int(t_from_db.column_count(), 3, "3 columns from records")
+nox.test.assert_eq_str(t_from_db.cell(0, 1).as_str(), "Keyboard", "record string cell")
+assert t_from_db.cell(1, 2).as_float() == 199.50
+
+# 4. Feather and generic DB value converter
+c_int: Cell = cell_from_db_value(1, 42, 0.0, "", False, False)
+assert c_int.as_int() == 42
+
+c_flt: Cell = cell_from_db_value(2, 0, 3.1415, "", False, False)
+assert c_flt.as_float() == 3.1415
+
+c_str: Cell = cell_from_db_value(3, 0, 0.0, "hello", False, False)
+assert c_str.as_str() == "hello"
+
+c_null: Cell = cell_from_db_value(5, 0, 0.0, "", False, True)
+assert c_null.is_missing()
+
+print("sql_adapter_test passed")
