@@ -11,7 +11,7 @@ from expr import Expr
 import sort
 from sort import sort_rows
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
 
 class Table:
     schema: Schema
@@ -327,6 +327,135 @@ class Table:
     def count_val(self: Table, col_name: str) -> int:
 
         return stat_count_non_missing(self.column_cells(col_name))
+
+    def quantile(self: Table, col_name: str, q: float) -> float:
+
+        return stat_quantile(self.column_cells(col_name), q)
+
+    def iqr(self: Table, col_name: str) -> float:
+
+        return stat_iqr(self.column_cells(col_name))
+
+    def filter_outliers_iqr(self: Table, col_name: str, multiplier: float = 1.5, keep_missing: bool = True) -> Table:
+
+        cells: list[Cell] = self.column_cells(col_name)
+        q25: float = stat_quantile(cells, 0.25)
+        q75: float = stat_quantile(cells, 0.75)
+        iqr_val: float = q75 - q25
+        lower_bound: float = q25 - multiplier * iqr_val
+        upper_bound: float = q75 + multiplier * iqr_val
+
+        col_idx: int = self.schema.index_of(col_name)
+        filtered_rows: list[list[Cell]] = []
+        r_idx: int = 0
+        num_rows: int = len(self.rows)
+        while r_idx < num_rows:
+            r: list[Cell] = self.rows[r_idx]
+            c: Cell = r[col_idx]
+            if c.is_missing():
+                if keep_missing:
+                    filtered_rows.append(r)
+            elif c.is_numeric():
+                v: float = c.as_float()
+                if v >= lower_bound and v <= upper_bound:
+                    filtered_rows.append(r)
+            else:
+                filtered_rows.append(r)
+            r_idx = r_idx + 1
+        return Table(self.schema.copy(), filtered_rows)
+
+    def to_grid_string(self: Table, max_rows: int = 10, max_col_width: int = 30) -> str:
+
+        names: list[str] = self.column_names()
+        num_cols: int = len(names)
+        if num_cols == 0:
+            return "+--+\n|  |\n+--+\n"
+
+        col_widths: list[int] = []
+        c: int = 0
+        while c < num_cols:
+            w: int = len(names[c])
+            col_widths.append(w)
+            c = c + 1
+
+        limit: int = max_rows
+        if limit > len(self.rows):
+            limit = len(self.rows)
+
+        r_idx: int = 0
+        while r_idx < limit:
+            row: list[Cell] = self.rows[r_idx]
+            c = 0
+            while c < num_cols:
+                s: str = row[c].to_string()
+                s_len: int = len(s)
+                if s_len > max_col_width:
+                    s_len = max_col_width
+                if s_len > col_widths[c]:
+                    col_widths[c] = s_len
+                c = c + 1
+            r_idx = r_idx + 1
+
+        border: str = "+"
+        c = 0
+        while c < num_cols:
+            k: int = 0
+            seg: str = ""
+            while k < col_widths[c] + 2:
+                seg = seg + "-"
+                k = k + 1
+            border = border + seg + "+"
+            c = c + 1
+        border = border + "\n"
+
+        header_line: str = "|"
+        c = 0
+        while c < num_cols:
+            name: str = names[c]
+            header_line = header_line + " " + name
+            pad: int = col_widths[c] - len(name)
+            k: int = 0
+            while k < pad:
+                header_line = header_line + " "
+                k = k + 1
+            header_line = header_line + " |"
+            c = c + 1
+        header_line = header_line + "\n"
+
+        out: str = border + header_line + border
+
+        r_idx = 0
+        while r_idx < limit:
+            row: list[Cell] = self.rows[r_idx]
+            row_line: str = "|"
+            c = 0
+            while c < num_cols:
+                val: str = row[c].to_string()
+                if len(val) > max_col_width:
+                    if max_col_width > 3:
+                        val = val[:max_col_width - 3] + "..."
+                    else:
+                        val = val[:max_col_width]
+                row_line = row_line + " " + val
+                pad: int = col_widths[c] - len(val)
+                k: int = 0
+                while k < pad:
+                    row_line = row_line + " "
+                    k = k + 1
+                row_line = row_line + " |"
+                c = c + 1
+            row_line = row_line + "\n"
+            out = out + row_line
+            r_idx = r_idx + 1
+
+        out = out + border
+        if len(self.rows) > limit:
+            out = out + "... (" + str(len(self.rows) - limit) + " more rows)\n"
+        return out
+
+    def print_grid(self: Table, max_rows: int = 10, max_col_width: int = 30) -> None:
+
+        print(self.to_grid_string(max_rows, max_col_width))
 
     def print_preview(self: Table, max_rows: int = 10) -> None:
 

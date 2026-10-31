@@ -6,20 +6,23 @@ Inspired by Pandas but crafted natively for the **Nox** static type system, Atla
 
 [![Nox Compiler](https://img.shields.io/badge/noxc-2.0.86-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-14%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-17%20passed-success.svg)](tests/)
 
 ---
 
 ## Features
 
-- 📑 **RFC 4180 CSV I/O**: Robust parsing of commas, quotes, and newlines via `nox.csv` with automatic schema inference.
+- 📑 **RFC 4180 CSV & TSV I/O**: Robust parsing of commas, tabs, semicolons, and custom delimiters with automatic schema inference.
+- 🗃️ **Custom Delimiters**: Full support for TSV (`read_tsv`), semicolon (`;`), and custom delimiters (`read_delimited`, `to_delimited`).
 - 🔗 **Relational Joins**: Inner and left-outer joins (`join_inner`, `join_left`) with collision suffixes and null key isolation.
 - 🧱 **Table Concatenation**: Vertical row concatenation (`concat_rows`) with schema alignment, and horizontal concatenation (`concat_cols`).
 - 🔍 **Declarative Filtering**: Type-safe expression trees (`Expr`) with comparisons, string matches, set membership, and logical operators (`AND`/`OR`/`NOT`).
+- 📈 **Quantiles & Outlier Detection**: Continuous linear interpolation quantiles (`table.quantile`), IQR, and Tukey's fences outlier filtering (`table.filter_outliers_iqr`).
 - 📊 **Summary Statistics**: Mean, median, sample & population variance/stddev implemented via numerically stable **Welford's algorithm**.
 - 🗂️ **Grouping & Aggregations**: Deterministic multi-key group-by with count, sum, mean, median, min, and max aggregations.
 - 🔀 **Stable Multi-key Sorting**: Guaranteed $O(N \log N)$ stable merge sort with per-key ascending/descending flags and null positioning.
 - 🧹 **Missing Value Management**: Explicit `Cell(TYPE_NULL)` tracking, inspection (`count_missing`), replacement (`fill_missing`), and row dropping (`drop_missing`).
+- 🖥️ **Pretty Grid Formatter**: Clean ASCII terminal grid display (`table.print_grid()`, `table.to_grid_string()`) with auto-width adjustment and truncation.
 - 🔄 **JSON ↔ CSV Conversion**: Direct tabular bidirectional round-trips for JSON array-of-objects representations via `nox.json` and `JsonWriter`.
 - 🛡️ **Security Built-in**: Protection against spreadsheet formula injection (`=`, `+`, `-`, `@`) and accidental file overwrites.
 

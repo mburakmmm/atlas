@@ -5,6 +5,19 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-01
+
+### Added
+- **Custom Delimiters Engine**: Generalized RFC 4180 parsing and serializing state machine supporting arbitrary delimiters (`,`, `;`, `\t`, `|`, etc.) in `delimited.nox`.
+- **TSV Support**: Native tab-separated values reading and writing via `read_tsv`, `to_tsv`, `read_tsv_file`, and `write_tsv_file`.
+- **Custom Delimited File Operations**: `read_delimited`, `to_delimited`, `read_delimited_file`, and `write_delimited_file`.
+- **Quantiles & Percentiles**: `stat_quantile` and `table.quantile(col_name, q)` with continuous linear interpolation (NumPy / R Type-7 compatible).
+- **Interquartile Range (IQR)**: `stat_iqr` and `table.iqr(col_name)`.
+- **Outlier Detection & Filtering**: `table.filter_outliers_iqr(col_name, multiplier=1.5, keep_missing=True)` using Tukey's fences.
+- **Pretty Grid Formatter**: Terminal ASCII grid formatter `table.to_grid_string()` and `table.print_grid()` with column auto-width calculation and cell truncation.
+- **Tests**: `tests/tsv_test.nox`, `tests/quantile_test.nox`, and `tests/grid_test.nox` bringing the test suite to 17 suites passing.
+- **Documentation & Examples**: `docs/delimiters.md`, `docs/quantiles.md`, and `examples/delimited_and_quantiles.nox`.
+
 ## [0.2.0] - 2026-11-01
 
 ### Added

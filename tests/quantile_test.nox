@@ -1,0 +1,94 @@
+# tests/quantile_test.nox — Unit tests for quantiles, percentiles, IQR, and outlier filtering.
+
+import nox.test
+import errors
+from errors import AggregationError
+import values
+from values import Cell, cell_int, cell_float, cell_null
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import stats
+from stats import stat_quantile, stat_iqr
+
+# 1. Basic quantile verification on known 5-element dataset [10, 20, 30, 40, 50]
+cells5: list[Cell] = [cell_int(10), cell_int(20), cell_int(30), cell_int(40), cell_int(50)]
+
+q0: float = stat_quantile(cells5, 0.0)
+assert q0 == 10.0
+
+q25: float = stat_quantile(cells5, 0.25)
+assert q25 == 20.0
+
+q50: float = stat_quantile(cells5, 0.5)
+assert q50 == 30.0
+
+q75: float = stat_quantile(cells5, 0.75)
+assert q75 == 40.0
+
+q100: float = stat_quantile(cells5, 1.0)
+assert q100 == 50.0
+
+iqr_val: float = stat_iqr(cells5)
+assert iqr_val == 20.0
+
+# 2. Linear interpolation on 4 elements [10, 20, 30, 40]
+cells4: list[Cell] = [cell_float(10.0), cell_float(20.0), cell_float(30.0), cell_float(40.0)]
+# pos for q=0.5 is 0.5 * 3 = 1.5 -> flts[1] + 0.5 * (flts[2] - flts[1]) = 20.0 + 0.5 * 10.0 = 25.0
+q_med: float = stat_quantile(cells4, 0.5)
+assert q_med == 25.0
+
+# pos for q=0.25 is 0.25 * 3 = 0.75 -> flts[0] + 0.75 * (flts[1] - flts[0]) = 10.0 + 0.75 * 10.0 = 17.5
+q_25_4: float = stat_quantile(cells4, 0.25)
+assert q_25_4 == 17.5
+
+# 3. Table method integration
+s: Schema = Schema([ColumnDef("reading", 1, True)]) # TYPE_INT = 1
+rows: list[list[Cell]] = [
+    [cell_int(10)],
+    [cell_int(12)],
+    [cell_int(11)],
+    [cell_int(13)],
+    [cell_int(12)],
+    [cell_int(100)], # Extreme positive outlier
+    [cell_int(-80)], # Extreme negative outlier
+]
+t: Table = Table(s, rows)
+
+t_q50: float = t.quantile("reading", 0.5)
+assert t_q50 == 12.0
+
+t_iqr: float = t.iqr("reading")
+assert t_iqr > 0.0
+
+# Outlier filtering with 1.5 * IQR
+t_clean: Table = t.filter_outliers_iqr("reading", 1.5)
+# Outliers 100 and -80 should be removed, leaving 5 normal readings
+nox.test.assert_eq_int(t_clean.row_count(), 5, "5 rows after outlier filtering")
+
+# Verify all remaining values are within normal bounds
+r_idx: int = 0
+while r_idx < t_clean.row_count():
+    val: int = t_clean.cell(r_idx, 0).as_int()
+    assert val >= 10
+    assert val <= 13
+    r_idx = r_idx + 1
+
+# 4. Error cases
+caught_invalid_q: bool = False
+try:
+    bad_q: float = stat_quantile(cells5, 1.5)
+except AggregationError:
+    caught_invalid_q = True
+assert caught_invalid_q
+
+caught_empty: bool = False
+try:
+    empty_cells: list[Cell] = []
+    bad_empty: float = stat_quantile(empty_cells, 0.5)
+except AggregationError:
+    caught_empty = True
+assert caught_empty
+
+print("quantile_test passed")

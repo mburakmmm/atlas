@@ -141,3 +141,34 @@ def stat_max(cells: list[Cell]) -> Cell:
     if not found:
         raise AggregationError("cannot compute max: all values are missing or table is empty")
     return best
+
+def stat_quantile(cells: list[Cell], q: float) -> float:
+    if q < 0.0 or q > 1.0:
+        raise AggregationError("quantile q must be between 0.0 and 1.0, got " + str(q))
+    flts: list[float] = []
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            flts.append(c.as_float())
+        i = i + 1
+
+    m: int = len(flts)
+    if m == 0:
+        raise AggregationError("cannot compute quantile: no non-missing numeric observations")
+    if m == 1:
+        return flts[0]
+
+    flts.sort()
+    pos: float = q * float(m - 1)
+    idx: int = int(pos)
+    fraction: float = pos - float(idx)
+    if idx >= m - 1:
+        return flts[m - 1]
+    return flts[idx] + fraction * (flts[idx + 1] - flts[idx])
+
+def stat_iqr(cells: list[Cell]) -> float:
+    q75: float = stat_quantile(cells, 0.75)
+    q25: float = stat_quantile(cells, 0.25)
+    return q75 - q25

@@ -16,7 +16,7 @@ import sort
 from sort import sort_rows
 
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
 
 import table
 from table import Table, create_table
@@ -27,11 +27,14 @@ from groupby import GroupedTable, AggregateDef, group_by, agg_count, agg_sum, ag
 import csv_adapter
 from csv_adapter import read_csv, to_csv, infer_schema
 
+import delimited
+from delimited import parse_delimited, dump_delimited, read_delimited, to_delimited, read_tsv, to_tsv
+
 import json_adapter
 from json_adapter import table_from_json, table_to_json, csv_to_json, json_to_csv
 
 import io
-from io import read_csv_file, write_csv_file, read_json_file, write_json_file
+from io import read_csv_file, write_csv_file, read_json_file, write_json_file, read_delimited_file, write_delimited_file, read_tsv_file, write_tsv_file
 
 import join
 from join import join_inner, join_inner_keys, join_left, join_left_keys
@@ -66,3 +69,12 @@ def col_count(t: Table, col_name: str) -> int:
 
 def col_count_missing(t: Table, col_name: str) -> int:
     return t.count_missing(col_name)
+
+def col_quantile(t: Table, col_name: str, q: float) -> float:
+    return t.quantile(col_name, q)
+
+def col_iqr(t: Table, col_name: str) -> float:
+    return t.iqr(col_name)
+
+def filter_outliers(t: Table, col_name: str, multiplier: float = 1.5, keep_missing: bool = True) -> Table:
+    return t.filter_outliers_iqr(col_name, multiplier, keep_missing)

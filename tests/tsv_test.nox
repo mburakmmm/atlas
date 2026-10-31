@@ -1,0 +1,85 @@
+# tests/tsv_test.nox — Comprehensive unit tests for TSV and custom delimiters.
+
+import nox.test
+import nox.fs
+import errors
+from errors import CsvImportError, ShapeError
+import values
+from values import TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import delimited
+from delimited import parse_delimited, dump_delimited, read_delimited, to_delimited, read_tsv, to_tsv
+import io
+from io import read_tsv_file, write_tsv_file, read_delimited_file, write_delimited_file
+
+# 1. TSV parsing & inference
+raw_tsv: str = "name\tage\tscore\nAlice\t30\t95.5\nBob\t25\t88.0\nCharlie\t35\t72.3\n"
+t: Table = read_tsv(raw_tsv)
+
+nox.test.assert_eq_int(t.row_count(), 3, "3 rows in TSV")
+nox.test.assert_eq_int(t.column_count(), 3, "3 cols in TSV")
+nox.test.assert_eq_str(t.column_names()[0], "name", "name header")
+nox.test.assert_eq_str(t.column_names()[1], "age", "age header")
+nox.test.assert_eq_str(t.column_names()[2], "score", "score header")
+
+nox.test.assert_eq_str(t.cell(0, 0).as_str(), "Alice", "Alice name")
+nox.test.assert_eq_int(t.cell(0, 1).as_int(), 30, "Alice age")
+assert t.cell(0, 2).as_float() == 95.5
+
+# 2. TSV roundtrip serialization
+out_tsv: str = to_tsv(t)
+t2: Table = read_tsv(out_tsv)
+nox.test.assert_eq_int(t2.row_count(), 3, "roundtrip row count")
+nox.test.assert_eq_str(t2.cell(1, 0).as_str(), "Bob", "roundtrip cell check")
+nox.test.assert_eq_int(t2.cell(1, 1).as_int(), 25, "roundtrip cell check")
+
+# 3. Semicolon delimited
+raw_sc: str = "product;price;in_stock\nLaptop;1200;true\nMouse;25;true\nMonitor;300;false\n"
+t_sc: Table = read_delimited(raw_sc, ";")
+
+nox.test.assert_eq_int(t_sc.row_count(), 3, "3 rows in semicolon CSV")
+nox.test.assert_eq_int(t_sc.column_count(), 3, "3 cols in semicolon CSV")
+nox.test.assert_eq_str(t_sc.column_names()[0], "product", "product header")
+nox.test.assert_eq_int(t_sc.cell(0, 1).as_int(), 1200, "1200 price")
+assert t_sc.cell(0, 2).as_bool() == True
+assert t_sc.cell(2, 2).as_bool() == False
+
+out_sc: str = to_delimited(t_sc, ";")
+t_sc2: Table = read_delimited(out_sc, ";")
+nox.test.assert_eq_int(t_sc2.row_count(), 3, "semicolon roundtrip")
+nox.test.assert_eq_str(t_sc2.cell(1, 0).as_str(), "Mouse", "semicolon item")
+
+# 4. Pipe delimited with quotes and embedded delimiter
+raw_pipe: str = "id|title|desc\n1|\"War and Peace\"|\"Epic novel | classic\"\n2|\"1984\"|\"Dystopian fiction\"\n"
+t_pipe: Table = read_delimited(raw_pipe, "|")
+
+nox.test.assert_eq_int(t_pipe.row_count(), 2, "2 rows in pipe delimited")
+nox.test.assert_eq_str(t_pipe.cell(0, 1).as_str(), "War and Peace", "title with quotes")
+nox.test.assert_eq_str(t_pipe.cell(0, 2).as_str(), "Epic novel | classic", "desc with embedded pipe")
+
+out_pipe: str = to_delimited(t_pipe, "|")
+t_pipe2: Table = read_delimited(out_pipe, "|")
+nox.test.assert_eq_str(t_pipe2.cell(0, 2).as_str(), "Epic novel | classic", "pipe roundtrip")
+
+# 5. Filesystem TSV IO
+tmp_path: str = "/tmp/test_atlas_tsv_io.tsv"
+if nox.fs.exists(tmp_path):
+    nox.fs.remove_file(tmp_path)
+
+raw_fs: str = "city\tpopulation\nIstanbul\t15000000\nAnkara\t5500000\n"
+t_fs: Table = read_tsv(raw_fs)
+write_tsv_file(t_fs, tmp_path)
+
+t_fs2: Table = read_tsv_file(tmp_path)
+nox.test.assert_eq_int(t_fs2.row_count(), 2, "2 rows from file")
+nox.test.assert_eq_str(t_fs2.cell(0, 0).as_str(), "Istanbul", "Istanbul cell")
+nox.test.assert_eq_int(t_fs2.cell(0, 1).as_int(), 15000000, "15000000 cell")
+nox.test.assert_eq_str(t_fs2.cell(1, 0).as_str(), "Ankara", "Ankara cell")
+
+if nox.fs.exists(tmp_path):
+    nox.fs.remove_file(tmp_path)
+
+print("tsv_test passed")

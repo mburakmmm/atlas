@@ -1,0 +1,34 @@
+# examples/delimited_and_quantiles.nox — Custom delimiters (TSV, ;), quantiles, and outlier filtering.
+
+import atlas
+from atlas import read_tsv, to_tsv, read_delimited, to_delimited, Table
+
+print("=== 1. TSV Okuma & Izgara Tablo Formatlama ===")
+tsv_data: str = "product\tcategory\tprice\nMacBook Pro\tElectronics\t2499.0\nWireless Mouse\tAccessories\t29.9\nCoffee Mug\tKitchen\t14.5\nMechanical Keyboard\tAccessories\t129.0\n"
+
+t: Table = read_tsv(tsv_data)
+t.print_grid()
+
+print("\n=== 2. Noktalı Virgül (;) Ayraçlı Veri ve Sayısal Özet ===")
+semicolon_data: str = "measurement;timestamp;value\nM1;2026-10-01;10.5\nM2;2026-10-02;11.2\nM3;2026-10-03;10.8\nM4;2026-10-04;11.5\nM5;2026-10-05;11.0\nM6;2026-10-06;95.0\n"
+
+t_sensor: Table = read_delimited(semicolon_data, ";")
+t_sensor.print_grid()
+
+med: float = t_sensor.median("value")
+q25: float = t_sensor.quantile("value", 0.25)
+q75: float = t_sensor.quantile("value", 0.75)
+iqr: float = t_sensor.iqr("value")
+
+print("\nİstatistikler:")
+print("Medyan: " + str(med))
+print("Q1 (0.25): " + str(q25))
+print("Q3 (0.75): " + str(q75))
+print("IQR: " + str(iqr))
+
+print("\n=== 3. IQR Aykırı Değer (Outlier) Filtreleme ===")
+t_cleaned: Table = t_sensor.filter_outliers_iqr("value", 1.5)
+print("Aykırı değer (95.0) elendikten sonra temizlenmiş veri:")
+t_cleaned.print_grid()
+
+print("\nAtlas v0.3.0 Delimited & Quantiles örneği başarıyla tamamlandı.")

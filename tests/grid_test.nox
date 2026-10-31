@@ -1,0 +1,37 @@
+# tests/grid_test.nox — Unit tests for pretty table grid formatting.
+
+import nox.test
+import values
+from values import cell_int, cell_str
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+
+s: Schema = Schema([
+    ColumnDef("id", 1, False),
+    ColumnDef("name", 3, False),
+    ColumnDef("city", 3, True),
+])
+
+rows: list[list[values.Cell]] = [
+    [cell_int(1), cell_str("Alice"), cell_str("Ankara")],
+    [cell_int(2), cell_str("Bob"), cell_str("Istanbul")],
+]
+
+t: Table = Table(s, rows)
+grid: str = t.to_grid_string()
+
+# Check grid structure
+assert "+---" in grid
+assert "| id" in grid
+assert "| name" in grid
+assert "| city" in grid
+assert "Alice" in grid
+assert "Istanbul" in grid
+
+# Check truncation
+grid_truncated: str = t.to_grid_string(max_rows=1)
+assert "... (1 more rows)" in grid_truncated
+
+print("grid_test passed")

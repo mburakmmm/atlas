@@ -10,8 +10,8 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | :--- | :--- | :--- | :--- |
 | **v0.1.0** | **Temel Tablo, CSV, Filtreleme, Sıralama, İstatistik, GroupBy, JSON** | ✅ **TAMAMLANDI & YAYINLANDI** | 12/12 Test Geçti (`noxc test`) |
 | **v0.2.0** | **Tablo Birleştirme (Inner/Left Join) & Tablo Ekleme (Concat)** | ✅ **TAMAMLANDI & YAYINLANDI** | 14/14 Test Geçti (`noxc test`) |
-| **v0.3.0** | **Özel Ayraçlar (TSV, `;`), Kartiller (Quantiles) & Rune Entegrasyonu** | ⏳ **PLANLANDI (Sıradaki)** | — |
-| **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ⏳ **PLANLANDI** | — |
+| **v0.3.0** | **Özel Ayraçlar (TSV, `;`), Kartiller (Quantiles) & Izgara Gösterimi** | ✅ **TAMAMLANDI & YAYINLANDI** | 17/17 Test Geçti (`noxc test`) |
+| **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ⏳ **PLANLANDI (Sıradaki)** | — |
 | **v1.0.0** | **Stabil Genel API Dondurma, Tam Belgelendirme & Üretim Onayı** | ⏳ **HEDEF SÜRÜM** | — |
 
 ---
@@ -105,23 +105,28 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
-## 📦 Sürüm 0.3.0 — Özel Ayraçlar & İleri İstatistikler
+## ✅ Sürüm 0.3.0 — Özel Ayraçlar & İleri İstatistikler (Tamamlananlar)
 
-- [ ] **Özel CSV Ayraç Ayrıştırıcısı (Custom Delimiters)**:
+- [x] **Özel CSV Ayraç Ayrıştırıcısı (Custom Delimiters)**:
   - Standart virgül dışındaki ayraçlar: Noktalı virgül (`;`), Tab (`\t`), Pipe (`|`).
-  - RFC 4180 durum makinesinin ayraç parametresiyle genelleştirilmesi.
-  - TSV desteği (`read_tsv`, `to_tsv`).
-- [ ] **Kartiller ve Yüzdelikler (Quantiles & Percentiles)**:
-  - $p$-yüzdelik hesabı (`table.quantile(col_name, q=0.25, 0.50, 0.75, 0.90)`).
+  - RFC 4180 durum makinesinin ayraç parametresiyle genelleştirilmesi (`delimited.nox`).
+  - TSV desteği (`read_tsv`, `to_tsv`, `read_tsv_file`, `write_tsv_file`).
+  - Özel ayraçlı G/Ç (`read_delimited`, `to_delimited`, `read_delimited_file`, `write_delimited_file`).
+- [x] **Kartiller ve Yüzdelikler (Quantiles & Percentiles)**:
+  - $p$-yüzdelik hesabı (`table.quantile(col_name, q)` $0.0 \le q \le 1.0$).
   - Doğrusal enterpolasyon (linear interpolation / R-7 / NumPy uyumlu) kuralları.
-- [ ] **Aykırı Değer (Outlier) Tespiti**:
-  - IQR (Interquartile Range) filtresi ile aykırı satırları süzme.
-- [ ] **Rune Terminal Tablo Entegrasyonu (İsteğe Bağlı)**:
-  - `table.to_rune_table()` adaptörü ile terminalde zengin renkli ve kenarlıklı tablo gösterimi.
-  - Core kütüphaneye Rune bağımlılığı eklemeden, opt-in formatlayıcı olarak sunulması.
-- [ ] **Birim Testler**:
-  - `tests/tsv_test.nox`
-  - `tests/quantile_test.nox`
+  - Kartiller arası açıklık (`table.iqr(col_name)` = Q3 - Q1).
+- [x] **Aykırı Değer (Outlier) Tespiti**:
+  - IQR filtresi ile aykırı satırları süzme (`table.filter_outliers_iqr(col_name, multiplier=1.5)`).
+- [x] **Terminal Izgara Tablo Formatlayıcısı (Pretty Grid Formatter)**:
+  - `table.to_grid_string()` ve `table.print_grid()` metotları ile sınır hizalı, otomatik sütun genişlikli ASCII ızgara gösterimi.
+- [x] **Birim Testler**:
+  - `tests/tsv_test.nox` (TSV, noktalı virgül, pipe, alıntılı alanlar ve dosya G/Ç).
+  - `tests/quantile_test.nox` (doğrusal enterpolasyon, kartiller, IQR, aykırı değer süzme).
+  - `tests/grid_test.nox` (ızgara formatlayıcı ve hücre kırpma testleri).
+- [x] **Dokümantasyon & Örnekler**:
+  - `docs/delimiters.md` ve `docs/quantiles.md`.
+  - `examples/delimited_and_quantiles.nox`.
 
 ---
 
