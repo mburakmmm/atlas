@@ -1,0 +1,116 @@
+# tests/concat_test.nox — Unit tests for vertical row concatenation and horizontal column concatenation.
+
+import nox.test
+import errors
+from errors import ShapeError, SchemaError
+import values
+from values import Cell, cell_int, cell_str, cell_float, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import concat
+from concat import concat_rows, concat_cols
+
+# Setup base tables for concat_rows
+s1: Schema = Schema([
+    ColumnDef("id", TYPE_INT),
+    ColumnDef("name", TYPE_STR),
+    ColumnDef("val", TYPE_FLOAT, True)
+])
+
+t1: Table = Table(s1, [
+    [cell_int(1), cell_str("A"), cell_float(10.0)],
+    [cell_int(2), cell_str("B"), cell_float(20.0)]
+])
+
+t2: Table = Table(s1, [
+    [cell_int(3), cell_str("C"), cell_float(30.0)]
+])
+
+# Table 3 has same columns but in reversed order
+s3: Schema = Schema([
+    ColumnDef("val", TYPE_FLOAT, True),
+    ColumnDef("name", TYPE_STR),
+    ColumnDef("id", TYPE_INT)
+])
+
+t3: Table = Table(s3, [
+    [cell_float(40.0), cell_str("D"), cell_int(4)]
+])
+
+# 1. concat_rows
+res_rows: Table = concat_rows([t1, t2, t3])
+nox.test.assert_eq_int(res_rows.row_count(), 4, "concat_rows combined 4 rows")
+nox.test.assert_eq_int(res_rows.column_count(), 3, "concat_rows 3 columns")
+
+# Row 0 from t1
+nox.test.assert_eq_int(res_rows.cell(0, 0).as_int(), 1, "row 0 id is 1")
+nox.test.assert_eq_str(res_rows.cell(0, 1).to_string(), "A", "row 0 name is A")
+
+# Row 3 from t3 (must be properly aligned to s1 order!)
+nox.test.assert_eq_int(res_rows.cell(3, 0).as_int(), 4, "row 3 id is 4 (aligned)")
+nox.test.assert_eq_str(res_rows.cell(3, 1).to_string(), "D", "row 3 name is D (aligned)")
+nox.test.assert_eq_float(res_rows.cell(3, 2).as_float(), 40.0, "row 3 val is 40.0 (aligned)")
+
+# 2. concat_cols (Horizontal)
+s_user: Schema = Schema([
+    ColumnDef("user_id", TYPE_INT),
+    ColumnDef("username", TYPE_STR)
+])
+t_user: Table = Table(s_user, [
+    [cell_int(101), cell_str("alice")],
+    [cell_int(102), cell_str("bob")]
+])
+
+s_metrics: Schema = Schema([
+    ColumnDef("login_count", TYPE_INT),
+    ColumnDef("score", TYPE_FLOAT)
+])
+t_metrics: Table = Table(s_metrics, [
+    [cell_int(5), cell_float(9.8)],
+    [cell_int(12), cell_float(8.4)]
+])
+
+res_cols: Table = concat_cols([t_user, t_metrics])
+nox.test.assert_eq_int(res_cols.row_count(), 2, "res_cols row count is 2")
+nox.test.assert_eq_int(res_cols.column_count(), 4, "res_cols column count is 4")
+nox.test.assert_eq_str(res_cols.column_names()[0], "user_id", "col 0 is user_id")
+nox.test.assert_eq_str(res_cols.column_names()[1], "username", "col 1 is username")
+nox.test.assert_eq_str(res_cols.column_names()[2], "login_count", "col 2 is login_count")
+nox.test.assert_eq_str(res_cols.column_names()[3], "score", "col 3 is score")
+
+# 3. concat_cols with name collision (suffix_collisions=True)
+s_dup: Schema = Schema([
+    ColumnDef("username", TYPE_STR)
+])
+t_dup: Table = Table(s_dup, [
+    [cell_str("alias_alice")],
+    [cell_str("alias_bob")]
+])
+
+res_collision: Table = concat_cols([t_user, t_dup], True)
+nox.test.assert_eq_int(res_collision.column_count(), 3, "3 columns after collision suffix")
+nox.test.assert_true(res_collision.schema.has_column("username"), "original username exists")
+nox.test.assert_true(res_collision.schema.has_column("username_2"), "username_2 exists")
+
+# 4. Error handling
+# Row count mismatch in concat_cols
+t_unequal: Table = Table(s_dup, [[cell_str("single_row")]])
+caught_unequal: bool = False
+try:
+    bad_concat: Table = concat_cols([t_user, t_unequal])
+except ShapeError:
+    caught_unequal = True
+nox.test.assert_true(caught_unequal, "row count mismatch must raise ShapeError")
+
+# Empty table list in concat_rows
+empty_tables: list[Table] = []
+caught_empty: bool = False
+try:
+    bad_rows: Table = concat_rows(empty_tables)
+except ShapeError:
+    caught_empty = True
+nox.test.assert_true(caught_empty, "empty table list must raise ShapeError")
+
+print("concat_test passed")

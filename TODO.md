@@ -9,8 +9,8 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | Sürüm | Faz / Odak | Durum | Test Durumu |
 | :--- | :--- | :--- | :--- |
 | **v0.1.0** | **Temel Tablo, CSV, Filtreleme, Sıralama, İstatistik, GroupBy, JSON** | ✅ **TAMAMLANDI & YAYINLANDI** | 12/12 Test Geçti (`noxc test`) |
-| **v0.2.0** | **Tablo Birleştirme (Inner/Left Join) & Tablo Ekleme (Concat)** | ⏳ **PLANLANDI (Sıradaki)** | — |
-| **v0.3.0** | **Özel Ayraçlar (TSV, `;`), Kartiller (Quantiles) & Rune Entegrasyonu** | ⏳ **PLANLANDI** | — |
+| **v0.2.0** | **Tablo Birleştirme (Inner/Left Join) & Tablo Ekleme (Concat)** | ✅ **TAMAMLANDI & YAYINLANDI** | 14/14 Test Geçti (`noxc test`) |
+| **v0.3.0** | **Özel Ayraçlar (TSV, `;`), Kartiller (Quantiles) & Rune Entegrasyonu** | ⏳ **PLANLANDI (Sıradaki)** | — |
 | **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ⏳ **PLANLANDI** | — |
 | **v1.0.0** | **Stabil Genel API Dondurma, Tam Belgelendirme & Üretim Onayı** | ⏳ **HEDEF SÜRÜM** | — |
 
@@ -80,27 +80,27 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
-## 🚀 Sürüm 0.2.0 — İlişkisel İşlemler & Tablo Birleştirme (Sıradaki Hedef)
+## ✅ Sürüm 0.2.0 — İlişkisel İşlemler & Tablo Birleştirme (Tamamlananlar)
 
-- [ ] **İç Birleştirme (Inner Join)**:
-  - İki tablonun ortak anahtar sütunları üzerinden birleştirilmesi (`table_a.join_inner(table_b, left_on, right_on, suffix_left="_left", suffix_right="_right")`).
-  - Eşleşmeyen satırların elenmesi ve çakışan sütun adlarına otomatik önek/sonek eklenmesi.
-- [ ] **Sol Dış Birleştirme (Left Join)**:
-  - Sol tablodaki tüm satırların korunması (`table_a.join_left(...)`).
+- [x] **İç Birleştirme (Inner Join)**:
+  - İki tablonun ortak anahtar sütunları üzerinden birleştirilmesi (`join_inner`, `join_inner_keys`).
+  - Eşleşmeyen satırların elenmesi ve çakışan sütun adlarına otomatik önek/sonek (`_left`, `_right`) eklenmesi.
+- [x] **Sol Dış Birleştirme (Left Join)**:
+  - Sol tablodaki tüm satırların korunması (`join_left`, `join_left_keys`).
   - Sağ tabloda eşleşmeyen satırlar için sağ sütunların `Cell(TYPE_NULL)` ile doldurulması.
-  - Join patlaması (kartelyen çarpım riski) tespiti ve güvenlik limitleri.
-- [ ] **Satır Ekleme / Dikey Birleştirme (`concat_rows`)**:
+  - Null anahtarların birbiriyle eşleşmemesi garantisi.
+- [x] **Satır Ekleme / Dikey Birleştirme (`concat_rows`)**:
   - Şeması uyumlu iki veya daha fazla tablonun alt alta birleştirilmesi.
   - Şema sütun sırası farklıysa ad bazında otomatik hizalama.
   - Eksik sütunlar için esnek doldurma veya katı şema modu.
-- [ ] **Sütun Ekleme / Yatay Birleştirme (`concat_cols`)**:
+- [x] **Sütun Ekleme / Yatay Birleştirme (`concat_cols`)**:
   - Eşit satır sayısına sahip tabloların yan yana birleştirilmesi.
-  - Çakışan sütun adlarının tespiti ve hata fırlatma politikası.
-- [ ] **Birim Testler**:
-  - `tests/join_test.nox` (1-1, 1-N, N-N join senaryoları, null anahtarlar, boş tablo joinleri).
-  - `tests/concat_test.nox` (dikey ve yatay birleştirme testleri).
-- [ ] **Dokümantasyon & Örnekler**:
-  - `docs/joins.md` kılavuzu.
+  - Çakışan sütun adlarının `_2`, `_3` sonekiyle otomatik çözülmesi (`suffix_collisions=True`).
+- [x] **Birim Testler**:
+  - `tests/join_test.nox` (1-1, 1-N, N-N join senaryoları, null anahtarlar, farklı anahtar adları).
+  - `tests/concat_test.nox` (dikey hizalı birleştirme ve yatay birleştirme testleri).
+- [x] **Dokümantasyon & Örnekler**:
+  - `docs/joins.md` ve `docs/concatenation.md` kılavuzları.
   - `examples/table_joins.nox` çalıştırılabilir örneği.
 
 ---

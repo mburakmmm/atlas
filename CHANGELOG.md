@@ -5,6 +5,17 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-01
+
+### Added
+- **Relational Joins**: `join_inner` and `join_inner_keys` for inner equi-joins with column collision disambiguation (`_left`, `_right`).
+- **Left Outer Joins**: `join_left` and `join_left_keys` preserving all left rows and padding unmatched right fields with `Cell(TYPE_NULL)`.
+- **Null Key Isolation**: Missing keys do not join against other missing keys.
+- **Vertical Concatenation (`concat_rows`)**: Multi-table row union with automatic column alignment across varying schemas and null-padding.
+- **Horizontal Concatenation (`concat_cols`)**: Multi-table column concatenation with strict row count invariant checks and automatic collision resolution.
+- **Tests**: `tests/join_test.nox` and `tests/concat_test.nox` bringing the test suite to 14 suites passing.
+- **Documentation & Examples**: `docs/joins.md`, `docs/concatenation.md`, and `examples/table_joins.nox`.
+
 ## [0.1.0] - 2026-11-01
 
 ### Added

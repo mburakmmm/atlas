@@ -1,0 +1,119 @@
+# concat.nox — Vertical row concatenation and horizontal column concatenation for Atlas.
+
+import errors
+from errors import ShapeError, SchemaError
+import values
+from values import Cell, cell_null
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+
+def concat_rows(tables: list[Table]) -> Table:
+    if len(tables) == 0:
+        raise ShapeError("concat_rows requires at least one table")
+    if len(tables) == 1:
+        return tables[0].clone()
+
+    target_schema: Schema = tables[0].schema.copy()
+    num_target_cols: int = target_schema.column_count()
+    combined_rows: list[list[Cell]] = []
+
+    t_idx: int = 0
+    num_tables: int = len(tables)
+    while t_idx < num_tables:
+        curr_t: Table = tables[t_idx]
+        # Build column index mapping for curr_t to align with target_schema
+        col_mappings: list[int] = []
+        c_i: int = 0
+        while c_i < num_target_cols:
+            col_def: ColumnDef = target_schema.columns[c_i]
+            src_idx: int = curr_t.schema.index_of(col_def.name)
+            if src_idx < 0 and not col_def.nullable:
+                raise ShapeError("cannot concatenate table at index " + str(t_idx) + ": non-nullable column '" + col_def.name + "' is missing")
+            col_mappings.append(src_idx)
+            c_i = c_i + 1
+
+        r_idx: int = 0
+        num_rows: int = curr_t.row_count()
+        while r_idx < num_rows:
+            old_r: list[Cell] = curr_t.rows[r_idx]
+            new_r: list[Cell] = []
+            m_i: int = 0
+            while m_i < num_target_cols:
+                mapped_src: int = col_mappings[m_i]
+                if mapped_src >= 0:
+                    new_r.append(old_r[mapped_src])
+                else:
+                    new_r.append(cell_null())
+                m_i = m_i + 1
+            combined_rows.append(new_r)
+            r_idx = r_idx + 1
+
+        t_idx = t_idx + 1
+
+    return Table(target_schema, combined_rows)
+
+def concat_cols(tables: list[Table], suffix_collisions: bool = True) -> Table:
+    if len(tables) == 0:
+        raise ShapeError("concat_cols requires at least one table")
+    if len(tables) == 1:
+        return tables[0].clone()
+
+    expected_rows: int = tables[0].row_count()
+    t_idx: int = 1
+    num_tables: int = len(tables)
+    while t_idx < num_tables:
+        if tables[t_idx].row_count() != expected_rows:
+            raise ShapeError("cannot concatenate columns: row count mismatch (expected " + str(expected_rows) + ", got " + str(tables[t_idx].row_count()) + " at table " + str(t_idx) + ")")
+        t_idx = t_idx + 1
+
+    # Build unified schema with collision resolution
+    out_cols: list[ColumnDef] = []
+    used_names: list[str] = []
+
+    t_idx = 0
+    while t_idx < num_tables:
+        curr_t: Table = tables[t_idx]
+        c_i: int = 0
+        num_cols: int = curr_t.column_count()
+        while c_i < num_cols:
+            col: ColumnDef = curr_t.schema.columns[c_i]
+            col_name: str = col.name
+            # Check collision
+            is_dup: bool = False
+            u_i: int = 0
+            while u_i < len(used_names):
+                if used_names[u_i] == col_name:
+                    is_dup = True
+                u_i = u_i + 1
+
+            if is_dup:
+                if not suffix_collisions:
+                    raise SchemaError("duplicate column name in concat_cols: '" + col_name + "'")
+                col_name = col_name + "_" + str(t_idx + 1)
+
+            used_names.append(col_name)
+            out_cols.append(ColumnDef(col_name, col.data_type, col.nullable))
+            c_i = c_i + 1
+        t_idx = t_idx + 1
+
+    out_schema: Schema = Schema(out_cols)
+
+    # Combine row cells horizontally
+    combined_rows: list[list[Cell]] = []
+    r_idx: int = 0
+    while r_idx < expected_rows:
+        row: list[Cell] = []
+        t_idx = 0
+        while t_idx < num_tables:
+            table_row: list[Cell] = tables[t_idx].rows[r_idx]
+            c_i = 0
+            while c_i < len(table_row):
+                row.append(table_row[c_i])
+                c_i = c_i + 1
+            t_idx = t_idx + 1
+        combined_rows.append(row)
+        r_idx = r_idx + 1
+
+    return Table(out_schema, combined_rows)

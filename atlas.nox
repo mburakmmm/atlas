@@ -33,6 +33,12 @@ from json_adapter import table_from_json, table_to_json, csv_to_json, json_to_cs
 import io
 from io import read_csv_file, write_csv_file, read_json_file, write_json_file
 
+import join
+from join import join_inner, join_inner_keys, join_left, join_left_keys
+
+import concat
+from concat import concat_rows, concat_cols
+
 # Convenience functional statistics API matching AGENTS.md:
 def col_mean(t: Table, col_name: str) -> float:
     return t.mean(col_name)

@@ -1,0 +1,48 @@
+# examples/table_joins.nox — Demonstrates inner joins, left outer joins, and concatenation.
+
+import atlas
+from atlas import Table, read_csv, join_inner, join_left, concat_rows, concat_cols
+
+# 1. Employees table
+emp_csv: str = "emp_id,name,dept_id,role\n" + \
+"1,Alice,10,Tech Lead\n" + \
+"2,Bob,20,Marketing Lead\n" + \
+"3,Charlie,10,Backend Dev\n" + \
+"4,Diana,30,Sales Exec\n" + \
+"5,Evan,99,Contractor\n"  # dept 99 does not exist in departments table
+
+# 2. Departments table
+dept_csv: str = "dept_id,dept_name,building\n" + \
+"10,Engineering,Building A\n" + \
+"20,Marketing,Building B\n" + \
+"30,Sales,Building C\n" + \
+"40,Human Resources,Building D\n"  # HR has no employees in emp_csv
+
+t_emp: Table = read_csv(emp_csv, True)
+t_dept: Table = read_csv(dept_csv, True)
+
+print("Employees Table:")
+t_emp.print_preview(5)
+
+print("\nDepartments Table:")
+t_dept.print_preview(5)
+
+# 3. Inner Join (only matching dept_ids)
+print("\n[Inner Join on 'dept_id']:")
+t_inner: Table = join_inner(t_emp, t_dept, ["dept_id"])
+t_inner.print_preview(5)
+
+# 4. Left Outer Join (all employees kept, unmatched dept padded with NULL)
+print("\n[Left Outer Join on 'dept_id'] (Notice Contractor Evan is kept with null department info):")
+t_left: Table = join_left(t_emp, t_dept, ["dept_id"])
+t_left.print_preview(5)
+
+# 5. Row Concatenation (combining new hires)
+new_hires_csv: str = "emp_id,name,dept_id,role\n" + \
+"6,Fiona,10,Data Engineer\n" + \
+"7,George,20,Designer\n"
+t_new_hires: Table = read_csv(new_hires_csv, True)
+
+t_all_emp: Table = concat_rows([t_emp, t_new_hires])
+print("\n[Row Concatenation] All employees (5 + 2 = 7 rows):")
+t_all_emp.print_preview(10)

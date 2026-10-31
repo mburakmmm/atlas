@@ -6,13 +6,15 @@ Inspired by Pandas but crafted natively for the **Nox** static type system, Atla
 
 [![Nox Compiler](https://img.shields.io/badge/noxc-2.0.86-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-12%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-14%20passed-success.svg)](tests/)
 
 ---
 
 ## Features
 
 - 📑 **RFC 4180 CSV I/O**: Robust parsing of commas, quotes, and newlines via `nox.csv` with automatic schema inference.
+- 🔗 **Relational Joins**: Inner and left-outer joins (`join_inner`, `join_left`) with collision suffixes and null key isolation.
+- 🧱 **Table Concatenation**: Vertical row concatenation (`concat_rows`) with schema alignment, and horizontal concatenation (`concat_cols`).
 - 🔍 **Declarative Filtering**: Type-safe expression trees (`Expr`) with comparisons, string matches, set membership, and logical operators (`AND`/`OR`/`NOT`).
 - 📊 **Summary Statistics**: Mean, median, sample & population variance/stddev implemented via numerically stable **Welford's algorithm**.
 - 🗂️ **Grouping & Aggregations**: Deterministic multi-key group-by with count, sum, mean, median, min, and max aggregations.
@@ -206,7 +208,7 @@ Atlas includes a full automated test suite:
 noxc test
 ```
 
-All 12 test suites run and verify:
+All 14 test suites run and verify:
 - Typed cell conversions and comparisons (`tests/values_test.nox`)
 - Schema uniqueness and projection invariants (`tests/schema_test.nox`)
 - Table shape checks and bounds (`tests/table_test.nox`)
@@ -217,6 +219,8 @@ All 12 test suites run and verify:
 - Welford's algorithm and numerical stability (`tests/stats_test.nox`)
 - Multi-column group-by engine (`tests/groupby_test.nox`)
 - Missing value cleaning and policies (`tests/missing_test.nox`)
+- Relational inner and left joins with collision suffixes (`tests/join_test.nox`)
+- Vertical and horizontal table concatenation (`tests/concat_test.nox`)
 - Overwrite safety and filesystem I/O (`tests/io_test.nox`)
 - End-to-end integration and regression pipelines (`tests/regression_test.nox`)
 

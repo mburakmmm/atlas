@@ -123,3 +123,21 @@ agg_min(target_col: str, output_col: str) -> AggregateDef
 agg_max(target_col: str, output_col: str) -> AggregateDef
 agg_count_non_missing(target_col: str, output_col: str) -> AggregateDef
 ```
+
+## 5. Relational Joins & Concatenation
+
+```nox
+# Inner Join
+join_inner(left: Table, right: Table, on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table
+join_inner_keys(left: Table, right: Table, left_on: list[str], right_on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table
+
+# Left Outer Join
+join_left(left: Table, right: Table, on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table
+join_left_keys(left: Table, right: Table, left_on: list[str], right_on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table
+
+# Vertical Concatenation (Row-wise)
+concat_rows(tables: list[Table]) -> Table
+
+# Horizontal Concatenation (Column-wise)
+concat_cols(tables: list[Table], suffix_collisions: bool = True) -> Table
+```

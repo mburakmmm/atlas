@@ -1,0 +1,118 @@
+# tests/join_test.nox — Unit tests for relational inner and left joins, collisions, and null padding.
+
+import nox.test
+import errors
+from errors import ColumnNotFoundError, ShapeError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import join
+from join import join_inner, join_inner_keys, join_left, join_left_keys
+
+# Setup left table (Employees)
+# id, name, dept_id, score
+s_emp: Schema = Schema([
+    ColumnDef("id", TYPE_INT),
+    ColumnDef("name", TYPE_STR),
+    ColumnDef("dept_id", TYPE_INT),
+    ColumnDef("score", TYPE_FLOAT)
+])
+
+r_e1: list[Cell] = [cell_int(1), cell_str("Alice"), cell_int(10), cell_float(95.0)]
+r_e2: list[Cell] = [cell_int(2), cell_str("Bob"), cell_int(20), cell_float(85.0)]
+r_e3: list[Cell] = [cell_int(3), cell_str("Charlie"), cell_int(10), cell_float(90.0)]
+r_e4: list[Cell] = [cell_int(4), cell_str("Diana"), cell_int(99), cell_float(70.0)]  # No matching dept
+r_e5: list[Cell] = [cell_int(5), cell_str("Evan"), cell_null(), cell_float(60.0)]    # Null dept_id
+
+t_emp: Table = Table(s_emp, [r_e1, r_e2, r_e3, r_e4, r_e5])
+
+# Setup right table (Departments)
+# dept_id, dept_name, score (collision test with emp.score)
+s_dept: Schema = Schema([
+    ColumnDef("dept_id", TYPE_INT),
+    ColumnDef("dept_name", TYPE_STR),
+    ColumnDef("score", TYPE_FLOAT)
+])
+
+r_d1: list[Cell] = [cell_int(10), cell_str("Engineering"), cell_float(4.8)]
+r_d2: list[Cell] = [cell_int(20), cell_str("Marketing"), cell_float(4.2)]
+r_d3: list[Cell] = [cell_int(30), cell_str("Sales"), cell_float(4.5)]      # No matching employee
+
+t_dept: Table = Table(s_dept, [r_d1, r_d2, r_d3])
+
+# 1. Inner Join on ["dept_id"]
+# Expected matches: Alice(10), Bob(20), Charlie(10) -> 3 rows
+t_inner: Table = join_inner(t_emp, t_dept, ["dept_id"])
+nox.test.assert_eq_int(t_inner.row_count(), 3, "inner join matched 3 rows")
+
+# Column collision: 'score' exists in both, should be 'score_left' and 'score_right'
+nox.test.assert_true(t_inner.schema.has_column("score_left"), "score_left exists")
+nox.test.assert_true(t_inner.schema.has_column("score_right"), "score_right exists")
+nox.test.assert_true(t_inner.schema.has_column("dept_name"), "dept_name exists")
+
+# Alice row
+nox.test.assert_eq_str(t_inner.cell(0, 1).to_string(), "Alice", "Alice name")
+nox.test.assert_eq_str(t_inner.cell_by_name(0, "dept_name").to_string(), "Engineering", "Alice is Eng")
+nox.test.assert_eq_float(t_inner.cell_by_name(0, "score_left").as_float(), 95.0, "Alice score_left 95")
+nox.test.assert_eq_float(t_inner.cell_by_name(0, "score_right").as_float(), 4.8, "Alice score_right 4.8")
+
+# Bob row
+nox.test.assert_eq_str(t_inner.cell(1, 1).to_string(), "Bob", "Bob name")
+nox.test.assert_eq_str(t_inner.cell_by_name(1, "dept_name").to_string(), "Marketing", "Bob is Marketing")
+
+# Charlie row
+nox.test.assert_eq_str(t_inner.cell(2, 1).to_string(), "Charlie", "Charlie name")
+nox.test.assert_eq_str(t_inner.cell_by_name(2, "dept_name").to_string(), "Engineering", "Charlie is Eng")
+
+# 2. Left Join on ["dept_id"]
+# All 5 left rows must be preserved!
+# Alice(10) -> match
+# Bob(20) -> match
+# Charlie(10) -> match
+# Diana(99) -> no match, dept_name & score_right must be NULL
+# Evan(null) -> null key does not match, padded with NULL
+t_left: Table = join_left(t_emp, t_dept, ["dept_id"])
+nox.test.assert_eq_int(t_left.row_count(), 5, "left join preserves all 5 employees")
+
+# Diana row (index 3)
+nox.test.assert_eq_str(t_left.cell(3, 1).to_string(), "Diana", "Diana preserved")
+nox.test.assert_true(t_left.cell_by_name(3, "dept_name").is_missing(), "Diana dept_name is null")
+nox.test.assert_true(t_left.cell_by_name(3, "score_right").is_missing(), "Diana score_right is null")
+
+# Evan row (index 4)
+nox.test.assert_eq_str(t_left.cell(4, 1).to_string(), "Evan", "Evan preserved")
+nox.test.assert_true(t_left.cell_by_name(4, "dept_name").is_missing(), "Evan dept_name is null")
+
+# 3. Join with different key names: left_on=["dept_id"], right_on=["id"]
+s_dept2: Schema = Schema([
+    ColumnDef("id", TYPE_INT),
+    ColumnDef("title", TYPE_STR)
+])
+t_dept2: Table = Table(s_dept2, [
+    [cell_int(10), cell_str("Eng Team")],
+    [cell_int(20), cell_str("Mkt Team")]
+])
+
+t_diff_keys: Table = join_inner_keys(t_emp, t_dept2, ["dept_id"], ["id"])
+nox.test.assert_eq_int(t_diff_keys.row_count(), 3, "inner join with diff keys matched 3 rows")
+nox.test.assert_eq_str(t_diff_keys.cell_by_name(0, "title").to_string(), "Eng Team", "Eng Team matched")
+
+# 4. Error checks
+caught_key_err: bool = False
+try:
+    bad_join: Table = join_inner(t_emp, t_dept, ["nonexistent_key"])
+except ColumnNotFoundError:
+    caught_key_err = True
+nox.test.assert_true(caught_key_err, "missing join key raises ColumnNotFoundError")
+
+caught_shape_err: bool = False
+try:
+    bad_shape: Table = join_inner_keys(t_emp, t_dept, ["dept_id"], ["dept_id", "extra"])
+except ShapeError:
+    caught_shape_err = True
+nox.test.assert_true(caught_shape_err, "mismatched key lengths raise ShapeError")
+
+print("join_test passed")

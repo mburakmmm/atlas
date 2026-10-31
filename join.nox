@@ -1,0 +1,189 @@
+# join.nox — Relational Inner and Left Outer Joins for Atlas Tables.
+
+import errors
+from errors import ShapeError, ColumnNotFoundError, SchemaError
+import values
+from values import Cell, cell_null
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+
+def _contains_str(lst: list[str], target: str) -> bool:
+    i: int = 0
+    n: int = len(lst)
+    while i < n:
+        if lst[i] == target:
+            return True
+        i = i + 1
+    return False
+
+def _key_has_null(cells: list[Cell]) -> bool:
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        if cells[i].is_missing():
+            return True
+        i = i + 1
+    return False
+
+def _keys_equal(k1: list[Cell], k2: list[Cell]) -> bool:
+    if len(k1) != len(k2):
+        return False
+    i: int = 0
+    n: int = len(k1)
+    while i < n:
+        if not k1[i].equals(k2[i]):
+            return False
+        i = i + 1
+    return True
+
+def join_inner_keys(left: Table, right: Table, left_on: list[str], right_on: list[str],
+                    suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+    return _perform_join(left, right, left_on, right_on, suffix_left, suffix_right, False)
+
+def join_inner(left: Table, right: Table, on: list[str],
+               suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+    return join_inner_keys(left, right, on, on, suffix_left, suffix_right)
+
+def join_left_keys(left: Table, right: Table, left_on: list[str], right_on: list[str],
+                   suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+    return _perform_join(left, right, left_on, right_on, suffix_left, suffix_right, True)
+
+def join_left(left: Table, right: Table, on: list[str],
+              suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+    return join_left_keys(left, right, on, on, suffix_left, suffix_right)
+
+def _perform_join(left: Table, right: Table, left_on: list[str], right_on: list[str],
+                  suffix_left: str, suffix_right: str, is_left_join: bool) -> Table:
+    if len(left_on) == 0 or len(right_on) == 0:
+        raise ColumnNotFoundError("join requires at least one key column")
+    if len(left_on) != len(right_on):
+        raise ShapeError("left_on and right_on must have identical length")
+
+    # 1. Resolve key column indices
+    left_key_indices: list[int] = []
+    i: int = 0
+    while i < len(left_on):
+        idx: int = left.schema.index_of(left_on[i])
+        if idx < 0:
+            raise ColumnNotFoundError("join key not found in left table: '" + left_on[i] + "'")
+        left_key_indices.append(idx)
+        i = i + 1
+
+    right_key_indices: list[int] = []
+    i = 0
+    while i < len(right_on):
+        idx = right.schema.index_of(right_on[i])
+        if idx < 0:
+            raise ColumnNotFoundError("join key not found in right table: '" + right_on[i] + "'")
+        right_key_indices.append(idx)
+        i = i + 1
+
+    # 2. Build output schema & index mappings
+    # If a right column is exactly in right_on and has the same name as left_on, omit it from right side
+    # If any other non-key column has the same name in both tables, append suffix_left and suffix_right
+    out_cols: list[ColumnDef] = []
+    left_col_source: list[int] = []
+    right_col_source: list[int] = []
+
+    # Map left columns
+    lc_idx: int = 0
+    num_left_cols: int = left.column_count()
+    while lc_idx < num_left_cols:
+        col: ColumnDef = left.schema.columns[lc_idx]
+        out_name: str = col.name
+        # Check collision with right columns (excluding matching right keys)
+        if right.schema.has_column(col.name) and not _contains_str(left_on, col.name):
+            out_name = col.name + suffix_left
+        out_cols.append(ColumnDef(out_name, col.data_type, col.nullable))
+        left_col_source.append(lc_idx)
+        lc_idx = lc_idx + 1
+
+    # Map right columns (skip right_on keys that share identical name with left_on)
+    rc_idx: int = 0
+    num_right_cols: int = right.column_count()
+    while rc_idx < num_right_cols:
+        col = right.schema.columns[rc_idx]
+        is_same_key: bool = False
+        k_idx: int = 0
+        while k_idx < len(left_on):
+            if left_on[k_idx] == right_on[k_idx] and col.name == right_on[k_idx]:
+                is_same_key = True
+            k_idx = k_idx + 1
+
+        if not is_same_key:
+            out_name = col.name
+            if left.schema.has_column(col.name):
+                out_name = col.name + suffix_right
+            # If left join, right columns may contain nulls
+            out_nullable: bool = col.nullable or is_left_join
+            out_cols.append(ColumnDef(out_name, col.data_type, out_nullable))
+            right_col_source.append(rc_idx)
+        rc_idx = rc_idx + 1
+
+    out_schema: Schema = Schema(out_cols)
+
+    # 3. Perform join matching
+    out_rows: list[list[Cell]] = []
+    l_row_idx: int = 0
+    num_left_rows: int = left.row_count()
+    num_right_rows: int = right.row_count()
+    num_right_sources: int = len(right_col_source)
+
+    while l_row_idx < num_left_rows:
+        left_row: list[Cell] = left.rows[l_row_idx]
+        # Extract left key
+        left_k: list[Cell] = []
+        k_scan: int = 0
+        while k_scan < len(left_key_indices):
+            left_k.append(left_row[left_key_indices[k_scan]])
+            k_scan = k_scan + 1
+
+        matches_found: int = 0
+
+        # Null keys do not match other null keys
+        if not _key_has_null(left_k):
+            r_row_idx: int = 0
+            while r_row_idx < num_right_rows:
+                right_row: list[Cell] = right.rows[r_row_idx]
+                right_k: list[Cell] = []
+                k_scan = 0
+                while k_scan < len(right_key_indices):
+                    right_k.append(right_row[right_key_indices[k_scan]])
+                    k_scan = k_scan + 1
+
+                if not _key_has_null(right_k) and _keys_equal(left_k, right_k):
+                    matches_found = matches_found + 1
+                    # Combine row
+                    combined_r: list[Cell] = []
+                    # Append left cells
+                    li: int = 0
+                    while li < len(left_col_source):
+                        combined_r.append(left_row[left_col_source[li]])
+                        li = li + 1
+                    # Append right cells
+                    ri: int = 0
+                    while ri < num_right_sources:
+                        combined_r.append(right_row[right_col_source[ri]])
+                        ri = ri + 1
+                    out_rows.append(combined_r)
+
+                r_row_idx = r_row_idx + 1
+
+        # If left join and no matches found, pad right columns with null
+        if is_left_join and matches_found == 0:
+            combined_null_r: list[Cell] = []
+            li = 0
+            while li < len(left_col_source):
+                combined_null_r.append(left_row[left_col_source[li]])
+                li = li + 1
+            ri = 0
+            while ri < num_right_sources:
+                combined_null_r.append(cell_null())
+                ri = ri + 1
+            out_rows.append(combined_null_r)
+
+        l_row_idx = l_row_idx + 1
+
+    return Table(out_schema, out_rows)
