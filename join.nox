@@ -27,6 +27,35 @@ def _key_has_null(cells: list[Cell]) -> bool:
         i = i + 1
     return False
 
+def _cell_hash_key(c: Cell) -> str:
+    if c.is_missing():
+        return "N"
+    if c.kind == 1: # TYPE_INT
+        return "I:" + str(c.as_int())
+    if c.kind == 2: # TYPE_FLOAT
+        f_val: float = c.as_float()
+        if f_val == float(int(f_val)):
+            return "I:" + str(int(f_val))
+        return "F:" + str(f_val)
+    if c.kind == 3: # TYPE_STR
+        return "S:" + c.to_string()
+    if c.kind == 4: # TYPE_BOOL
+        if c.as_bool():
+            return "B:1"
+        return "B:0"
+    return "X"
+
+def _cells_hash_key(cells: list[Cell]) -> str:
+    res: str = ""
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        res = res + _cell_hash_key(cells[i])
+        if i < n - 1:
+            res = res + "\x1f"
+        i = i + 1
+    return res
+
 def _keys_equal(k1: list[Cell], k2: list[Cell]) -> bool:
     if len(k1) != len(k2):
         return False
@@ -124,18 +153,44 @@ def _perform_join(left: Table, right: Table, left_on: list[str], right_on: list[
 
     out_schema: Schema = Schema(out_cols)
 
-    # 3. Perform join matching
-    out_rows: list[list[Cell]] = []
-    l_row_idx: int = 0
-    num_left_rows: int = left.row_count()
+    # 3. Hash Join: Build Phase on the right table
+    # Map key_hash -> list of matching right row indices
+    right_hash_index: dict[str, list[int]] = {}
+    r_row_idx: int = 0
     num_right_rows: int = right.row_count()
     num_right_sources: int = len(right_col_source)
 
+    while r_row_idx < num_right_rows:
+        right_row: list[Cell] = right.rows[r_row_idx]
+        right_k: list[Cell] = []
+        k_scan: int = 0
+        while k_scan < len(right_key_indices):
+            right_k.append(right_row[right_key_indices[k_scan]])
+            k_scan = k_scan + 1
+
+        # Null keys never match other null keys
+        if not _key_has_null(right_k):
+            h_key: str = _cells_hash_key(right_k)
+            if h_key in right_hash_index:
+                row_list: list[int] = right_hash_index[h_key]
+                row_list.append(r_row_idx)
+                right_hash_index[h_key] = row_list
+            else:
+                new_list: list[int] = []
+                new_list.append(r_row_idx)
+                right_hash_index[h_key] = new_list
+
+        r_row_idx = r_row_idx + 1
+
+    # 4. Hash Join: Probe Phase on the left table
+    out_rows: list[list[Cell]] = []
+    l_row_idx: int = 0
+    num_left_rows: int = left.row_count()
+
     while l_row_idx < num_left_rows:
         left_row: list[Cell] = left.rows[l_row_idx]
-        # Extract left key
         left_k: list[Cell] = []
-        k_scan: int = 0
+        k_scan = 0
         while k_scan < len(left_key_indices):
             left_k.append(left_row[left_key_indices[k_scan]])
             k_scan = k_scan + 1
@@ -144,32 +199,39 @@ def _perform_join(left: Table, right: Table, left_on: list[str], right_on: list[
 
         # Null keys do not match other null keys
         if not _key_has_null(left_k):
-            r_row_idx: int = 0
-            while r_row_idx < num_right_rows:
-                right_row: list[Cell] = right.rows[r_row_idx]
-                right_k: list[Cell] = []
-                k_scan = 0
-                while k_scan < len(right_key_indices):
-                    right_k.append(right_row[right_key_indices[k_scan]])
-                    k_scan = k_scan + 1
+            left_h_key: str = _cells_hash_key(left_k)
+            if left_h_key in right_hash_index:
+                matched_right_indices: list[int] = right_hash_index[left_h_key]
+                m_idx: int = 0
+                num_matches: int = len(matched_right_indices)
+                while m_idx < num_matches:
+                    r_idx: int = matched_right_indices[m_idx]
+                    right_row: list[Cell] = right.rows[r_idx]
 
-                if not _key_has_null(right_k) and _keys_equal(left_k, right_k):
-                    matches_found = matches_found + 1
-                    # Combine row
-                    combined_r: list[Cell] = []
-                    # Append left cells
-                    li: int = 0
-                    while li < len(left_col_source):
-                        combined_r.append(left_row[left_col_source[li]])
-                        li = li + 1
-                    # Append right cells
-                    ri: int = 0
-                    while ri < num_right_sources:
-                        combined_r.append(right_row[right_col_source[ri]])
-                        ri = ri + 1
-                    out_rows.append(combined_r)
+                    # Precise equality check on candidate matches (hash collision safety)
+                    right_k: list[Cell] = []
+                    k_scan = 0
+                    while k_scan < len(right_key_indices):
+                        right_k.append(right_row[right_key_indices[k_scan]])
+                        k_scan = k_scan + 1
 
-                r_row_idx = r_row_idx + 1
+                    if _keys_equal(left_k, right_k):
+                        matches_found = matches_found + 1
+                        # Combine row
+                        combined_r: list[Cell] = []
+                        # Append left cells
+                        li: int = 0
+                        while li < len(left_col_source):
+                            combined_r.append(left_row[left_col_source[li]])
+                            li = li + 1
+                        # Append right cells
+                        ri: int = 0
+                        while ri < num_right_sources:
+                            combined_r.append(right_row[right_col_source[ri]])
+                            ri = ri + 1
+                        out_rows.append(combined_r)
+
+                    m_idx = m_idx + 1
 
         # If left join and no matches found, pad right columns with null
         if is_left_join and matches_found == 0:

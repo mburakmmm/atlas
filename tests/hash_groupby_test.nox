@@ -1,0 +1,39 @@
+# tests/hash_groupby_test.nox — High cardinality Hash GroupBy verification (10,000 unique groups).
+
+import nox.test
+import nox.time
+import values
+from values import Cell, cell_int, cell_str, cell_float, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import groupby
+from groupby import group_by, GroupedTable, agg_count, agg_sum
+
+# 10,000 rows, each in a unique group: "group_0", "group_1", ...
+s: Schema = Schema([ColumnDef("grp_id", TYPE_STR), ColumnDef("amount", TYPE_FLOAT)])
+rows: list[list[Cell]] = []
+
+i: int = 0
+n: int = 10000
+while i < n:
+    rows.append([cell_str("group_" + str(i)), cell_float(10.0)])
+    i = i + 1
+
+t: Table = Table(s, rows)
+
+t0: int = nox.time.now_ms()
+g: GroupedTable = group_by(t, ["grp_id"])
+res: Table = g.aggregate([agg_count("cnt"), agg_sum("amount", "total")])
+duration: int = nox.time.now_ms() - t0
+
+nox.test.assert_eq_int(g.group_count(), 10000, "10000 unique groups")
+nox.test.assert_eq_int(res.row_count(), 10000, "10000 aggregated rows")
+assert res.cell(0, 1).as_int() == 1
+assert res.cell(0, 2).as_float() == 10.0
+
+# In Hash GroupBy, 10,000 unique groups should complete well within 200ms
+assert duration < 200
+
+print("hash_groupby_test passed")

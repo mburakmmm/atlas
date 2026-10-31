@@ -8,9 +8,9 @@ from schema import Schema, ColumnDef
 import table
 from table import Table
 import sql_adapter
-from sql_adapter import table_to_create_table_sql, table_to_insert_sql, table_from_records, cell_from_db_value
+from sql_adapter import table_to_create_table_sql, table_to_insert_sql, table_from_records, cell_from_db_value, quote_identifier
 
-# 1. DDL CREATE TABLE generation
+# 1. DDL CREATE TABLE generation with quoted identifiers
 cols: list[ColumnDef] = [
     ColumnDef("id", TYPE_INT, False),
     ColumnDef("username", TYPE_STR, False),
@@ -24,22 +24,30 @@ rows: list[list[Cell]] = [
 ]
 t: Table = Table(s, rows)
 
-# SQLite DDL with primary key
+# SQLite DDL with quoted table and columns
 sql_sqlite: str = table_to_create_table_sql(t, "users", dialect="sqlite", primary_key_col="id")
-assert "CREATE TABLE IF NOT EXISTS users (" in sql_sqlite
-assert "id INTEGER NOT NULL PRIMARY KEY" in sql_sqlite
-assert "username TEXT NOT NULL" in sql_sqlite
-assert "score REAL" in sql_sqlite
-assert "is_active INTEGER NOT NULL" in sql_sqlite
+assert "CREATE TABLE IF NOT EXISTS \"users\" (" in sql_sqlite
+assert "\"id\" INTEGER NOT NULL PRIMARY KEY" in sql_sqlite
+assert "\"username\" TEXT NOT NULL" in sql_sqlite
+assert "\"score\" REAL" in sql_sqlite
+assert "\"is_active\" INTEGER NOT NULL" in sql_sqlite
 
 # PostgreSQL DDL
 sql_pg: str = table_to_create_table_sql(t, "users", dialect="postgres")
-assert "score DOUBLE PRECISION" in sql_pg
-assert "is_active BOOLEAN NOT NULL" in sql_pg
+assert "\"score\" DOUBLE PRECISION" in sql_pg
+assert "\"is_active\" BOOLEAN NOT NULL" in sql_pg
 
 # 2. Parameterized INSERT statement generation
-insert_sql: str = table_to_insert_sql(t, "users")
-assert insert_sql == "INSERT INTO users (id, username, score, is_active) VALUES (?, ?, ?, ?);"
+insert_sqlite: str = table_to_insert_sql(t, "users", dialect="sqlite")
+assert insert_sqlite == "INSERT INTO \"users\" (\"id\", \"username\", \"score\", \"is_active\") VALUES (?, ?, ?, ?);"
+
+# PostgreSQL uses $1, $2, $3, $4
+insert_pg: str = table_to_insert_sql(t, "users", dialect="postgres")
+assert insert_pg == "INSERT INTO \"users\" (\"id\", \"username\", \"score\", \"is_active\") VALUES ($1, $2, $3, $4);"
+
+# Quoting escapes internal double quotes
+quoted_field: str = quote_identifier("user\"name", dialect="sqlite")
+assert quoted_field == "\"user\"\"name\""
 
 # 3. Table creation from database records
 col_names: list[str] = ["product_id", "name", "price"]

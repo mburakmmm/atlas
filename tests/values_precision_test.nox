@@ -1,0 +1,26 @@
+# tests/values_precision_test.nox — 64-bit integer precision and single canonical field test.
+
+import nox.test
+import values
+from values import Cell, cell_int, cell_float, TYPE_INT
+
+# 2^53 = 9007199254740992
+# In IEEE-754 double precision, 9007199254740992 and 9007199254740993 round to the same float!
+n1: int = 9007199254740992
+n2: int = 9007199254740993
+
+c1: Cell = cell_int(n1)
+c2: Cell = cell_int(n2)
+
+# Direct integer equality must distinguish them:
+assert not c1.equals(c2)
+assert c1.compare(c2) == -1
+assert c2.compare(c1) == 1
+
+# Single canonical value test
+# If directly instantiated with mismatching f, as_float() must still use i
+bad_constructed: Cell = Cell(TYPE_INT, 100, 999.0, "", False)
+assert bad_constructed.as_int() == 100
+assert bad_constructed.as_float() == 100.0
+
+print("values_precision_test passed")

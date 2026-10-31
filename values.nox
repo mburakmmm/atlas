@@ -53,7 +53,7 @@ class Cell:
         if self.kind == TYPE_FLOAT:
             return self.f
         if self.kind == TYPE_INT:
-            return self.f
+            return float(self.i)
         if self.kind == TYPE_STR:
             try:
                 return float(self.s)
@@ -105,6 +105,9 @@ class Cell:
 
         if self.kind == TYPE_NULL or other.kind == TYPE_NULL:
             return self.kind == other.kind
+        # Direct 64-bit integer equality without IEEE-754 float precision loss:
+        if self.kind == TYPE_INT and other.kind == TYPE_INT:
+            return self.i == other.i
         if self.is_numeric() and other.is_numeric():
             return self.as_float() == other.as_float()
         if self.kind != other.kind:
@@ -128,6 +131,14 @@ class Cell:
             if nulls_first:
                 return 1
             return -1
+
+        # Direct 64-bit integer comparison without float conversion:
+        if self.kind == TYPE_INT and other.kind == TYPE_INT:
+            if self.i < other.i:
+                return -1
+            if self.i > other.i:
+                return 1
+            return 0
 
         if self.is_numeric() and other.is_numeric():
             f1: float = self.as_float()
@@ -164,7 +175,7 @@ def cell_null() -> Cell:
     return Cell(TYPE_NULL, 0, 0.0, "", False)
 
 def cell_int(i: int) -> Cell:
-    return Cell(TYPE_INT, i, float(i), "", False)
+    return Cell(TYPE_INT, i, 0.0, "", False)
 
 def cell_float(f: float) -> Cell:
     return Cell(TYPE_FLOAT, 0, f, "", False)

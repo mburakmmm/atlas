@@ -6,16 +6,17 @@ Inspired by Pandas but crafted natively for the **Nox** static type system, Atla
 
 [![Nox Compiler](https://img.shields.io/badge/noxc-2.0.86-blue.svg)](https://github.com/mburakmmm/nox-lang)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-19%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-22%20passed-success.svg)](tests/)
 
 ---
 
 ## Features
 
 - 📑 **RFC 4180 CSV & TSV I/O**: Robust parsing of commas, tabs, semicolons, and custom delimiters with automatic schema inference.
-- 🗃️ **Custom Delimiters**: Full support for TSV (`read_tsv`), semicolon (`;`), and custom delimiters (`read_delimited`, `to_delimited`).
-- 🗄️ **Relational SQL & Feather Bridge**: Generate SQLite/PostgreSQL DDL schemas (`table_to_create_table_sql`), parameterized INSERT statements (`table_to_insert_sql`), and map database records to tables.
-- ✅ **Tabular Data Validation**: Configurable `TableValidator` (email, range, length, non-empty, allowed values) producing detailed `ValidationReport` and valid/invalid row partitioning.
+- ⚡ **O(N + M) Hash Join**: Blazing fast inner and left-outer joins (`join_inner`, `join_left`) with hash indexing and null key isolation.
+- ⚡ **O(N) Hash GroupBy**: High-cardinality aggregation engine indexing tens of thousands of unique groups in single-digit milliseconds.
+- 🗄️ **Relational SQL & Feather Bridge**: Generate SQLite/PostgreSQL DDL schemas (`table_to_create_table_sql`), safe quoted identifiers (`quote_identifier`), and parameterized INSERT statements (`table_to_insert_sql`).
+- ✅ **Tabular Data Validation**: Configurable `TableValidator` (email, range, length, non-empty, allowed values, explicit types) with strict numeric validation.
 - 🔗 **Relational Joins**: Inner and left-outer joins (`join_inner`, `join_left`) with collision suffixes and null key isolation.
 - 🧱 **Table Concatenation**: Vertical row concatenation (`concat_rows`) with schema alignment, and horizontal concatenation (`concat_cols`).
 - 🔍 **Declarative Filtering**: Type-safe expression trees (`Expr`) with comparisons, string matches, set membership, and logical operators (`AND`/`OR`/`NOT`).

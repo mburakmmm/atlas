@@ -1,0 +1,52 @@
+# tests/hash_join_test.nox — Verification of Hash Join O(N + M) performance and correctness.
+
+import nox.test
+import nox.time
+import values
+from values import Cell, cell_int, cell_str, cell_float, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import join
+from join import join_inner, join_left
+
+# 1. 1,000 x 1,000 records join
+s_left: Schema = Schema([ColumnDef("user_id", TYPE_INT), ColumnDef("username", TYPE_STR)])
+s_right: Schema = Schema([ColumnDef("user_id", TYPE_INT), ColumnDef("balance", TYPE_FLOAT)])
+
+left_rows: list[list[Cell]] = []
+right_rows: list[list[Cell]] = []
+
+i: int = 0
+n: int = 1000
+while i < n:
+    left_rows.append([cell_int(i), cell_str("user_" + str(i))])
+    # Right table only has even IDs
+    if i % 2 == 0:
+        right_rows.append([cell_int(i), cell_float(float(i) * 10.5)])
+    i = i + 1
+
+t_left: Table = Table(s_left, left_rows)
+t_right: Table = Table(s_right, right_rows)
+
+t0: int = nox.time.now_ms()
+t_inner: Table = join_inner(t_left, t_right, ["user_id"])
+join_duration: int = nox.time.now_ms() - t0
+
+# There should be exactly 500 matching rows (the even IDs)
+nox.test.assert_eq_int(t_inner.row_count(), 500, "500 matching rows in Hash Join")
+nox.test.assert_eq_int(t_inner.column_count(), 3, "user_id, username, balance")
+
+# Ensure Hash Join ran quickly (< 100ms)
+assert join_duration < 100
+
+# 2. Left join on same dataset
+t_left_outer: Table = join_left(t_left, t_right, ["user_id"])
+# All 1,000 rows from left must be present
+nox.test.assert_eq_int(t_left_outer.row_count(), 1000, "1000 rows in Hash Left Join")
+# Row 0 (even) has balance, Row 1 (odd) has null balance
+assert not t_left_outer.cell(0, 2).is_missing()
+assert t_left_outer.cell(1, 2).is_missing()
+
+print("hash_join_test passed")

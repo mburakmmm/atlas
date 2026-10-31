@@ -8,7 +8,7 @@ from schema import Schema, ColumnDef
 import table
 from table import Table
 import validation
-from validation import TableValidator, ValidationReport, ValidationError, rule_non_empty, rule_range, rule_length, rule_allowed_values, rule_email
+from validation import TableValidator, ValidationReport, ValidationError, rule_non_empty, rule_range, rule_length, rule_allowed_values, rule_email, rule_type
 
 cols: list[ColumnDef] = [
     ColumnDef("id", TYPE_INT, False),
@@ -73,5 +73,21 @@ clean_report: ValidationReport = validator.validate(t_clean)
 assert clean_report.is_valid()
 nox.test.assert_eq_int(clean_report.error_count(), 0, "0 errors in clean table")
 assert "Validation passed" in clean_report.summary()
+
+# 5. Strict type check: non-numeric string in rule_range must be caught
+s_strict: Schema = Schema([ColumnDef("val", TYPE_STR)])
+t_strict: Table = Table(s_strict, [[cell_str("not_a_number")]])
+v_strict: TableValidator = TableValidator()
+v_strict.add_rule(rule_range("val", 10.0, 50.0))
+rep_strict: ValidationReport = v_strict.validate(t_strict)
+assert not rep_strict.is_valid()
+nox.test.assert_eq_int(rep_strict.error_count(), 1, "1 error caught for non-numeric value in range")
+
+# 6. rule_type test
+v_type: TableValidator = TableValidator()
+v_type.add_rule(rule_type("val", TYPE_INT))
+rep_type: ValidationReport = v_type.validate(t_strict)
+assert not rep_type.is_valid()
+assert "type mismatch" in rep_type.errors[0].message
 
 print("validation_test passed")

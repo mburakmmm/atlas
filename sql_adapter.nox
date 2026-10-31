@@ -24,18 +24,53 @@ def type_to_sql_type(data_type: int, dialect: str = "sqlite") -> str:
         return "BOOLEAN"
     return "TEXT"
 
+def quote_identifier(name: str, dialect: str = "sqlite") -> str:
+    if len(name) == 0:
+        raise SchemaError("SQL identifier cannot be empty")
+    i: int = 0
+    n: int = len(name)
+    while i < n:
+        if name[i] == "\0":
+            raise SchemaError("SQL identifier contains invalid null byte")
+        i = i + 1
+
+    if dialect == "mysql":
+        escaped: str = "`"
+        i = 0
+        while i < n:
+            if name[i] == "`":
+                escaped = escaped + "``"
+            else:
+                escaped = escaped + name[i]
+            i = i + 1
+        escaped = escaped + "`"
+        return escaped
+
+    escaped = "\""
+    i = 0
+    while i < n:
+        if name[i] == "\"":
+            escaped = escaped + "\"\""
+        else:
+            escaped = escaped + name[i]
+        i = i + 1
+    escaped = escaped + "\""
+    return escaped
+
 def table_to_create_table_sql(t: Table, table_name: str, dialect: str = "sqlite", primary_key_col: str = "") -> str:
     cols: list[ColumnDef] = t.schema.columns
     num_cols: int = len(cols)
     if num_cols == 0:
         raise SchemaError("cannot generate CREATE TABLE for table with zero columns")
 
-    sql: str = "CREATE TABLE IF NOT EXISTS " + table_name + " (\n"
+    q_tbl: str = quote_identifier(table_name, dialect)
+    sql: str = "CREATE TABLE IF NOT EXISTS " + q_tbl + " (\n"
     c_idx: int = 0
     while c_idx < num_cols:
         col: ColumnDef = cols[c_idx]
         col_type_str: str = type_to_sql_type(col.data_type, dialect)
-        col_def_str: str = "    " + col.name + " " + col_type_str
+        q_col: str = quote_identifier(col.name, dialect)
+        col_def_str: str = "    " + q_col + " " + col_type_str
 
         if not col.nullable:
             col_def_str = col_def_str + " NOT NULL"
@@ -51,24 +86,33 @@ def table_to_create_table_sql(t: Table, table_name: str, dialect: str = "sqlite"
     sql = sql + ");"
     return sql
 
-def table_to_insert_sql(t: Table, table_name: str) -> str:
+def table_to_insert_sql(t: Table, table_name: str, dialect: str = "sqlite") -> str:
     names: list[str] = t.column_names()
     num_cols: int = len(names)
     if num_cols == 0:
         raise SchemaError("cannot generate INSERT statement for table with zero columns")
 
+    q_tbl: str = quote_identifier(table_name, dialect)
     cols_part: str = ""
     placeholders: str = ""
+    is_postgres: bool = dialect == "postgres" or dialect == "postgresql"
+
     c_idx: int = 0
     while c_idx < num_cols:
-        cols_part = cols_part + names[c_idx]
-        placeholders = placeholders + "?"
+        q_col: str = quote_identifier(names[c_idx], dialect)
+        cols_part = cols_part + q_col
+
+        if is_postgres:
+            placeholders = placeholders + "$" + str(c_idx + 1)
+        else:
+            placeholders = placeholders + "?"
+
         if c_idx < num_cols - 1:
             cols_part = cols_part + ", "
             placeholders = placeholders + ", "
         c_idx = c_idx + 1
 
-    return "INSERT INTO " + table_name + " (" + cols_part + ") VALUES (" + placeholders + ");"
+    return "INSERT INTO " + q_tbl + " (" + cols_part + ") VALUES (" + placeholders + ");"
 
 def table_from_records(col_names: list[str], col_types: list[int], rows: list[list[Cell]]) -> Table:
     num_names: int = len(col_names)

@@ -13,6 +13,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.3.0** | **Özel Ayraçlar (TSV, `;`), Kartiller (Quantiles) & Izgara Gösterimi** | ✅ **TAMAMLANDI & YAYINLANDI** | 17/17 Test Geçti (`noxc test`) |
 | **v0.4.0** | **Feather (SQL ORM) & Noxen (Validasyon) İsteğe Bağlı Adaptörleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
 | **v0.5.0** | **Büyük Ölçekli Performans (100k), API Konsolidasyonu & Kılavuzlar** | ✅ **TAMAMLANDI & YAYINLANDI** | 19/19 Test Geçti (`noxc test`) |
+| **v0.6.0** | **Veri Doğruluğu, Hash Join, Hash GroupBy & SQL Identifier Güvenliği** | ✅ **TAMAMLANDI & YAYINLANDI** | 22/22 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -165,6 +166,38 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - Elektronik tablo formül enjeksiyonu (`=`, `+`, `-`, `@`) koruması, dosya üzerine yazma (`overwrite=False`) koruması, SQL parametrik `?` binding güvenliği.
 - [x] **`noxc publish` ile v0.5.0 İndeks Yayını**:
   - Atlas v0.5.0 paketi başarıyla onay kuyruğuna gönderildi.
+
+---
+
+## ✅ Sürüm 0.6.0 — Veri Doğruluğu, Hash Join, Hash GroupBy & SQL Güvenliği (Tamamlananlar)
+
+- [x] **Cell Veri Modeli Tip Dönüşümü ve 64-bit Integer Doğruluğu (🔴 P1)**:
+  - `values.nox`: `Cell.as_float()` metodunda `TYPE_INT` için ikincil float alanına bağımlılığı kaldırarak doğrudan `float(self.i)` döndürme.
+  - `cell_int(i)` yapıcısında float alanını `0.0` yaparak tekil kanonik değer tutma.
+  - `Cell.equals()` ve `Cell.compare()` içinde iki `TYPE_INT` hücresini IEEE-754 double precision yuvarlama ve 53-bit üstü ($2^{53}$) hassasiyet kaybı yaşamadan doğrudan 64-bit tamsayı olarak karşılaştırma.
+- [x] **SQL Adaptöründe Güvenli Identifier Yönetimi & PostgreSQL Desteği (🔴 P1)**:
+  - `sql_adapter.nox`: `quote_identifier(name, dialect)` fonksiyonu ekleyerek tablo ve sütun isimlerinin kaçış karakterleriyle güvenli biçimde tırnak içine alınması (SQL Identifier Injection koruması).
+  - Identifier boşluk ve `\0` (null byte) doğrulaması.
+  - `table_to_insert_sql(t, table_name, dialect)` içine dialect desteği: PostgreSQL için `$1, $2, ...`, SQLite için `?, ?`.
+- [x] **Hash Join ile O(N + M) Birleştirme (🔴 P1)**:
+  - `join.nox`: $O(N \times M)$ nested-loop join yerine sağ tablonun birleştirme anahtarlarını hash tablosunda indeksleyen Hash Join ($O(N + M)$) algoritmasına geçiş.
+  - Sayısal eşitlik (`10` == `10.0`), dize ve boolean anahtarlarını ayrıştıran tip-güvenli anahtar serileştirme (`_cell_hash_key`).
+  - Null anahtarların asla eşleşmemesi kuralının (null key isolation) korunması.
+- [x] **Hash GroupBy ile O(N) Gruplama (🔴 P1)**:
+  - `groupby.nox`: Grup anahtarı aramasında $O(G)$ doğrusal tarama yerine $O(1)$ hash map lookup (`dict[str, int]`) kullanarak gruplama maliyetini $O(N \times G)$'den $O(N)$ seviyesine düşürme.
+  - Yüksek kardinaliteli veri kümelerinde stabil grup sırasını koruma.
+- [x] **CSV / Delimited Motoru Düzeltmeleri (🔴 P1 & 🔴 P2)**:
+  - `delimited.nox`: Tırnaklı alan başlangıcını sadece alan başına (`len(cur_field) == 0`) kısıtlama, alan ortasında tırnak ayrıştırma denetimi.
+  - `dump_delimited`: Çok karakterli ayraçların (`||`, `::`) alan içinde bulunması durumunda tırnak içine alınmasının güvenceye alınması (round-trip veri doğruluğu).
+- [x] **Katı Tip Denetimli Tablo Validasyonu (🟠 P1)**:
+  - `validation.nox`: `rule_range`, `rule_min`, `rule_max` kurallarında sayısal olmayan hücrelerin (`"abc"`) sessizce geçmesini engelleyip katı `ValidationError` fırlatması.
+  - `rule_type(col_name, expected_type)` kuralı ekleyerek açık sütun tip doğrulama desteği.
+- [x] **Yüksek Kardinalite & Hash Join Benchmark Matrisi (🟠 P2)**:
+  - `benchmarks/benchmark_hash.nox`: 10.000 satırda 10.000 benzersiz grup (yüksek kardinalite, 3 ms) ve 10.000 x 5.000 Hash Join (2 ms) hız ölçümleri.
+- [x] **Feather Entegrasyon Kılavuzu & Tip Eşleme İyileştirmeleri (🟠 P2)**:
+  - `docs/integrations.md` ve `sql_adapter.nox` üzerinden Feather oturum ve sorgu dönüştürme desenlerinin genişletilmesi.
+- [x] **Tüm Birim ve Regresyon Testlerinin Doğrulanması**:
+  - `tests/hash_join_test.nox`, `tests/hash_groupby_test.nox`, `tests/values_precision_test.nox` dahil 22 test paketinin tamamının geçmesi.
 
 ---
 

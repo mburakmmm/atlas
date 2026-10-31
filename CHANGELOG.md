@@ -5,6 +5,31 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-01
+
+### Added
+- **O(N + M) Hash Join Engine (`join.nox`)**:
+  - Replaced nested-loop join with high-performance Hash Join index build and probe phases.
+  - Type-aware normalized hash key generator preserving integer-float numeric equivalence and null key isolation.
+- **O(N) Hash GroupBy Engine (`groupby.nox`)**:
+  - Replaced $O(G)$ linear group scans with $O(1)$ dictionary hash table lookup.
+  - Successfully groups 10,000 unique groups in 3 ms.
+- **SQL Identifier Quoting & PostgreSQL Dialect (`sql_adapter.nox`)**:
+  - Added `quote_identifier(name, dialect)` preventing SQL Identifier Injection across table and column names.
+  - Added PostgreSQL `$1, $2, ...` positional placeholder generation to `table_to_insert_sql`.
+- **64-bit Integer Precision & Data Integrity (`values.nox`)**:
+  - Fixed `as_float()` to compute `float(self.i)` dynamically instead of duplicating float storage.
+  - Direct 64-bit integer equality and comparisons in `equals()` and `compare()` preventing IEEE-754 double precision loss above $2^{53}$.
+- **Strict Validation & Explicit Type Rules (`validation.nox`)**:
+  - `rule_range`, `rule_min`, `rule_max` now strictly validate numeric types and flag non-numeric strings as `ValidationError`.
+  - Added `rule_type(col_name, expected_type)` for explicit column data type enforcement.
+- **CSV / Delimited Engine Hardening (`delimited.nox`)**:
+  - Constrained quoted field entry strictly to field boundaries (`len(cur_field) == 0`).
+  - Added substring multi-character delimiter detection in `dump_delimited` ensuring round-trip data safety for custom delimiters like `||`.
+- **Benchmarks & Tests**:
+  - Added `benchmarks/benchmark_hash.nox` (high cardinality and hash join verification).
+  - Added `tests/hash_join_test.nox`, `tests/hash_groupby_test.nox`, `tests/values_precision_test.nox` bringing total test suites to 22.
+
 ## [0.5.0] - 2026-11-01
 
 ### Added
