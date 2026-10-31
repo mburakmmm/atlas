@@ -11,6 +11,23 @@ from table import Table
 import csv_adapter
 from csv_adapter import infer_schema
 
+class CsvOptions:
+    delimiter: str
+    has_header: bool
+    blank_is_missing: bool
+    strict: bool
+    safe_spreadsheet: bool
+
+    def __init__(self: CsvOptions, delimiter: str = ",", has_header: bool = True, blank_is_missing: bool = True, strict: bool = False, safe_spreadsheet: bool = False) -> None:
+        self.delimiter = delimiter
+        self.has_header = has_header
+        self.blank_is_missing = blank_is_missing
+        self.strict = strict
+        self.safe_spreadsheet = safe_spreadsheet
+
+def csv_options(delimiter: str = ",", has_header: bool = True, blank_is_missing: bool = True, strict: bool = False, safe_spreadsheet: bool = False) -> CsvOptions:
+    return CsvOptions(delimiter, has_header, blank_is_missing, strict, safe_spreadsheet)
+
 def parse_delimited(text: str, delimiter: str = ",", strict: bool = False) -> list[list[str]]:
     rows: list[list[str]] = []
     if len(text) == 0:
@@ -277,3 +294,9 @@ def read_tsv(text: str, has_header: bool = True, explicit_schema: Schema | None 
 
 def to_tsv(t: Table, include_header: bool = True, safe_spreadsheet: bool = False) -> str:
     return to_delimited(t, "\t", include_header, safe_spreadsheet)
+
+def read_delimited_options(text: str, options: CsvOptions, explicit_schema: Schema | None = None) -> Table:
+    return read_delimited(text, options.delimiter, options.has_header, explicit_schema, options.blank_is_missing, options.strict)
+
+def to_delimited_options(t: Table, options: CsvOptions) -> str:
+    return to_delimited(t, options.delimiter, options.has_header, options.safe_spreadsheet)

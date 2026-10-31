@@ -28,7 +28,7 @@ import csv_adapter
 from csv_adapter import read_csv, to_csv, infer_schema
 
 import delimited
-from delimited import parse_delimited, dump_delimited, read_delimited, to_delimited, read_tsv, to_tsv
+from delimited import parse_delimited, dump_delimited, read_delimited, to_delimited, read_tsv, to_tsv, CsvOptions, csv_options, read_delimited_options, to_delimited_options
 
 import json_adapter
 from json_adapter import table_from_json, table_to_json, csv_to_json, json_to_csv
@@ -47,6 +47,9 @@ from sql_adapter import table_to_create_table_sql, table_to_insert_sql, table_fr
 
 import validation
 from validation import ColumnRule, ValidationError, ValidationReport, TableValidator, rule_non_empty, rule_range, rule_min, rule_max, rule_length, rule_allowed_values, rule_email, rule_type
+
+import key_encoding
+from key_encoding import cell_hash_key, composite_hash_key
 
 # Convenience functional statistics API matching AGENTS.md:
 def col_mean(t: Table, col_name: str) -> float:

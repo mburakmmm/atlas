@@ -1,0 +1,45 @@
+# tests/hash_consistency_test.nox — Verification of canonical hash key encoding & Join/GroupBy consistency.
+
+import nox.test
+import values
+from values import Cell, cell_int, cell_float, cell_str, cell_bool, cell_null
+import key_encoding
+from key_encoding import cell_hash_key, composite_hash_key
+
+# 1. Equivalent integer and whole float produce identical hash keys:
+c_i10: Cell = cell_int(10)
+c_f10: Cell = cell_float(10.0)
+assert cell_hash_key(c_i10) == "I:10"
+assert cell_hash_key(c_f10) == "I:10"
+assert cell_hash_key(c_i10) == cell_hash_key(c_f10)
+
+# 2. 2^53 integer and float produce identical hash keys:
+c_pow2_53_i: Cell = cell_int(9007199254740992)
+c_pow2_53_f: Cell = cell_float(9007199254740992.0)
+assert cell_hash_key(c_pow2_53_i) == "I:9007199254740992"
+assert cell_hash_key(c_pow2_53_f) == "I:9007199254740992"
+
+# 3. 2^53 + 1 produces a distinct integer hash key from 2^53:
+c_pow2_53_plus1: Cell = cell_int(9007199254740993)
+assert cell_hash_key(c_pow2_53_plus1) == "I:9007199254740993"
+assert cell_hash_key(c_pow2_53_plus1) != cell_hash_key(c_pow2_53_f)
+
+# 4. Multi-column composite keys with length prefixing never collide across field boundaries:
+k1: list[Cell] = [cell_str("a"), cell_str("bc")]
+k2: list[Cell] = [cell_str("ab"), cell_str("c")]
+h1: str = composite_hash_key(k1)
+h2: str = composite_hash_key(k2)
+assert h1 != h2
+
+# 5. Null representation is "N"
+assert cell_hash_key(cell_null()) == "N"
+
+# 6. Boolean representations:
+assert cell_hash_key(cell_bool(True)) == "B:1"
+assert cell_hash_key(cell_bool(False)) == "B:0"
+
+# 7. NaN representation is "F:nan"
+nan_val: float = 0.0 / 0.0
+assert cell_hash_key(cell_float(nan_val)) == "F:nan"
+
+print("hash_consistency_test passed")

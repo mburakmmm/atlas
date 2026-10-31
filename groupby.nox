@@ -10,6 +10,8 @@ import table
 from table import Table
 import stats
 from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing
+import key_encoding
+from key_encoding import cell_hash_key, composite_hash_key
 
 AGG_COUNT: int = 1
 AGG_SUM: int = 2
@@ -171,35 +173,6 @@ class GroupedTable:
         aggs.append(agg_count(output_col))
         return self.aggregate(aggs)
 
-def _cell_hash_repr(c: Cell) -> str:
-    if c.is_missing():
-        return "N"
-    if c.kind == 1: # TYPE_INT
-        return "I:" + str(c.as_int())
-    if c.kind == 2: # TYPE_FLOAT
-        f_val: float = c.as_float()
-        if f_val == float(int(f_val)):
-            return "I:" + str(int(f_val))
-        return "F:" + str(f_val)
-    if c.kind == 3: # TYPE_STR
-        s_val: str = c.to_string()
-        return "S" + str(len(s_val)) + ":" + s_val
-    if c.kind == 4: # TYPE_BOOL
-        if c.as_bool():
-            return "B:1"
-        return "B:0"
-    return "X"
-
-def _cells_hash_repr(cells: list[Cell]) -> str:
-    res: str = ""
-    i: int = 0
-    n: int = len(cells)
-    while i < n:
-        part: str = _cell_hash_repr(cells[i])
-        res = res + "[" + str(len(part)) + "]" + part
-        i = i + 1
-    return res
-
 def group_by(t: Table, keys: list[str]) -> GroupedTable:
     if len(keys) == 0:
         raise ColumnNotFoundError("group_by requires at least one key column")
@@ -229,7 +202,7 @@ def group_by(t: Table, keys: list[str]) -> GroupedTable:
             k_tuple.append(row[key_indices[ki]])
             ki = ki + 1
 
-        h_key: str = _cells_hash_repr(k_tuple)
+        h_key: str = composite_hash_key(k_tuple)
         if h_key in group_map:
             candidate_indices: list[int] = group_map[h_key]
             matched_group_idx: int = -1

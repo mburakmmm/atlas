@@ -10,17 +10,21 @@ TYPE_STR: int = 3
 TYPE_BOOL: int = 4
 
 def _int_float_equals(i: int, f: float) -> bool:
+    if not (f == f):
+        return False
+    if f < -9223372036854775808.0 or f >= 9223372036854775808.0:
+        return False
     if f != float(int(f)):
         return False
-    if f > 9223372036854775000.0 or f < -9223372036854775000.0:
-        return False
     f_as_i: int = int(f)
-    return i == f_as_i
+    return i == f_as_i and float(f_as_i) == f
 
 def _int_float_compare(i: int, f: float) -> int:
-    if f > 9223372036854775000.0:
+    if not (f == f):
         return -1
-    if f < -9223372036854775000.0:
+    if f >= 9223372036854775808.0:
+        return -1
+    if f < -9223372036854775808.0:
         return 1
     if f == float(int(f)):
         f_as_i: int = int(f)
@@ -29,12 +33,15 @@ def _int_float_compare(i: int, f: float) -> int:
         if i > f_as_i:
             return 1
         return 0
-    f_i: float = float(i)
-    if f_i < f:
-        return -1
-    if f_i > f:
+    f_trunc: int = int(f)
+    if f > 0.0:
+        if i <= f_trunc:
+            return -1
         return 1
-    return 0
+    else:
+        if i >= f_trunc:
+            return 1
+        return -1
 
 class Cell:
     kind: int
@@ -136,6 +143,12 @@ class Cell:
         if self.kind == TYPE_INT and other.kind == TYPE_INT:
             return self.i == other.i
         if self.kind == TYPE_FLOAT and other.kind == TYPE_FLOAT:
+            s_nan: bool = not (self.f == self.f)
+            o_nan: bool = not (other.f == other.f)
+            if s_nan and o_nan:
+                return True
+            if s_nan or o_nan:
+                return False
             return self.f == other.f
         if self.kind == TYPE_INT and other.kind == TYPE_FLOAT:
             return _int_float_equals(self.i, other.f)
@@ -147,7 +160,7 @@ class Cell:
             return self.s == other.s
         if self.kind == TYPE_BOOL:
             return self.b == other.b
-        return False
+        return self.i == other.i and self.s == other.s and self.b == other.b
 
     def compare(self: Cell, other: Cell, nulls_first: bool = False) -> int:
 
@@ -172,6 +185,14 @@ class Cell:
             return 0
 
         if self.kind == TYPE_FLOAT and other.kind == TYPE_FLOAT:
+            s_nan: bool = not (self.f == self.f)
+            o_nan: bool = not (other.f == other.f)
+            if s_nan and o_nan:
+                return 0
+            if s_nan:
+                return 1 # NaN sorts last
+            if o_nan:
+                return -1
             if self.f < other.f:
                 return -1
             if self.f > other.f:

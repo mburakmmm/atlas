@@ -5,6 +5,29 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-11-01
+
+### Fixed & Improved
+- **Exact Mathematical Boundaries for Mixed Integer / Float Arithmetic (`values.nox`)**:
+  - Replaced arbitrary float threshold with exact IEEE-754 signed 64-bit integer powers of 2: $2^{63}$ (`9223372036854775808.0`) and $-2^{63}$ (`-9223372036854775808.0`).
+  - Guaranteed exact equality for all representable 64-bit float integers, including near INT64_MAX multiples of 1024 ($9223372036854774784$) and INT64_MIN ($-9223372036854775808$).
+  - Correctly differentiated INT64_MAX ($9223372036854775807$) from rounded $2^{63}.0$ float ($i < f$).
+- **Pure Integer Ordering Logic for Fractional Floats (`values.nox`)**:
+  - Eliminated `float(i)` conversion in `_int_float_compare` for fractional float comparisons; comparisons now operate via truncated 64-bit integer bounds (`i <= f_trunc`), ensuring large integers (e.g. $2^{53}+1$) maintain exact ordering against floats.
+- **IEEE-754 NaN & Infinity Contracts (`values.nox`)**:
+  - Defined explicit NaN semantics: `not (f == f)` detection, NaN-NaN table equality in `Cell.equals()`, and deterministic sorting (`NaN sorts last`) in `Cell.compare()`.
+  - Defined explicit +Infinity and -Infinity behavior: $+Inf > i$ and $-Inf < i$ for all finite 64-bit integers.
+- **Shared Canonical Hash Encoding Module (`key_encoding.nox`)**:
+  - Created `key_encoding.nox` providing `cell_hash_key` and `composite_hash_key`.
+  - Replaced duplicate hashing code in `join.nox` and `groupby.nox`, ensuring 100% hash consistency across all operations.
+- **Options-Pattern CSV Configuration (`delimited.nox`)**:
+  - Introduced `CsvOptions` class and `csv_options(...)` factory with fields `delimiter`, `has_header`, `blank_is_missing`, `strict`, `safe_spreadsheet`.
+  - Added `read_delimited_options(text, options)` and `to_delimited_options(table, options)` while maintaining full backward compatibility.
+- **Custom / Unknown Cell Kind Equality (`values.nox`)**:
+  - Fixed `Cell.equals()` for non-standard Cell kinds to evaluate field identity instead of returning False.
+- **Test Suite Expansion**:
+  - Added `tests/hash_consistency_test.nox`, `tests/sql_integration_test.nox`, and `tests/csv_options_test.nox`. Total test suites: 28 (100% passing).
+
 ## [0.6.1] - 2026-11-01
 
 ### Fixed & Improved

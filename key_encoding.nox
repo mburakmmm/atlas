@@ -1,0 +1,36 @@
+# key_encoding.nox — Canonical hash key encoding for Atlas Join and GroupBy.
+
+import values
+from values import Cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+
+def cell_hash_key(c: Cell) -> str:
+    if c.is_missing():
+        return "N"
+    if c.kind == TYPE_INT:
+        return "I:" + str(c.as_int())
+    if c.kind == TYPE_FLOAT:
+        f_val: float = c.as_float()
+        if not (f_val == f_val):
+            return "F:nan"
+        # If float represents an exact whole integer in 64-bit int range, normalize to "I:<int>"
+        if f_val >= -9223372036854775808.0 and f_val < 9223372036854775808.0 and f_val == float(int(f_val)):
+            return "I:" + str(int(f_val))
+        return "F:" + str(f_val)
+    if c.kind == TYPE_STR:
+        s_val: str = c.to_string()
+        return "S" + str(len(s_val)) + ":" + s_val
+    if c.kind == TYPE_BOOL:
+        if c.as_bool():
+            return "B:1"
+        return "B:0"
+    return "X"
+
+def composite_hash_key(cells: list[Cell]) -> str:
+    res: str = ""
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        part: str = cell_hash_key(cells[i])
+        res = res + "[" + str(len(part)) + "]" + part
+        i = i + 1
+    return res

@@ -8,6 +8,8 @@ import schema
 from schema import Schema, ColumnDef
 import table
 from table import Table
+import key_encoding
+from key_encoding import cell_hash_key, composite_hash_key
 
 def _contains_str(lst: list[str], target: str) -> bool:
     i: int = 0
@@ -26,35 +28,6 @@ def _key_has_null(cells: list[Cell]) -> bool:
             return True
         i = i + 1
     return False
-
-def _cell_hash_key(c: Cell) -> str:
-    if c.is_missing():
-        return "N"
-    if c.kind == 1: # TYPE_INT
-        return "I:" + str(c.as_int())
-    if c.kind == 2: # TYPE_FLOAT
-        f_val: float = c.as_float()
-        if f_val == float(int(f_val)):
-            return "I:" + str(int(f_val))
-        return "F:" + str(f_val)
-    if c.kind == 3: # TYPE_STR
-        s_val: str = c.to_string()
-        return "S" + str(len(s_val)) + ":" + s_val
-    if c.kind == 4: # TYPE_BOOL
-        if c.as_bool():
-            return "B:1"
-        return "B:0"
-    return "X"
-
-def _cells_hash_key(cells: list[Cell]) -> str:
-    res: str = ""
-    i: int = 0
-    n: int = len(cells)
-    while i < n:
-        part: str = _cell_hash_key(cells[i])
-        res = res + "[" + str(len(part)) + "]" + part
-        i = i + 1
-    return res
 
 def _keys_equal(k1: list[Cell], k2: list[Cell]) -> bool:
     if len(k1) != len(k2):
@@ -170,7 +143,7 @@ def _perform_join(left: Table, right: Table, left_on: list[str], right_on: list[
 
         # Null keys never match other null keys
         if not _key_has_null(right_k):
-            h_key: str = _cells_hash_key(right_k)
+            h_key: str = composite_hash_key(right_k)
             if h_key in right_hash_index:
                 row_list: list[int] = right_hash_index[h_key]
                 row_list.append(r_row_idx)
@@ -199,7 +172,7 @@ def _perform_join(left: Table, right: Table, left_on: list[str], right_on: list[
 
         # Null keys do not match other null keys
         if not _key_has_null(left_k):
-            left_h_key: str = _cells_hash_key(left_k)
+            left_h_key: str = composite_hash_key(left_k)
             if left_h_key in right_hash_index:
                 matched_right_indices: list[int] = right_hash_index[left_h_key]
                 m_idx: int = 0

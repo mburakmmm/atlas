@@ -39,6 +39,69 @@ assert not c_frac.equals(c_5)
 assert c_5.compare(c_frac) == -1
 assert c_frac.compare(c_5) == 1
 
+# Edge Cases for v0.6.2:
+# 1. INT64_MAX vs 2^63.0: 9223372036854775807 vs 9223372036854775808.0
+c_max_i: Cell = cell_int(9223372036854775807)
+c_pow2_63_f: Cell = cell_float(9223372036854775808.0)
+assert not c_max_i.equals(c_pow2_63_f)
+assert not c_pow2_63_f.equals(c_max_i)
+assert c_max_i.compare(c_pow2_63_f) == -1
+assert c_pow2_63_f.compare(c_max_i) == 1
+
+# 2. INT64_MIN vs -2^63.0: -9223372036854775808 vs -9223372036854775808.0
+int64_min_val: int = -9223372036854775807 - 1
+c_min_i: Cell = cell_int(int64_min_val)
+c_min_f: Cell = cell_float(-9223372036854775808.0)
+assert c_min_i.equals(c_min_f)
+assert c_min_f.equals(c_min_i)
+assert c_min_i.compare(c_min_f) == 0
+assert c_min_f.compare(c_min_i) == 0
+
+# 3. Near INT64_MAX multiple of 1024 exact float: 9223372036854774784
+c_near_max_i: Cell = cell_int(9223372036854774784)
+c_near_max_f: Cell = cell_float(9223372036854774784.0)
+assert c_near_max_i.equals(c_near_max_f)
+assert c_near_max_f.equals(c_near_max_i)
+assert c_near_max_i.compare(c_near_max_f) == 0
+assert c_near_max_f.compare(c_near_max_i) == 0
+
+# 4. Positive and Negative Infinity
+pos_inf_f: float = 1.0 / 0.0
+neg_inf_f: float = -1.0 / 0.0
+c_pos_inf: Cell = cell_float(pos_inf_f)
+c_neg_inf: Cell = cell_float(neg_inf_f)
+
+assert not c_5.equals(c_pos_inf)
+assert not c_max_i.equals(c_pos_inf)
+assert c_5.compare(c_pos_inf) == -1
+assert c_max_i.compare(c_pos_inf) == -1
+assert c_pos_inf.compare(c_max_i) == 1
+
+assert not c_5.equals(c_neg_inf)
+assert not c_min_i.equals(c_neg_inf)
+assert c_5.compare(c_neg_inf) == 1
+assert c_min_i.compare(c_neg_inf) == 1
+assert c_neg_inf.compare(c_min_i) == -1
+
+# 5. NaN Behavior
+nan_val_f: float = 0.0 / 0.0
+c_nan1: Cell = cell_float(nan_val_f)
+c_nan2: Cell = cell_float(nan_val_f)
+# Two NaNs equal each other in table operations:
+assert c_nan1.equals(c_nan2)
+assert c_nan1.compare(c_nan2) == 0
+# Number vs NaN: not equal, number < NaN (NaN sorts last):
+assert not c_5.equals(c_nan1)
+assert c_5.compare(c_nan1) == -1
+assert c_nan1.compare(c_5) == 1
+
+# 6. Large integer vs representable fractional float:
+c_large_i: Cell = cell_int(9007199254740993)
+c_half_f: Cell = cell_float(2251799813685248.5)
+assert not c_large_i.equals(c_half_f)
+assert c_large_i.compare(c_half_f) == 1
+assert c_half_f.compare(c_large_i) == -1
+
 # Single canonical value test
 # If directly instantiated with mismatching f, as_float() must still use i
 bad_constructed: Cell = Cell(TYPE_INT, 100, 999.0, "", False)

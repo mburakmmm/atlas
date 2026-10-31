@@ -1,0 +1,45 @@
+# tests/csv_options_test.nox — Validation of CsvOptions and options-based delimited I/O.
+
+import nox.test
+import errors
+from errors import CsvImportError
+import delimited
+from delimited import CsvOptions, csv_options, read_delimited_options, to_delimited_options
+import table
+from table import Table
+
+# 1. Custom semicolon options with has_header=True
+opts: CsvOptions = csv_options(";", True, True, False, False)
+raw_text: str = "id;product;price\n1;Laptop;1200.50\n2;Mouse;25.00"
+
+t: Table = read_delimited_options(raw_text, opts)
+nox.test.assert_eq_int(t.row_count(), 2, "2 rows read with CsvOptions")
+nox.test.assert_eq_int(t.column_count(), 3, "3 columns read with CsvOptions")
+assert t.cell(0, 1).to_string() == "Laptop"
+
+# 2. to_delimited_options serialization
+exported: str = to_delimited_options(t, opts)
+assert "id;product;price\n" in exported
+assert "1;Laptop;1200.5\n" in exported
+
+# 3. Strict mode with CsvOptions
+strict_opts: CsvOptions = csv_options(",", True, True, True, False)
+bad_csv: str = "name,val\n\"Test\"extra,10\n"
+
+strict_failed: bool = False
+try:
+    read_delimited_options(bad_csv, strict_opts)
+except CsvImportError:
+    strict_failed = True
+
+assert strict_failed
+
+# 4. Safe spreadsheet mode with CsvOptions
+safe_opts: CsvOptions = csv_options(",", True, True, False, True)
+safe_csv: str = "name,val\n=A1,100"
+t_safe: Table = read_delimited_options(safe_csv, csv_options(",", True, True, False, False))
+safe_out: str = to_delimited_options(t_safe, safe_opts)
+# In safe spreadsheet mode, leading '=' gets prepended with '\''
+assert "'=A1" in safe_out
+
+print("csv_options_test passed")

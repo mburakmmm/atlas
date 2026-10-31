@@ -1,0 +1,78 @@
+# tests/sql_integration_test.nox — Comprehensive SQL dialect, Feather bridge and DDL verification.
+
+import nox.test
+import errors
+from errors import SchemaError, ColumnNotFoundError
+import values
+from values import Cell, cell_int, cell_float, cell_str, cell_bool, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import sql_adapter
+from sql_adapter import quote_identifier, type_to_sql_type, table_to_create_table_sql, table_to_insert_sql, table_from_records, cell_from_db_value
+
+# 1. SQL Dialect quoting
+assert quote_identifier("users", "sqlite") == "\"users\""
+assert quote_identifier("users", "postgres") == "\"users\""
+assert quote_identifier("users", "postgresql") == "\"users\""
+assert quote_identifier("users", "ansi") == "\"users\""
+assert quote_identifier("users", "mysql") == "`users`"
+# Escaped quotes in identifiers:
+assert quote_identifier("user\"name", "sqlite") == "\"user\"\"name\""
+assert quote_identifier("user`name", "mysql") == "`user``name`"
+
+# 2. SQL Type mapping across dialects
+assert type_to_sql_type(TYPE_INT, "sqlite") == "INTEGER"
+assert type_to_sql_type(TYPE_FLOAT, "sqlite") == "REAL"
+assert type_to_sql_type(TYPE_FLOAT, "postgres") == "DOUBLE PRECISION"
+assert type_to_sql_type(TYPE_FLOAT, "postgresql") == "DOUBLE PRECISION"
+assert type_to_sql_type(TYPE_STR, "sqlite") == "TEXT"
+assert type_to_sql_type(TYPE_BOOL, "sqlite") == "INTEGER"
+assert type_to_sql_type(TYPE_BOOL, "postgres") == "BOOLEAN"
+
+# 3. CREATE TABLE generation with Primary Key & Not Null
+s: Schema = Schema([
+    ColumnDef("id", TYPE_INT, False), # NOT NULL
+    ColumnDef("score", TYPE_FLOAT, True),
+    ColumnDef("name", TYPE_STR, False) # NOT NULL
+])
+t: Table = Table(s, [[cell_int(1), cell_float(98.5), cell_str("Alice")]])
+
+ddl_sqlite: str = table_to_create_table_sql(t, "users", "sqlite", "id")
+assert "CREATE TABLE IF NOT EXISTS \"users\"" in ddl_sqlite
+assert "\"id\" INTEGER NOT NULL PRIMARY KEY" in ddl_sqlite
+assert "\"score\" REAL" in ddl_sqlite
+assert "\"name\" TEXT NOT NULL" in ddl_sqlite
+
+ddl_mysql: str = table_to_create_table_sql(t, "users", "mysql", "id")
+assert "CREATE TABLE IF NOT EXISTS `users`" in ddl_mysql
+assert "`id` INTEGER NOT NULL PRIMARY KEY" in ddl_mysql
+
+ddl_pg: str = table_to_create_table_sql(t, "users", "postgres", "id")
+assert "\"score\" DOUBLE PRECISION" in ddl_pg
+
+# 4. INSERT SQL Generation: SQLite '?' vs PostgreSQL '$1, $2, $3'
+ins_sqlite: str = table_to_insert_sql(t, "users", "sqlite")
+assert ins_sqlite == "INSERT INTO \"users\" (\"id\", \"score\", \"name\") VALUES (?, ?, ?);"
+
+ins_pg: str = table_to_insert_sql(t, "users", "postgres")
+assert ins_pg == "INSERT INTO \"users\" (\"id\", \"score\", \"name\") VALUES ($1, $2, $3);"
+
+ins_mysql: str = table_to_insert_sql(t, "users", "mysql")
+assert ins_mysql == "INSERT INTO `users` (`id`, `score`, `name`) VALUES (?, ?, ?);"
+
+# 5. Database & Feather Record Bridge
+col_names: list[str] = ["id", "val"]
+col_types: list[int] = [TYPE_INT, TYPE_FLOAT]
+db_rows: list[list[Cell]] = [
+    [cell_from_db_value(1, 100, 0.0, "", False, False), cell_from_db_value(2, 0, 12.34, "", False, False)],
+    [cell_from_db_value(1, 200, 0.0, "", False, False), cell_from_db_value(2, 0, 0.0, "", False, True)] # null
+]
+t_db: Table = table_from_records(col_names, col_types, db_rows)
+nox.test.assert_eq_int(t_db.row_count(), 2, "2 rows converted from db records")
+assert t_db.cell(0, 0).as_int() == 100
+assert t_db.cell(0, 1).as_float() == 12.34
+assert t_db.cell(1, 1).is_missing()
+
+print("sql_integration_test passed")

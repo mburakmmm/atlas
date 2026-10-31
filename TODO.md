@@ -226,6 +226,34 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
+## 🛠️ Sürüm 0.6.2 — Matematiksel Sınır Güvenliği, Ortak Hash Kodlama & CsvOptions (Teknik İnceleme İyileştirmeleri)
+
+- [x] **Karma Integer/Float Sınır Durumları ve Dönüşüm Güvenliği (🔴 P1)**:
+  - `values.nox`: `9223372036854775000.0` gibi keyfi ve yuvarlanan float sabit sınırı yerine tam $2^{63}$ (`9223372036854775808.0`) ve $-2^{63}$ (`-9223372036854775808.0`) sınırları ile float'ın 64-bit int aralığında (`[-2^63, 2^63)`) olduğunun matematiksel olarak garanti altına alınması.
+  - $9223372036854774784$ (near INT64_MAX, 1024'ün katı olan tam temsil edilebilir float) gibi geçerli değerlerin eşitliklerinin doğrulanması.
+  - INT64_MAX ($2^{63}-1$) ile $2^{63}.0$ arasındaki farkın (1 fark) eşit olmadığının ve $i < f$ olduğunun doğrulanması.
+  - INT64_MIN ($-2^{63}$) ile $-2^{63}.0$ tam eşitliğinin korunması.
+- [x] **Kesirli Float Sıralamalarında `float(i)` Dönüşümünün Kaldırılması (🔴 P1)**:
+  - `values.nox`: `_int_float_compare` fonksiyonunda kesirli float'lar için `float(i)` dönüşümü yerine, float'ın kesirli aralığı (`f_trunc < f < f_trunc + 1` veya negatif için `f_trunc - 1 < f < f_trunc`) kullanılarak doğrudan 64-bit tamsayı mantığıyla (`i <= f_trunc` vb.) karşılaştırma yapılması.
+  - Böylece büyük integer değerlerde (`9007199254740993` vb.) float yuvarlamasından kaynaklanabilecek sıralama bozulmalarının tamamen önlenmesi.
+- [x] **IEEE-754 NaN ve Sonsuzluk (Infinity) Davranışlarının Tanımlanması (🔴 P1)**:
+  - `values.nox`: `not (f == f)` ile NaN tespiti; `Cell.equals` içinde NaN-NaN eşitliği (tablo operasyonları için tutarlı), `Cell.compare` içinde NaN'ın en sona sıralanması (`NaN sorts last`).
+  - Pozitif sonsuzluğun (+Inf) tüm sonlu integer'lardan büyük (`i < +Inf`), negatif sonsuzluğun (-Inf) tüm sonlu integer'lardan küçük (`i > -Inf`) olarak deterministik karşılaştırılması.
+- [x] **Ortak Hash Key Kodlama Modülü (`key_encoding.nox`) (🟠 P2)**:
+  - `join.nox` ve `groupby.nox` arasındaki kod tekrarını (`_cell_hash_key`, `_cells_hash_key`, `_cell_hash_repr`, `_cells_hash_repr`) gidermek için `key_encoding.nox` modülü oluşturulması (`cell_hash_key`, `composite_hash_key`).
+  - Join ve GroupBy motorlarının tamamen aynı hash kurallarını ve $O(1)$ normalizasyonunu kullanmasının güvenceye alınması.
+- [x] **Hash ve Equality Tutarlılığı ile Gerçek Çakışma Bucket Testleri (🟠 P2)**:
+  - `tests/groupby_collision_test.nox`: Hash anahtarları aynı bucket'a düşen fakat `Cell.equals()` ile farklı olan aday grupların fallback mekanizmasının ve `Cell` eşitliğinin doğrulanması.
+  - `tests/hash_consistency_test.nox`: Join ve GroupBy hash anahtarlarının aynı veri tipleri ve hücrelerde birebir aynı hash dizesini ürettiğinin test edilmesi.
+- [x] **Feather & SQL Veritabanı Entegrasyon Test Matrisi (🟠 P2)**:
+  - `tests/sql_integration_test.nox`: PostgreSQL positional placeholder `$1, $2`, MySQL identifier backtick, SQLite çift tırnak, veri tipi eşleştirmeleri, NOT NULL ve PRIMARY KEY kurgularının doğrulanması.
+- [x] **CSV Seçenek Nesnesi (`CsvOptions`) (🟡 P3)**:
+  - `delimited.nox`: `CsvOptions` sınıfı, `csv_options(...)` yardımcı fonksiyonu ve `read_delimited_options(text, options)` fonksiyonunun eklenmesi; mevcut API imzalarının geriye dönük tam uyumlu tutulması.
+- [x] **Birim Testler & Sürüm Yayın**:
+  - `tests/hash_consistency_test.nox`, `tests/sql_integration_test.nox`, `tests/csv_options_test.nox` dahil 28 test paketinin `noxc test` ile doğrulanması, `nox.json` sürümünün 0.6.2 olarak güncellenmesi, `CHANGELOG.md` kaydı, git commit, GitHub push ve `noxc publish`.
+
+---
+
 ## 🏆 Sürüm 1.0.0 — Nihai Üretim Sürümü (Gelecek Hedef)
 
 - [ ] Topluluk geri bildirimleri sonrası API dondurma onayı.

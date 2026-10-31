@@ -64,4 +64,30 @@ nox.test.assert_eq_int(res2.cell(0, 2).as_int(), 100, "100 rows in grp_0")
 nox.test.assert_eq_int(res2.cell(1, 2).as_int(), 100, "100 rows in grp_1")
 nox.test.assert_eq_int(res2.cell(2, 2).as_int(), 100, "100 rows in grp_2")
 
+# Test 3: Synthetic identical hash collision verification
+# Two distinct cells sharing the exact same hash representation ("X")
+c_coll_a: Cell = Cell(99, 1, 0.0, "a", False)
+c_coll_b: Cell = Cell(98, 2, 0.0, "b", False)
+assert not c_coll_a.equals(c_coll_b)
+
+s3: Schema = Schema([ColumnDef("key", 99), ColumnDef("val", TYPE_INT)])
+rows3: list[list[Cell]] = [
+    [c_coll_a, cell_int(10)], # Group 0 (hash "X")
+    [c_coll_b, cell_int(20)], # Collision! Group 1 (same hash "X")
+    [c_coll_a, cell_int(30)], # Must route to Group 0 via candidate scan
+    [c_coll_b, cell_int(40)]  # Must route to Group 1 via candidate scan
+]
+t3: Table = Table(s3, rows3)
+g3: GroupedTable = group_by(t3, ["key"])
+res3: Table = g3.aggregate([agg_count("cnt"), agg_sum("val", "total")])
+
+nox.test.assert_eq_int(g3.group_count(), 2, "2 distinct groups despite identical hash key")
+nox.test.assert_eq_int(res3.row_count(), 2, "2 rows in aggregated table")
+# Group 0: c_coll_a -> count=2, sum=40
+assert res3.cell(0, 1).as_int() == 2
+assert res3.cell(0, 2).as_float() == 40.0
+# Group 1: c_coll_b -> count=2, sum=60
+assert res3.cell(1, 1).as_int() == 2
+assert res3.cell(1, 2).as_float() == 60.0
+
 print("groupby_collision_test passed")
