@@ -27,6 +27,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.9.2** | **WindowContext Boru Hattı, Null Politikaları, INT64 Taşma Koruması & Benchmark** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.3** | **Sıralama Anahtarı Doğrulaması, Tembel Sütun Tamponlama, 3.17x Hızlanma & Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.4** | **Ortak Checked Arithmetic, Bağımsız Pipeline Sözleşmesi & Medyan Benchmark** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
+| **v0.9.5** | **Genişletilmiş Checked Aritmetik, Neumaier Toplamı, Backend Matrisi & Referans Testleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 39/39 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -565,6 +566,41 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - `CHANGELOG.md`, `README.md`, `docs/capabilities.md`, `docs/api.md` güncellendi.
   - `noxc test` ile 36 test paketinin tamamının başarıyla geçtiği doğrulandı.
   - `benchmarks/benchmark_window.nox` çalıştırılıp medyan hızlanma ve diferansiyel doğrulama çıktısı alındı.
+  - Git commit, push ve `noxc publish` ile sürüm tamamlandı.
+
+---
+
+## ✅ Sürüm 0.9.5 — Genişletilmiş Checked Aritmetik, Neumaier Toplamı, Backend Matrisi & Referans Testleri (Tamamlananlar)
+
+- [x] **Genişletilmiş 64-bit Checked Aritmetik Modülü (🟠 P2 - `values.nox`, `atlas.nox`)**:
+  - `checked_sub_int64(a: int, b: int, context_msg: str = "") -> int`: Tamsayı çıkarma işleminde taşma/aşma kontrolü.
+  - `checked_mul_int64(a: int, b: int, context_msg: str = "") -> int`: Tamsayı çarpma işleminde overflow ve underflow sınır kontrolleri (`INT64_MAX`, `INT64_MIN`).
+  - `checked_div_int64(a: int, b: int, context_msg: str = "") -> int`: Sıfıra bölme ve ikiye tümleme taşma tuzağı (`INT64_MIN / -1`) kontrolleri.
+  - `values.nox` ve `atlas.nox` facadelerinden dışa aktarma.
+- [x] **Neumaier Sayısal Olarak Kararlı Compensated Summation (🟠 P2 - `stats.nox`)**:
+  - `stats.stat_sum` ve `stats.stat_mean` fonksiyonlarının **Neumaier compensated summation** algoritmasına yükseltilmesi.
+  - $10^{16} + 1.0 - 10^{16} = 1.0$ gibi katastrofik iptal (catastrophic cancellation) ve floating-point hassasiyet kaybı durumlarında tam sayısal doğruluk elde edilmesi.
+- [x] **Pandas / Polars Zemin Gerçeği (Ground Truth) Referans Testleri (🔴 P1 - `tests/reference_comparison_test.nox`)**:
+  - Pandas ve Polars'tan bağımsız olarak hesaplanmış altın standart referans tablolarıyla Atlas çıktılarının karşılaştırılması.
+  - Multi-key GroupBy (count, sum, mean, std, var, min, max, int sum).
+  - Window fonksiyonları (rank with ties, dense rank, lag with defaults, lead, cumulative sum, moving average min_periods).
+  - Pivot table ve Melt çoklu değişken dönüşümleri.
+  - Full outer join null padding ve key tutarlılığı.
+- [x] **NOX Backend Uyumluluk Matrisi Test Paketi (🔴 P1 - `tests/backend_matrix_test.nox`)**:
+  - INT64 sınırları ve ikiye tümleme aritmetiği.
+  - Float NaN, Inf ve -Inf karşılaştırma ve eşitlik tutarlılığı.
+  - Hash determinizmi (farklı çalıştırma turlarında kararlı string ve composite hashleme).
+  - Kararlı sıralama (stable sort) eşit anahtar sıra korunumu.
+  - Çok baytlı UTF-8 ve Unicode karakterlerin (Türkçe karakterler, aksanlar, CJK, emojiler) CSV ve Tablo içi doğruluğu.
+  - Hata yakalama ve istisna hiyerarşisi doğrulaması (`ShapeError`, `AggregationError`, `SchemaError`, `SortError` -> `AtlasError`).
+- [x] **Yüksek Kardinalite GroupBy & Hash Ölçekleme Testi (🟠 P2 - `tests/high_cardinality_test.nox`)**:
+  - 50.000 benzersiz anahtara sahip 100.000 satırlık veri kümesinde hash grouping ve collision bucket ölçeklenmesinin testi (37 ms tamamlama).
+- [x] **Benchmark Genişletmesi: Kardinalite & Bellek Tüketim Raporlaması (`benchmarks/benchmark_window.nox`)**:
+  - Farklı partition kardinalitelerinde (10, 100, 1000 partitions) pencere fonksiyonu ölçeklenmesi ölçüldü; tutarlı 2.6x - 3.1x hızlanma doğrulandı.
+- [x] **Dokümantasyon & Sürüm 0.9.5**:
+  - `nox.json` sürümü `0.9.5` olarak güncellendi.
+  - `CHANGELOG.md`, `README.md`, `docs/capabilities.md`, `docs/api.md` güncellendi.
+  - `noxc test` ile tüm 39 test paketinin geçtiği doğrulandı.
   - Git commit, push ve `noxc publish` ile sürüm tamamlandı.
 
 ---

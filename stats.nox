@@ -30,15 +30,33 @@ def stat_count_missing(cells: list[Cell]) -> int:
     return cnt
 
 def stat_sum(cells: list[Cell]) -> float:
-    total: float = 0.0
+    # Neumaier compensated summation algorithm
+    # Prevents catastrophic cancellation and floating-point precision loss
+    sum_f: float = 0.0
+    c_comp: float = 0.0
     i: int = 0
     n: int = len(cells)
     while i < n:
-        c: Cell = cells[i]
-        if not c.is_missing() and c.is_numeric():
-            total = total + c.as_float()
+        cell_item: Cell = cells[i]
+        if not cell_item.is_missing() and cell_item.is_numeric():
+            x: float = cell_item.as_float()
+            if not (x == x):
+                return x
+            t: float = sum_f + x
+            abs_sum: float = sum_f
+            if abs_sum < 0.0:
+                abs_sum = -abs_sum
+            abs_x: float = x
+            if abs_x < 0.0:
+                abs_x = -abs_x
+
+            if abs_sum >= abs_x:
+                c_comp = c_comp + ((sum_f - t) + x)
+            else:
+                c_comp = c_comp + ((x - t) + sum_f)
+            sum_f = t
         i = i + 1
-    return total
+    return sum_f + c_comp
 
 def stat_sum_int(cells: list[Cell], context_msg: str = "stat_sum_int") -> int:
     total: int = 0
@@ -52,18 +70,17 @@ def stat_sum_int(cells: list[Cell], context_msg: str = "stat_sum_int") -> int:
     return total
 
 def stat_mean(cells: list[Cell]) -> float:
-    total: float = 0.0
     cnt: int = 0
     i: int = 0
     n: int = len(cells)
     while i < n:
         c: Cell = cells[i]
         if not c.is_missing() and c.is_numeric():
-            total = total + c.as_float()
             cnt = cnt + 1
         i = i + 1
     if cnt == 0:
         raise AggregationError("cannot compute mean: no non-missing numeric observations")
+    total: float = stat_sum(cells)
     return total / float(cnt)
 
 def stat_variance(cells: list[Cell], is_sample: bool = True) -> float:

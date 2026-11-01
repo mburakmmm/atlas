@@ -5,7 +5,7 @@ import nox.mathx
 import errors
 from errors import AggregationError, ShapeError
 import values
-from values import Cell, cell_int, cell_float, cell_null, checked_add_int64, INT64_MAX, INT64_MIN, TYPE_INT
+from values import Cell, cell_int, cell_float, cell_null, checked_add_int64, checked_sub_int64, checked_mul_int64, checked_div_int64, INT64_MAX, INT64_MIN, TYPE_INT
 import stats
 from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
 import schema
@@ -126,5 +126,64 @@ try:
 except ShapeError:
     caught_tbl_sum_ov = True
 nox.test.assert_true(caught_tbl_sum_ov, "Table.sum_val raises ShapeError on INT64 overflow")
+
+# 10. Checked Subtraction, Multiplication, Division
+nox.test.assert_eq_int(checked_sub_int64(10, 3), 7, "checked_sub_int64 10 - 3")
+caught_sub_un: bool = False
+try:
+    checked_sub_int64(INT64_MIN, 1)
+except ShapeError:
+    caught_sub_un = True
+nox.test.assert_true(caught_sub_un, "checked_sub_int64 INT64_MIN - 1 raises ShapeError")
+
+caught_sub_ov: bool = False
+try:
+    checked_sub_int64(INT64_MAX, -1)
+except ShapeError:
+    caught_sub_ov = True
+nox.test.assert_true(caught_sub_ov, "checked_sub_int64 INT64_MAX - (-1) raises ShapeError")
+
+nox.test.assert_eq_int(checked_mul_int64(10, 5), 50, "checked_mul_int64 10 * 5")
+caught_mul_ov1: bool = False
+try:
+    checked_mul_int64(INT64_MAX // 2 + 1, 2)
+except ShapeError:
+    caught_mul_ov1 = True
+nox.test.assert_true(caught_mul_ov1, "checked_mul_int64 overflow raises ShapeError")
+
+caught_mul_ov2: bool = False
+try:
+    checked_mul_int64(INT64_MIN, -1)
+except ShapeError:
+    caught_mul_ov2 = True
+nox.test.assert_true(caught_mul_ov2, "checked_mul_int64 INT64_MIN * -1 raises ShapeError")
+
+nox.test.assert_eq_int(checked_div_int64(100, 5), 20, "checked_div_int64 100 // 5")
+caught_div_zero: bool = False
+try:
+    checked_div_int64(100, 0)
+except ShapeError:
+    caught_div_zero = True
+nox.test.assert_true(caught_div_zero, "checked_div_int64 div by zero raises ShapeError")
+
+caught_div_ov: bool = False
+try:
+    checked_div_int64(INT64_MIN, -1)
+except ShapeError:
+    caught_div_ov = True
+nox.test.assert_true(caught_div_ov, "checked_div_int64 INT64_MIN // -1 raises ShapeError")
+
+# 11. Neumaier Compensated Summation Catastrophic Cancellation Test
+# Mathematically: 1e16 + 1.0 - 1e16 = 1.0
+cells_canc: list[Cell] = [cell_float(10000000000000000.0), cell_float(1.0), cell_float(-10000000000000000.0)]
+sum_canc: float = stat_sum(cells_canc)
+nox.test.assert_eq_float(sum_canc, 1.0, "Neumaier compensated summation recovers 1.0 exactly after cancellation")
+
+mean_canc: float = stat_mean(cells_canc)
+expected_mean: float = 1.0 / 3.0
+diff_mean: float = mean_canc - expected_mean
+if diff_mean < 0.0:
+    diff_mean = -diff_mean
+nox.test.assert_true(diff_mean < 1e-12, "Neumaier mean accurately preserves 1/3")
 
 print("stats_test passed")

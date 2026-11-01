@@ -158,4 +158,59 @@ while r_scan < num_rows_verify:
 
 print("[Verification] Verified: All 100,000 rows and 7 columns are 100% identical between Control Group and Pipeline!")
 print("==========================================================================")
+
+# Scenario D: Partition Cardinality Scaling (10, 100, 1,000 partitions on 50,000 rows)
+print("Partition Cardinality Scaling Benchmark (50,000 synthetic rows, 3 iterations)")
+print("--------------------------------------------------------------------------")
+
+def run_cardinality_benchmark(k_partitions: int) -> None:
+    card_rows: list[list[Cell]] = []
+    c_i: int = 0
+    c_n: int = 50000
+    while c_i < c_n:
+        dept_str: str = "D_" + str(c_i % k_partitions)
+        v_card: int = (c_i * 31) % 500
+        card_rows.append([cell_int(c_i), cell_str(dept_str), cell_int(v_card)])
+        c_i = c_i + 1
+    t_card: Table = Table(s, card_rows)
+
+    # Standalone (Control Group)
+    times_ctl: list[int] = []
+    it_ctl: int = 0
+    while it_ctl < 3:
+        t_start_card: int = nox.time.now_ms()
+        t_ctl_res: Table = t_card.with_row_number("rn", partition_by=["dept"], order_by=["val"], ascending=True) \
+                                 .with_rank("val", "rk", partition_by=["dept"], ascending=True) \
+                                 .with_cumulative_sum("val", "cumsum", partition_by=["dept"], order_by=["val"], ascending=True) \
+                                 .with_lag("val", "prev_val", 1, partition_by=["dept"], order_by=["val"], ascending=True, default_val=cell_int(0))
+        times_ctl.append(nox.time.now_ms() - t_start_card)
+        it_ctl = it_ctl + 1
+    med_ctl: int = calc_median(times_ctl)
+
+    # Pipeline
+    times_pipe: list[int] = []
+    it_pipe: int = 0
+    while it_pipe < 3:
+        t_start_pipe: int = nox.time.now_ms()
+        pipe_ctx: WindowContext = t_card.window(partition_by=["dept"], order_by=["val"], ascending=True)
+        pipe_ctx = pipe_ctx.with_row_number("rn")
+        pipe_ctx = pipe_ctx.with_rank("val", "rk")
+        pipe_ctx = pipe_ctx.with_cumulative_sum("val", "cumsum")
+        pipe_ctx = pipe_ctx.with_lag("val", "prev_val", 1, default_val=cell_int(0))
+        t_pipe_res: Table = pipe_ctx.to_table()
+        times_pipe.append(nox.time.now_ms() - t_start_pipe)
+        it_pipe = it_pipe + 1
+    med_pipe: int = calc_median(times_pipe)
+
+    card_speedup: float = 0.0
+    if med_pipe > 0:
+        card_speedup = float(med_ctl) / float(med_pipe)
+
+    print("  K = " + str(k_partitions) + " partitions: Control = " + str(med_ctl) + " ms, Pipeline = " + str(med_pipe) + " ms (Speedup: " + str(card_speedup) + "x)")
+
+run_cardinality_benchmark(10)
+run_cardinality_benchmark(100)
+run_cardinality_benchmark(1000)
+
+print("==========================================================================")
 print("Window Benchmark Completed Successfully!")

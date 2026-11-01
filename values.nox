@@ -19,6 +19,81 @@ def checked_add_int64(a: int, b: int, context_msg: str = "") -> int:
         raise ShapeError(msg)
     return a + b
 
+def checked_sub_int64(a: int, b: int, context_msg: str = "") -> int:
+    if b > 0 and a < INT64_MIN + b:
+        msg: str = "integer underflow"
+        if len(context_msg) > 0:
+            msg = msg + " in " + context_msg
+        raise ShapeError(msg)
+    if b < 0 and a > INT64_MAX + b:
+        msg: str = "integer overflow"
+        if len(context_msg) > 0:
+            msg = msg + " in " + context_msg
+        raise ShapeError(msg)
+    return a - b
+
+def checked_mul_int64(a: int, b: int, context_msg: str = "") -> int:
+    if a == 0 or b == 0:
+        return 0
+    if a == 1:
+        return b
+    if b == 1:
+        return a
+    if a == -1:
+        if b == INT64_MIN:
+            msg: str = "integer overflow"
+            if len(context_msg) > 0:
+                msg = msg + " in " + context_msg
+            raise ShapeError(msg)
+        return -b
+    if b == -1:
+        if a == INT64_MIN:
+            msg: str = "integer overflow"
+            if len(context_msg) > 0:
+                msg = msg + " in " + context_msg
+            raise ShapeError(msg)
+        return -a
+
+    if a > 0 and b > 0:
+        if a > INT64_MAX // b:
+            msg: str = "integer overflow"
+            if len(context_msg) > 0:
+                msg = msg + " in " + context_msg
+            raise ShapeError(msg)
+    elif a > 0 and b < 0:
+        if b < INT64_MIN // a:
+            msg: str = "integer underflow"
+            if len(context_msg) > 0:
+                msg = msg + " in " + context_msg
+            raise ShapeError(msg)
+    elif a < 0 and b > 0:
+        if a < INT64_MIN // b:
+            msg: str = "integer underflow"
+            if len(context_msg) > 0:
+                msg = msg + " in " + context_msg
+            raise ShapeError(msg)
+    elif a < 0 and b < 0:
+        if a < INT64_MAX // b:
+            msg: str = "integer overflow"
+            if len(context_msg) > 0:
+                msg = msg + " in " + context_msg
+            raise ShapeError(msg)
+
+    return a * b
+
+def checked_div_int64(a: int, b: int, context_msg: str = "") -> int:
+    if b == 0:
+        msg: str = "division by zero"
+        if len(context_msg) > 0:
+            msg = msg + " in " + context_msg
+        raise ShapeError(msg)
+    if a == INT64_MIN and b == -1:
+        msg: str = "integer overflow in division of INT64_MIN by -1"
+        if len(context_msg) > 0:
+            msg = msg + " in " + context_msg
+        raise ShapeError(msg)
+    return a // b
+
 TYPE_NULL: int = 0
 TYPE_INT: int = 1
 TYPE_FLOAT: int = 2

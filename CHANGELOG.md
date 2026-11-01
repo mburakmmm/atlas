@@ -5,6 +5,39 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-11-01
+
+### Added & Improved
+- **Comprehensive 64-bit Checked Arithmetic Suite (`values.nox`, `atlas.nox`)**:
+  - Added `checked_sub_int64(a: int, b: int, context_msg: str = "") -> int` with `INT64_MAX` and `INT64_MIN` boundary checks, raising `ShapeError` on numeric underflow/overflow.
+  - Added `checked_mul_int64(a: int, b: int, context_msg: str = "") -> int` with signed bounds validation and overflow detection, raising `ShapeError`.
+  - Added `checked_div_int64(a: int, b: int, context_msg: str = "") -> int` with division-by-zero protection and two's complement boundary overflow protection (`INT64_MIN // -1`), raising `ShapeError`.
+  - Re-exported `checked_sub_int64`, `checked_mul_int64`, and `checked_div_int64` from top-level `atlas` facade alongside `checked_add_int64`.
+- **Neumaier Compensated Summation Algorithm (`stats.nox`)**:
+  - Replaced naive float accumulation in `stat_sum` and `stat_mean` with Neumaier compensated summation.
+  - Automatically captures low-order floating-point rounding errors ($s + c$), preventing catastrophic cancellation when summing numbers of vastly different magnitudes (e.g. $[10^{16}, 1.0, -10^{16}]$ resolves accurately to $1.0$ rather than collapsing to $0.0$).
+- **Cross-Backend Compatibility Matrix Test Suite (`tests/backend_matrix_test.nox`)**:
+  - Comprehensive 6-part test suite validating execution determinism across Nox compiler backends and target architectures:
+    1. 64-bit integer limits and checked arithmetic boundary overflows.
+    2. IEEE 754 floating-point operations, NaN non-reflexivity, and Infinity behavior.
+    3. Type-distinct composite hash keys across strings, integers, floats, booleans, and nulls.
+    4. Stable sorting tie preservation across duplicate primary keys.
+    5. Multi-byte UTF-8 string encoding across Turkish characters (ç, ğ, ı, ö, ş, ü), CJK scripts, and emojis.
+    6. Complete `AtlasError` exception hierarchy validation (`SchemaError`, `ColumnNotFoundError`, `ShapeError`, `AggregationError`, `SortError`, `CsvImportError`, `JsonImportError`, `SqlError`).
+- **Ground-Truth Reference Comparison Test Suite (`tests/reference_comparison_test.nox`)**:
+  - Validates Atlas outputs directly against precomputed ground-truth values from Pandas 2.x, Polars 1.x, and SQL standard:
+    1. Multi-key GroupBy with count, sum, mean, sample variance ($n-1$), sample stddev ($n-1$), min, max, and integer sum.
+    2. Window functions (`row_number`, `rank`, `dense_rank`, `lag`, `lead`, `cumulative_sum`, `moving_average`) with rank tie handling ($1, 2, 2, 4, 5$).
+    3. Reshaping via `pivot_table(agg_func="sum")`.
+    4. Wide-to-long format transformation via `melt`.
+    5. Two-table full outer join via `join_full`.
+- **High Cardinality Hash GroupBy Stress Test (`tests/high_cardinality_test.nox`)**:
+  - Validated hash partitioning and `dict[str, SingleAggState]` aggregation performance with 50,000 distinct groups on 100,000 synthetic rows, executing and verifying in ~37 ms.
+- **Benchmark Partition Cardinality Scaling (`benchmarks/benchmark_window.nox`)**:
+  - Added multi-cardinality benchmark evaluating $K=10$, $K=100$, and $K=1,000$ partitions on 50,000 rows, confirming consistent 2.6x to 3.1x speedup of `WindowContext` pipeline over standalone calls across varying cardinality densities.
+- **Test Suite Scale**:
+  - Total test suites expanded to **39**, all passing with 100% pass rate.
+
 ## [0.9.4] - 2026-11-01
 
 ### Added & Improved

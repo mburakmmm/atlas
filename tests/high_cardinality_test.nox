@@ -1,0 +1,65 @@
+# tests/high_cardinality_test.nox — High cardinality Hash GroupBy stress test (50,000 unique groups, 100,000 rows).
+
+import nox.test
+import nox.time
+import values
+from values import Cell, cell_int, cell_str, cell_float, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import groupby
+from groupby import group_by, GroupedTable, agg_count, agg_sum
+
+# Schema: grp_id (str), val_i (int), val_f (float)
+s: Schema = Schema([
+    ColumnDef("grp_id", TYPE_STR),
+    ColumnDef("val_i", TYPE_INT),
+    ColumnDef("val_f", TYPE_FLOAT)
+])
+
+# 100,000 rows across 50,000 unique groups: each group appears twice (i % 50000)
+num_groups: int = 50000
+num_rows: int = 100000
+
+rows: list[list[Cell]] = []
+i: int = 0
+while i < num_rows:
+    grp_idx: int = i % num_groups
+    rows.append([
+        cell_str("grp_" + str(grp_idx)),
+        cell_int(5),
+        cell_float(10.5)
+    ])
+    i = i + 1
+
+t: Table = Table(s, rows)
+nox.test.assert_eq_int(t.row_count(), 100000, "100,000 input rows created")
+
+t0: int = nox.time.now_ms()
+g: GroupedTable = group_by(t, ["grp_id"])
+res: Table = g.aggregate([
+    agg_count("cnt"),
+    agg_sum("val_i", "sum_int"),
+    agg_sum("val_f", "sum_float")
+])
+duration_ms: int = nox.time.now_ms() - t0
+
+# Assertions
+nox.test.assert_eq_int(g.group_count(), 50000, "50,000 unique groups partitioned")
+nox.test.assert_eq_int(res.row_count(), 50000, "50,000 aggregated rows")
+
+# Spot checks
+# Group 0: cnt=2, sum_int=10, sum_float=21.0
+nox.test.assert_eq_str(res.rows[0][0].to_string(), "grp_0", "First group is grp_0")
+nox.test.assert_eq_int(res.rows[0][1].as_int(), 2, "grp_0 count is 2")
+nox.test.assert_eq_int(res.rows[0][2].as_int(), 10, "grp_0 sum_int is 10")
+nox.test.assert_eq_float(res.rows[0][3].as_float(), 21.0, "grp_0 sum_float is 21.0")
+
+# Group 49999 (last distinct group encountered in first 50k rows)
+nox.test.assert_eq_str(res.rows[49999][0].to_string(), "grp_49999", "Group 49999")
+nox.test.assert_eq_int(res.rows[49999][1].as_int(), 2, "grp_49999 count is 2")
+nox.test.assert_eq_int(res.rows[49999][2].as_int(), 10, "grp_49999 sum_int is 10")
+nox.test.assert_eq_float(res.rows[49999][3].as_float(), 21.0, "grp_49999 sum_float is 21.0")
+
+print("high_cardinality_test passed (50k groups, 100k rows in " + str(duration_ms) + " ms)")

@@ -1,0 +1,250 @@
+# tests/reference_comparison_test.nox — Differential ground-truth tests comparing Atlas against verified reference calculations (Pandas 2.x & Polars 1.x reference standards).
+
+import nox.test
+import nox.mathx
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_float, cell_str, cell_null
+from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
+from atlas import group_by, GroupedTable, agg_count, agg_sum, agg_mean, agg_std, agg_variance, agg_min, agg_max
+from atlas import WindowContext, melt, pivot_table, join_full
+
+# =========================================================================
+# 1. Multi-Key GroupBy & Statistical Aggregations Reference Test
+# Precomputed against Pandas: df.groupby(['dept', 'city']).agg(...)
+# =========================================================================
+s_emp: Schema = Schema([
+    ColumnDef("dept", TYPE_STR),
+    ColumnDef("city", TYPE_STR),
+    ColumnDef("salary", TYPE_FLOAT),
+    ColumnDef("units", TYPE_INT)
+])
+
+rows_emp: list[list[Cell]] = [
+    [cell_str("Finance"), cell_str("NY"), cell_float(100.0), cell_int(10)],
+    [cell_str("Finance"), cell_str("NY"), cell_float(200.0), cell_int(20)],
+    [cell_str("Finance"), cell_str("London"), cell_float(300.0), cell_int(30)],
+    [cell_str("Finance"), cell_str("London"), cell_float(350.0), cell_int(35)],
+    [cell_str("Tech"), cell_str("SF"), cell_float(400.0), cell_int(40)],
+    [cell_str("Tech"), cell_str("SF"), cell_float(600.0), cell_int(60)]
+]
+
+t_emp: Table = Table(s_emp, rows_emp)
+g: GroupedTable = group_by(t_emp, ["dept", "city"])
+res_g: Table = g.aggregate([
+    agg_count("count"),
+    agg_sum("salary", "total_salary"),
+    agg_mean("salary", "avg_salary"),
+    agg_variance("salary", "var_salary", is_sample=True),
+    agg_std("salary", "std_salary", is_sample=True),
+    agg_min("salary", "min_salary"),
+    agg_max("salary", "max_salary"),
+    agg_sum("units", "total_units")
+])
+
+# Aggregation assertions
+nox.test.assert_eq_int(res_g.row_count(), 3, "3 groups produced")
+
+# Group 0: (Finance, NY)
+# count=2, sum=300.0, mean=150.0, var=5000.0, std=sqrt(5000)=70.710678, min=100.0, max=200.0, total_units=30
+nox.test.assert_eq_str(res_g.rows[0][0].to_string(), "Finance", "G0 dept")
+nox.test.assert_eq_str(res_g.rows[0][1].to_string(), "NY", "G0 city")
+nox.test.assert_eq_int(res_g.rows[0][2].as_int(), 2, "G0 count=2")
+nox.test.assert_eq_float(res_g.rows[0][3].as_float(), 300.0, "G0 sum=300.0")
+nox.test.assert_eq_float(res_g.rows[0][4].as_float(), 150.0, "G0 mean=150.0")
+nox.test.assert_eq_float(res_g.rows[0][5].as_float(), 5000.0, "G0 sample var=5000.0")
+nox.test.assert_true(nox.mathx.abs(res_g.rows[0][6].as_float() - 70.710678) < 1e-4, "G0 sample std=70.7106")
+nox.test.assert_eq_float(res_g.rows[0][7].as_float(), 100.0, "G0 min=100.0")
+nox.test.assert_eq_float(res_g.rows[0][8].as_float(), 200.0, "G0 max=200.0")
+nox.test.assert_eq_int(res_g.rows[0][9].as_int(), 30, "G0 int sum total_units=30")
+
+# Group 1: (Finance, London)
+# count=2, sum=650.0, mean=325.0, var=1250.0, std=sqrt(1250)=35.355339, min=300.0, max=350.0, total_units=65
+nox.test.assert_eq_str(res_g.rows[1][0].to_string(), "Finance", "G1 dept")
+nox.test.assert_eq_str(res_g.rows[1][1].to_string(), "London", "G1 city")
+nox.test.assert_eq_int(res_g.rows[1][2].as_int(), 2, "G1 count=2")
+nox.test.assert_eq_float(res_g.rows[1][3].as_float(), 650.0, "G1 sum=650.0")
+nox.test.assert_eq_float(res_g.rows[1][4].as_float(), 325.0, "G1 mean=325.0")
+nox.test.assert_eq_float(res_g.rows[1][5].as_float(), 1250.0, "G1 sample var=1250.0")
+nox.test.assert_true(nox.mathx.abs(res_g.rows[1][6].as_float() - 35.355339) < 1e-4, "G1 sample std=35.3553")
+nox.test.assert_eq_float(res_g.rows[1][7].as_float(), 300.0, "G1 min=300.0")
+nox.test.assert_eq_float(res_g.rows[1][8].as_float(), 350.0, "G1 max=350.0")
+nox.test.assert_eq_int(res_g.rows[1][9].as_int(), 65, "G1 int sum total_units=65")
+
+# Group 2: (Tech, SF)
+# count=2, sum=1000.0, mean=500.0, var=20000.0, std=sqrt(20000)=141.421356, min=400.0, max=600.0, total_units=100
+nox.test.assert_eq_str(res_g.rows[2][0].to_string(), "Tech", "G2 dept")
+nox.test.assert_eq_str(res_g.rows[2][1].to_string(), "SF", "G2 city")
+nox.test.assert_eq_int(res_g.rows[2][2].as_int(), 2, "G2 count=2")
+nox.test.assert_eq_float(res_g.rows[2][3].as_float(), 1000.0, "G2 sum=1000.0")
+nox.test.assert_eq_float(res_g.rows[2][4].as_float(), 500.0, "G2 mean=500.0")
+nox.test.assert_eq_float(res_g.rows[2][5].as_float(), 20000.0, "G2 sample var=20000.0")
+nox.test.assert_true(nox.mathx.abs(res_g.rows[2][6].as_float() - 141.421356) < 1e-4, "G2 sample std=141.4213")
+nox.test.assert_eq_float(res_g.rows[2][7].as_float(), 400.0, "G2 min=400.0")
+nox.test.assert_eq_float(res_g.rows[2][8].as_float(), 600.0, "G2 max=600.0")
+nox.test.assert_eq_int(res_g.rows[2][9].as_int(), 100, "G2 int sum total_units=100")
+
+# =========================================================================
+# 2. Window Functions Reference Test
+# Precomputed against Pandas: df['val'].rank(method='min'), rank(method='dense'), cumsum(), rolling(3).mean()
+# Values: [10, 20, 20, 40, 50]
+# =========================================================================
+s_win: Schema = Schema([ColumnDef("val", TYPE_INT), ColumnDef("val_f", TYPE_FLOAT)])
+rows_win: list[list[Cell]] = [
+    [cell_int(10), cell_float(10.0)],
+    [cell_int(20), cell_float(20.0)],
+    [cell_int(20), cell_float(20.0)],
+    [cell_int(40), cell_float(40.0)],
+    [cell_int(50), cell_float(50.0)]
+]
+t_win: Table = Table(s_win, rows_win)
+
+ctx: WindowContext = t_win.window(order_by=["val"], ascending=True)
+ctx = ctx.with_row_number("rn")
+ctx = ctx.with_rank("val", "rk")
+ctx = ctx.with_dense_rank("val", "drk")
+ctx = ctx.with_lag("val", "lag_1", 1, default_val=cell_int(0))
+ctx = ctx.with_lead("val", "lead_1", 1, default_val=cell_int(0))
+ctx = ctx.with_cumulative_sum("val", "cumsum")
+ctx = ctx.with_moving_average("val_f", 3, "mavg_3", min_periods=1)
+t_win_res: Table = ctx.to_table()
+
+# Verify Row 0: val=10 -> rn=1, rk=1, drk=1, lag=0, lead=20, cumsum=10, mavg=10.0
+nox.test.assert_eq_int(t_win_res.rows[0][2].as_int(), 1, "rn row 0")
+nox.test.assert_eq_int(t_win_res.rows[0][3].as_int(), 1, "rk row 0")
+nox.test.assert_eq_int(t_win_res.rows[0][4].as_int(), 1, "drk row 0")
+nox.test.assert_eq_int(t_win_res.rows[0][5].as_int(), 0, "lag row 0")
+nox.test.assert_eq_int(t_win_res.rows[0][6].as_int(), 20, "lead row 0")
+nox.test.assert_eq_int(t_win_res.rows[0][7].as_int(), 10, "cumsum row 0")
+nox.test.assert_eq_float(t_win_res.rows[0][8].as_float(), 10.0, "mavg row 0")
+
+# Verify Row 1: val=20 -> rn=2, rk=2, drk=2, lag=10, lead=20, cumsum=30, mavg=(10+20)/2=15.0
+nox.test.assert_eq_int(t_win_res.rows[1][2].as_int(), 2, "rn row 1")
+nox.test.assert_eq_int(t_win_res.rows[1][3].as_int(), 2, "rk row 1")
+nox.test.assert_eq_int(t_win_res.rows[1][4].as_int(), 2, "drk row 1")
+nox.test.assert_eq_int(t_win_res.rows[1][5].as_int(), 10, "lag row 1")
+nox.test.assert_eq_int(t_win_res.rows[1][6].as_int(), 20, "lead row 1")
+nox.test.assert_eq_int(t_win_res.rows[1][7].as_int(), 30, "cumsum row 1")
+nox.test.assert_eq_float(t_win_res.rows[1][8].as_float(), 15.0, "mavg row 1")
+
+# Verify Row 2: val=20 (Tie!) -> rn=3, rk=2, drk=2, lag=20, lead=40, cumsum=50, mavg=(10+20+20)/3=16.6666...
+nox.test.assert_eq_int(t_win_res.rows[2][2].as_int(), 3, "rn row 2")
+nox.test.assert_eq_int(t_win_res.rows[2][3].as_int(), 2, "rk row 2 (tie)")
+nox.test.assert_eq_int(t_win_res.rows[2][4].as_int(), 2, "drk row 2 (tie)")
+nox.test.assert_eq_int(t_win_res.rows[2][5].as_int(), 20, "lag row 2")
+nox.test.assert_eq_int(t_win_res.rows[2][6].as_int(), 40, "lead row 2")
+nox.test.assert_eq_int(t_win_res.rows[2][7].as_int(), 50, "cumsum row 2")
+nox.test.assert_true(nox.mathx.abs(t_win_res.rows[2][8].as_float() - 16.666666666) < 1e-5, "mavg row 2")
+
+# Verify Row 3: val=40 -> rn=4, rk=4 (skipped 3!), drk=3 (no gap!), lag=20, lead=50, cumsum=90, mavg=(20+20+40)/3=26.6666...
+nox.test.assert_eq_int(t_win_res.rows[3][2].as_int(), 4, "rn row 3")
+nox.test.assert_eq_int(t_win_res.rows[3][3].as_int(), 4, "rk row 3 (gap 4)")
+nox.test.assert_eq_int(t_win_res.rows[3][4].as_int(), 3, "drk row 3 (dense 3)")
+nox.test.assert_eq_int(t_win_res.rows[3][5].as_int(), 20, "lag row 3")
+nox.test.assert_eq_int(t_win_res.rows[3][6].as_int(), 50, "lead row 3")
+nox.test.assert_eq_int(t_win_res.rows[3][7].as_int(), 90, "cumsum row 3")
+nox.test.assert_true(nox.mathx.abs(t_win_res.rows[3][8].as_float() - 26.666666666) < 1e-5, "mavg row 3")
+
+# Verify Row 4: val=50 -> rn=5, rk=5, drk=4, lag=40, lead=0, cumsum=140, mavg=(20+40+50)/3=36.6666...
+nox.test.assert_eq_int(t_win_res.rows[4][2].as_int(), 5, "rn row 4")
+nox.test.assert_eq_int(t_win_res.rows[4][3].as_int(), 5, "rk row 4")
+nox.test.assert_eq_int(t_win_res.rows[4][4].as_int(), 4, "drk row 4")
+nox.test.assert_eq_int(t_win_res.rows[4][5].as_int(), 40, "lag row 4")
+nox.test.assert_eq_int(t_win_res.rows[4][6].as_int(), 0, "lead row 4")
+nox.test.assert_eq_int(t_win_res.rows[4][7].as_int(), 140, "cumsum row 4")
+nox.test.assert_true(nox.mathx.abs(t_win_res.rows[4][8].as_float() - 36.666666666) < 1e-5, "mavg row 4")
+
+# =========================================================================
+# 3. Pivot Table Reference Test
+# Precomputed against Pandas: df.pivot_table(index='name', columns='q', values='rev', aggfunc='sum')
+# =========================================================================
+s_piv: Schema = Schema([
+    ColumnDef("name", TYPE_STR),
+    ColumnDef("quarter", TYPE_STR),
+    ColumnDef("rev", TYPE_INT)
+])
+rows_piv: list[list[Cell]] = [
+    [cell_str("Alice"), cell_str("Q1"), cell_int(100)],
+    [cell_str("Alice"), cell_str("Q2"), cell_int(150)],
+    [cell_str("Bob"), cell_str("Q1"), cell_int(200)],
+    [cell_str("Bob"), cell_str("Q2"), cell_int(250)]
+]
+t_piv: Table = Table(s_piv, rows_piv)
+piv_res: Table = pivot_table(t_piv, "name", "quarter", "rev", agg_func="sum")
+
+nox.test.assert_eq_int(piv_res.row_count(), 2, "2 rows in pivot")
+nox.test.assert_eq_int(piv_res.column_count(), 3, "name, Q1, Q2")
+nox.test.assert_eq_str(piv_res.rows[0][0].to_string(), "Alice", "Alice row")
+nox.test.assert_eq_int(piv_res.rows[0][1].as_int(), 100, "Alice Q1=100")
+nox.test.assert_eq_int(piv_res.rows[0][2].as_int(), 150, "Alice Q2=150")
+nox.test.assert_eq_str(piv_res.rows[1][0].to_string(), "Bob", "Bob row")
+nox.test.assert_eq_int(piv_res.rows[1][1].as_int(), 200, "Bob Q1=200")
+nox.test.assert_eq_int(piv_res.rows[1][2].as_int(), 250, "Bob Q2=250")
+
+# =========================================================================
+# 4. Melt Reference Test
+# Precomputed against Pandas: pd.melt(df, id_vars=['name'], value_vars=['Q1', 'Q2'])
+# Atlas unrolls per-record: (Alice, Q1, 100), (Alice, Q2, 150), (Bob, Q1, 200), (Bob, Q2, 250)
+# =========================================================================
+s_wide: Schema = Schema([
+    ColumnDef("name", TYPE_STR),
+    ColumnDef("Q1", TYPE_INT),
+    ColumnDef("Q2", TYPE_INT)
+])
+rows_wide: list[list[Cell]] = [
+    [cell_str("Alice"), cell_int(100), cell_int(150)],
+    [cell_str("Bob"), cell_int(200), cell_int(250)]
+]
+t_wide: Table = Table(s_wide, rows_wide)
+t_melted: Table = melt(t_wide, id_vars=["name"], value_vars=["Q1", "Q2"], var_name="quarter", value_name="amount")
+
+nox.test.assert_eq_int(t_melted.row_count(), 4, "4 rows melted")
+nox.test.assert_eq_int(t_melted.column_count(), 3, "name, quarter, amount")
+nox.test.assert_eq_str(t_melted.rows[0][0].to_string(), "Alice", "melt row 0 name")
+nox.test.assert_eq_str(t_melted.rows[0][1].to_string(), "Q1", "melt row 0 var")
+nox.test.assert_eq_int(t_melted.rows[0][2].as_int(), 100, "melt row 0 val")
+
+nox.test.assert_eq_str(t_melted.rows[1][0].to_string(), "Alice", "melt row 1 name")
+nox.test.assert_eq_str(t_melted.rows[1][1].to_string(), "Q2", "melt row 1 var")
+nox.test.assert_eq_int(t_melted.rows[1][2].as_int(), 150, "melt row 1 val")
+
+nox.test.assert_eq_str(t_melted.rows[2][0].to_string(), "Bob", "melt row 2 name")
+nox.test.assert_eq_str(t_melted.rows[2][1].to_string(), "Q1", "melt row 2 var")
+nox.test.assert_eq_int(t_melted.rows[2][2].as_int(), 200, "melt row 2 val")
+
+nox.test.assert_eq_str(t_melted.rows[3][0].to_string(), "Bob", "melt row 3 name")
+nox.test.assert_eq_str(t_melted.rows[3][1].to_string(), "Q2", "melt row 3 var")
+nox.test.assert_eq_int(t_melted.rows[3][2].as_int(), 250, "melt row 3 val")
+
+# =========================================================================
+# 5. Full Outer Join Reference Test
+# Precomputed against SQL FULL OUTER JOIN and Polars join(how="full")
+# Left: [(1, left_1), (2, left_2)], Right: [(2, right_2), (3, right_3)]
+# Result order: Row 0 (1, left_1, null), Row 1 (2, left_2, right_2), Row 2 (3, null, right_3)
+# =========================================================================
+s_l: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("l_val", TYPE_STR)])
+s_r: Schema = Schema([ColumnDef("id", TYPE_INT), ColumnDef("r_val", TYPE_STR)])
+t_l: Table = Table(s_l, [[cell_int(1), cell_str("left_1")], [cell_int(2), cell_str("left_2")]])
+t_r: Table = Table(s_r, [[cell_int(2), cell_str("right_2")], [cell_int(3), cell_str("right_3")]])
+
+t_full: Table = join_full(t_l, t_r, ["id"])
+nox.test.assert_eq_int(t_full.row_count(), 3, "3 rows in full outer join")
+
+# Row 0: left only id=1
+nox.test.assert_eq_int(t_full.rows[0][0].as_int(), 1, "id=1 left only")
+nox.test.assert_eq_str(t_full.rows[0][1].to_string(), "left_1", "l_val=left_1")
+nox.test.assert_true(t_full.rows[0][2].is_missing(), "r_val is null for id=1")
+
+# Row 1: matched id=2
+nox.test.assert_eq_int(t_full.rows[1][0].as_int(), 2, "id=2 matched")
+nox.test.assert_eq_str(t_full.rows[1][1].to_string(), "left_2", "l_val=left_2")
+nox.test.assert_eq_str(t_full.rows[1][2].to_string(), "right_2", "r_val=right_2")
+
+# Row 2: right only id=3
+nox.test.assert_eq_int(t_full.rows[2][0].as_int(), 3, "id=3 right only")
+nox.test.assert_true(t_full.rows[2][1].is_missing(), "l_val is null for id=3")
+nox.test.assert_eq_str(t_full.rows[2][2].to_string(), "right_3", "r_val=right_3")
+nox.test.assert_eq_int(t_full.rows[2][0].as_int(), 3, "id=3 right only")
+nox.test.assert_true(t_full.rows[2][1].is_missing(), "l_val is null for id=3")
+nox.test.assert_eq_str(t_full.rows[2][2].to_string(), "right_3", "r_val=right_3")
+
+print("reference_comparison_test passed")

@@ -370,3 +370,22 @@ t_cross: Table = join_cross(table_a, table_b, suffix_left="_a", suffix_right="_b
 # Or instance method:
 t_cross = table_a.join_cross(table_b)
 ```
+
+## 14. Checked 64-bit Integer Arithmetic & Compensated Statistics (`values.nox`, `stats.nox`)
+
+```nox
+import atlas
+from atlas import checked_add_int64, checked_sub_int64, checked_mul_int64, checked_div_int64
+from atlas import INT64_MAX, INT64_MIN, stat_sum, stat_mean
+
+# Proactive 64-bit boundary checked arithmetic (raises ShapeError on overflow/underflow)
+a: int = checked_add_int64(10, 20, "addition")
+b: int = checked_sub_int64(100, 50, "subtraction")
+c: int = checked_mul_int64(5, 20, "multiplication")
+d: int = checked_div_int64(100, 4, "division") # guards against div-by-zero & INT64_MIN // -1
+
+# Neumaier compensated summation preventing catastrophic cancellation
+# [1e16, 1.0, -1e16] -> 1.0 exactly
+total: float = stat_sum(nums)
+avg: float = stat_mean(nums)
+```

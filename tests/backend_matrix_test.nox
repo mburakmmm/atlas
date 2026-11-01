@@ -1,0 +1,151 @@
+# tests/backend_matrix_test.nox — Comprehensive NOX backend compatibility matrix test suite.
+# Verifies cross-backend determinism: INT64 limits, IEEE 754 floats, hashing, stable sorting, Unicode, exceptions.
+
+import nox.test
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_float, cell_str, cell_bool, cell_null
+from atlas import cell_nan, cell_inf, cell_neg_inf, is_nan, is_inf, float_nan, float_inf, float_neg_inf
+from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_NULL
+from atlas import checked_add_int64, checked_sub_int64, checked_mul_int64, checked_div_int64, INT64_MAX, INT64_MIN
+from atlas import cell_hash_key, composite_hash_key
+from atlas import sort_rows, read_csv, to_csv
+from atlas import AtlasError, ShapeError, AggregationError, SchemaError, SortError, ColumnNotFoundError, TypeConversionError, MissingValueError, CsvImportError
+
+# =========================================================================
+# 1. INT64 Boundaries & Two's Complement Arithmetic
+# =========================================================================
+nox.test.assert_eq_int(INT64_MAX, 9223372036854775807, "INT64_MAX constant")
+nox.test.assert_eq_int(INT64_MIN, -9223372036854775807 - 1, "INT64_MIN constant")
+
+# Normal operations
+nox.test.assert_eq_int(checked_add_int64(1000, 2000), 3000, "checked add")
+nox.test.assert_eq_int(checked_sub_int64(5000, 1500), 3500, "checked sub")
+nox.test.assert_eq_int(checked_mul_int64(25, 40), 1000, "checked mul")
+nox.test.assert_eq_int(checked_div_int64(100, 4), 25, "checked div")
+
+# Extreme boundaries
+nox.test.assert_eq_int(checked_add_int64(INT64_MAX - 100, 100), INT64_MAX, "reach INT64_MAX exactly")
+nox.test.assert_eq_int(checked_sub_int64(INT64_MIN + 100, 100), INT64_MIN, "reach INT64_MIN exactly")
+nox.test.assert_eq_int(checked_mul_int64(INT64_MAX, 1), INT64_MAX, "mul by 1")
+nox.test.assert_eq_int(checked_mul_int64(INT64_MIN, 1), INT64_MIN, "mul INT64_MIN by 1")
+
+# Two's complement overflow trap: INT64_MIN / -1
+caught_div_trap: bool = False
+try:
+    checked_div_int64(INT64_MIN, -1)
+except ShapeError:
+    caught_div_trap = True
+nox.test.assert_true(caught_div_trap, "checked_div_int64 INT64_MIN // -1 raises ShapeError")
+
+# =========================================================================
+# 2. IEEE-754 Float NaN, Inf & Comparison Semantics
+# =========================================================================
+c_nan: Cell = cell_nan()
+c_inf: Cell = cell_inf()
+c_ninf: Cell = cell_neg_inf()
+
+nox.test.assert_true(is_nan(c_nan.as_float()), "cell_nan() is_nan")
+nox.test.assert_true(is_inf(c_inf.as_float()), "cell_inf() is_inf")
+nox.test.assert_true(is_inf(c_ninf.as_float()), "cell_neg_inf() is_inf")
+
+# Under IEEE-754 raw floats, nan != nan
+fl_nan: float = float_nan()
+nox.test.assert_true(not (fl_nan == fl_nan), "float NaN does not equal itself under IEEE 754")
+
+# Under Cell semantic equality for grouping/sorting, NaN equals NaN
+nox.test.assert_true(c_nan.equals(cell_nan()), "Cell NaN equals Cell NaN for hash/group consistency")
+nox.test.assert_true(c_inf.compare(c_ninf) > 0, "+Inf > -Inf")
+nox.test.assert_true(c_ninf.compare(cell_float(-1e100)) < 0, "-Inf < any finite float")
+nox.test.assert_true(c_inf.compare(cell_float(1e100)) > 0, "+Inf > any finite float")
+
+# =========================================================================
+# 3. Hash Determinsim Across Runs & Type Boundaries
+# =========================================================================
+h1: str = composite_hash_key([cell_str("dept"), cell_int(10), cell_float(20.5)])
+h2: str = composite_hash_key([cell_str("dept"), cell_int(10), cell_float(20.5)])
+nox.test.assert_eq_str(h1, h2, "composite hash is strictly deterministic across iterations")
+
+# Collision isolation between different types
+h_int: str = cell_hash_key(cell_int(1))
+h_str: str = cell_hash_key(cell_str("1"))
+h_flt: str = cell_hash_key(cell_float(1.0))
+nox.test.assert_true(h_int != h_str, "hash key distinguishes integer 1 from string '1'")
+nox.test.assert_true(h_str != h_flt, "hash key distinguishes string '1' from float 1.0")
+
+# =========================================================================
+# 4. Stable Sort Verification (Preserving Original Row Order on Ties)
+# =========================================================================
+s_sort: Schema = Schema([ColumnDef("key", TYPE_STR), ColumnDef("insert_order", TYPE_INT)])
+rows_sort: list[list[Cell]] = [
+    [cell_str("B"), cell_int(1)],
+    [cell_str("A"), cell_int(2)],
+    [cell_str("B"), cell_int(3)],
+    [cell_str("A"), cell_int(4)],
+    [cell_str("B"), cell_int(5)],
+    [cell_str("A"), cell_int(6)],
+    [cell_str("B"), cell_int(7)]
+]
+t_sort: Table = Table(s_sort, rows_sort)
+sorted_t: Table = t_sort.sort_by(["key"], ascending=True)
+
+# For key="A", insert orders must be strictly 2, 4, 6
+nox.test.assert_eq_int(sorted_t.rows[0][1].as_int(), 2, "A original first")
+nox.test.assert_eq_int(sorted_t.rows[1][1].as_int(), 4, "A original second")
+nox.test.assert_eq_int(sorted_t.rows[2][1].as_int(), 6, "A original third")
+
+# For key="B", insert orders must be strictly 1, 3, 5, 7
+nox.test.assert_eq_int(sorted_t.rows[3][1].as_int(), 1, "B original first")
+nox.test.assert_eq_int(sorted_t.rows[4][1].as_int(), 3, "B original second")
+nox.test.assert_eq_int(sorted_t.rows[5][1].as_int(), 5, "B original third")
+nox.test.assert_eq_int(sorted_t.rows[6][1].as_int(), 7, "B original fourth")
+
+# =========================================================================
+# 5. Unicode & Multi-Byte UTF-8 Support
+# =========================================================================
+s_uni: Schema = Schema([
+    ColumnDef("şehir", TYPE_STR),
+    ColumnDef("açıklama", TYPE_STR),
+    ColumnDef("nüfus", TYPE_INT)
+])
+rows_uni: list[list[Cell]] = [
+    [cell_str("İstanbul"), cell_str("Boğazın incisi, Türkiye 🇹🇷"), cell_int(15840900)],
+    [cell_str("İzmir"), cell_str("Ege'nin kalbi (ç, ğ, ı, ö, ş, ü)"), cell_int(4425789)],
+    [cell_str("Tokyo / 東京"), cell_str("データ分析 & 🚀"), cell_int(13960000)]
+]
+t_uni: Table = Table(s_uni, rows_uni)
+
+# CSV Round trip with UTF-8
+csv_text: str = to_csv(t_uni)
+t_uni_parsed: Table = read_csv(csv_text)
+
+nox.test.assert_eq_int(t_uni_parsed.row_count(), 3, "UTF-8 row count")
+nox.test.assert_eq_str(t_uni_parsed.rows[0][0].to_string(), "İstanbul", "Turkish İ preserved")
+nox.test.assert_eq_str(t_uni_parsed.rows[1][0].to_string(), "İzmir", "Turkish İzmir preserved")
+nox.test.assert_eq_str(t_uni_parsed.rows[2][0].to_string(), "Tokyo / 東京", "CJK Tokyo preserved")
+nox.test.assert_eq_str(t_uni_parsed.rows[2][1].to_string(), "データ分析 & 🚀", "CJK & Emoji preserved")
+
+# =========================================================================
+# 6. Exception Hierarchy: Catching Subclasses via AtlasError
+# =========================================================================
+caught_as_atlas_err1: bool = False
+try:
+    checked_add_int64(INT64_MAX, 1)
+except AtlasError:
+    caught_as_atlas_err1 = True
+nox.test.assert_true(caught_as_atlas_err1, "ShapeError caught via base AtlasError")
+
+caught_as_atlas_err2: bool = False
+try:
+    t_sort.select(["sütun_yok"])
+except AtlasError:
+    caught_as_atlas_err2 = True
+nox.test.assert_true(caught_as_atlas_err2, "ColumnNotFoundError caught via base AtlasError")
+
+caught_as_atlas_err3: bool = False
+try:
+    t_sort.window().with_rank("insert_order")
+except AtlasError:
+    caught_as_atlas_err3 = True
+nox.test.assert_true(caught_as_atlas_err3, "SortError caught via base AtlasError")
+
+print("backend_matrix_test passed")

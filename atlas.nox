@@ -4,7 +4,7 @@ import errors
 from errors import AtlasError, SchemaError, ColumnNotFoundError, TypeConversionError, MissingValueError, CsvImportError, JsonImportError, ShapeError, AggregationError, SortError
 
 import values
-from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_nan, cell_inf, cell_neg_inf, float_nan, float_inf, float_neg_inf, is_nan, is_inf, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, checked_add_int64, INT64_MAX, INT64_MIN
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_nan, cell_inf, cell_neg_inf, float_nan, float_inf, float_neg_inf, is_nan, is_inf, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, checked_add_int64, checked_sub_int64, checked_mul_int64, checked_div_int64, INT64_MAX, INT64_MIN
 
 import schema
 from schema import ColumnDef, Schema, schema_from_names_and_types, schema_from_names
