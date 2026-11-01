@@ -4,13 +4,13 @@ import nox.test
 import errors
 from errors import ShapeError, ColumnNotFoundError
 import values
-from values import Cell, cell_int, cell_str, cell_float, cell_nan, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+from values import Cell, cell_int, cell_str, cell_float, cell_nan, cell_inf, cell_neg_inf, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
 import schema
 from schema import Schema, ColumnDef
 import table
 from table import Table
 import window
-from window import row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
+from window import WindowContext, row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
 
 # 1. Edge Case: Empty Table
 s_empty: Schema = Schema([
@@ -102,6 +102,8 @@ t_rn_nulls: Table = row_number(t_nulls, "rn", order_by=["val"], ascending=True)
 # In ascending with nulls_last: 5.0 (row 3) -> 1, 10.0 (row 0) -> 2, NaN / NULL at the end
 nox.test.assert_eq_int(t_rn_nulls.rows[3][1].as_int(), 1, "smallest finite float 5.0 is rn 1")
 nox.test.assert_eq_int(t_rn_nulls.rows[0][1].as_int(), 2, "finite float 10.0 is rn 2")
+nox.test.assert_eq_int(t_rn_nulls.rows[1][1].as_int(), 3, "NaN is rn 3")
+nox.test.assert_eq_int(t_rn_nulls.rows[2][1].as_int(), 4, "NULL is rn 4 (nulls last)")
 
 # 7. Edge Case: cumulative_sum Null Semantics (skip_null=True vs skip_null=False)
 s_cs_null: Schema = Schema([
@@ -146,5 +148,94 @@ r_lrg2: list[Cell] = [cell_int(100)]
 t_large: Table = Table(s_large, [r_lrg1, r_lrg2])
 t_cs_large: Table = cumulative_sum(t_large, "big", "cs_big")
 nox.test.assert_eq_int(t_cs_large.rows[1][1].as_int(), 9000000000000000100, "int64 large sum preserved")
+
+# 10. Edge Case: cumulative_sum null_policy="propagate"
+t_cs_prop: Table = cumulative_sum(t_cs_data, "v", "cs_prop", null_policy="propagate")
+nox.test.assert_eq_int(t_cs_prop.rows[0][1].as_int(), 10, "propagate row 0 is 10")
+nox.test.assert_eq_int(t_cs_prop.rows[1][1].as_int(), 30, "propagate row 1 is 30")
+nox.test.assert_true(t_cs_prop.rows[2][1].is_missing(), "propagate row 2 is NULL")
+nox.test.assert_true(t_cs_prop.rows[3][1].is_missing(), "propagate row 3 remains NULL")
+
+# 11. Edge Case: INT64 overflow & underflow checks raising ShapeError
+r_of1: list[Cell] = [cell_int(9223372036854775800)]
+r_of2: list[Cell] = [cell_int(100)]
+t_of: Table = Table(s_large, [r_of1, r_of2])
+caught_of: bool = False
+try:
+    cumulative_sum(t_of, "big", "cs_of")
+except ShapeError:
+    caught_of = True
+nox.test.assert_true(caught_of, "cumulative_sum caught int64 overflow")
+
+r_uf1: list[Cell] = [cell_int(-9223372036854775800)]
+r_uf2: list[Cell] = [cell_int(-100)]
+t_uf: Table = Table(s_large, [r_uf1, r_uf2])
+caught_uf: bool = False
+try:
+    cumulative_sum(t_uf, "big", "cs_uf")
+except ShapeError:
+    caught_uf = True
+nox.test.assert_true(caught_uf, "cumulative_sum caught int64 underflow")
+
+# 12. Edge Case: moving_average all-null and long window
+s_all_null: Schema = Schema([
+    ColumnDef("fl", TYPE_FLOAT)
+])
+r_an1: list[Cell] = [cell_null()]
+r_an2: list[Cell] = [cell_null()]
+r_an3: list[Cell] = [cell_null()]
+t_an: Table = Table(s_all_null, [r_an1, r_an2, r_an3])
+t_mavg_an: Table = moving_average(t_an, "fl", 2, "mavg", min_periods=1)
+nox.test.assert_true(t_mavg_an.rows[0][1].is_missing(), "all-null mavg row 0 is missing")
+nox.test.assert_true(t_mavg_an.rows[1][1].is_missing(), "all-null mavg row 1 is missing")
+nox.test.assert_true(t_mavg_an.rows[2][1].is_missing(), "all-null mavg row 2 is missing")
+
+# Window size exceeding table length with min_periods=1
+s_short: Schema = Schema([
+    ColumnDef("fl", TYPE_FLOAT)
+])
+r_s1: list[Cell] = [cell_float(10.0)]
+r_s2: list[Cell] = [cell_float(20.0)]
+t_short: Table = Table(s_short, [r_s1, r_s2])
+t_mavg_long: Table = moving_average(t_short, "fl", 10, "mavg", min_periods=1)
+nox.test.assert_eq_float(t_mavg_long.rows[0][1].as_float(), 10.0, "mavg row 0 is 10.0")
+nox.test.assert_eq_float(t_mavg_long.rows[1][1].as_float(), 15.0, "mavg row 1 is 15.0")
+
+# 13. Edge Case: WindowContext Fluent Pipeline
+s_pipe: Schema = Schema([
+    ColumnDef("dept", TYPE_STR),
+    ColumnDef("salary", TYPE_INT)
+])
+r_p1: list[Cell] = [cell_str("A"), cell_int(100)]
+r_p2: list[Cell] = [cell_str("A"), cell_int(300)]
+r_p3: list[Cell] = [cell_str("A"), cell_int(200)]
+r_p4: list[Cell] = [cell_str("B"), cell_int(50)]
+r_p5: list[Cell] = [cell_str("B"), cell_int(150)]
+t_pipe_data: Table = Table(s_pipe, [r_p1, r_p2, r_p3, r_p4, r_p5])
+
+# Chain: with_row_number -> with_rank -> with_dense_rank -> with_lag -> with_cumulative_sum
+ctx: WindowContext = t_pipe_data.window(partition_by=["dept"], order_by=["salary"], ascending=True)
+ctx = ctx.with_row_number("rn")
+ctx = ctx.with_rank("salary", "rk")
+ctx = ctx.with_dense_rank("salary", "drk")
+ctx = ctx.with_lag("salary", "prev_sal", 1, default_val=cell_int(0))
+ctx = ctx.with_cumulative_sum("salary", "c_sal")
+w_res: Table = ctx.to_table()
+
+nox.test.assert_eq_int(w_res.column_count(), 7, "pipeline produces 7 columns")
+nox.test.assert_eq_int(w_res.row_count(), 5, "pipeline produces 5 rows")
+# Verify Dept A order: 100 (row 0), 200 (row 2), 300 (row 1)
+# Row 0 (A, 100): rn=1, rk=1, prev_sal=0, c_sal=100
+nox.test.assert_eq_int(w_res.rows[0][2].as_int(), 1, "A 100 rn is 1")
+nox.test.assert_eq_int(w_res.rows[0][5].as_int(), 0, "A 100 prev_sal default is 0")
+nox.test.assert_eq_int(w_res.rows[0][6].as_int(), 100, "A 100 c_sal is 100")
+# Row 2 (A, 200): rn=2, rk=2, prev_sal=100, c_sal=300
+nox.test.assert_eq_int(w_res.rows[2][2].as_int(), 2, "A 200 rn is 2")
+nox.test.assert_eq_int(w_res.rows[2][5].as_int(), 100, "A 200 prev_sal is 100")
+nox.test.assert_eq_int(w_res.rows[2][6].as_int(), 300, "A 200 c_sal is 300")
+# Row 1 (A, 300): rn=3, rk=3, prev_sal=200, c_sal=600
+nox.test.assert_eq_int(w_res.rows[1][2].as_int(), 3, "A 300 rn is 3")
+nox.test.assert_eq_int(w_res.rows[1][5].as_int(), 200, "A 300 prev_sal is 200")
+nox.test.assert_eq_int(w_res.rows[1][6].as_int(), 600, "A 300 c_sal is 600")
 
 print("window_edge_cases_test passed")

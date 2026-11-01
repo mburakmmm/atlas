@@ -159,6 +159,7 @@ def pivot(t: Table, index_col: str, columns_col: str, values_col: str) -> Table:
     index_hash_map: dict[str, list[int]] = {}
 
     unique_columns: list[str] = []
+    unique_column_cells: list[Cell] = []
     column_map: dict[str, int] = {}
 
     r_idx: int = 0
@@ -181,6 +182,11 @@ def pivot(t: Table, index_col: str, columns_col: str, values_col: str) -> Table:
         if col_str_val not in column_map:
             column_map[col_str_val] = len(unique_columns)
             unique_columns.append(col_str_val)
+            unique_column_cells.append(col_c)
+        else:
+            existing_pos: int = column_map[col_str_val]
+            if not unique_column_cells[existing_pos].equals(col_c):
+                raise SchemaError("distinct pivot column values produce identical column name '" + col_str_val + "'")
 
         # Check unique_indices with collision safety
         h_idx: str = cell_hash_key(idx_c)
@@ -304,6 +310,7 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
     index_hash_map: dict[str, list[int]] = {}
 
     unique_columns: list[str] = []
+    unique_column_cells: list[Cell] = []
     column_map: dict[str, int] = {}
 
     r_idx: int = 0
@@ -326,6 +333,11 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
         if col_str_val not in column_map:
             column_map[col_str_val] = len(unique_columns)
             unique_columns.append(col_str_val)
+            unique_column_cells.append(col_c)
+        else:
+            existing_pos: int = column_map[col_str_val]
+            if not unique_column_cells[existing_pos].equals(col_c):
+                raise SchemaError("distinct pivot column values produce identical column name '" + col_str_val + "'")
 
         h_idx: str = cell_hash_key(idx_c)
         found_pos: int = -1

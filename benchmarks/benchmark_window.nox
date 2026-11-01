@@ -1,0 +1,71 @@
+# benchmarks/benchmark_window.nox — 100,000 row window function benchmark for Atlas.
+
+import nox.time
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, cell_float, WindowContext
+from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
+
+print("==========================================================")
+print("Atlas Window Pipeline Benchmark (100,000 synthetic rows)")
+print("==========================================================")
+
+t0: int = nox.time.now_ms()
+s: Schema = Schema([
+    ColumnDef("id", TYPE_INT),
+    ColumnDef("dept", TYPE_STR),
+    ColumnDef("val", TYPE_INT)
+])
+
+rows: list[list[Cell]] = []
+i: int = 0
+n: int = 100000
+
+while i < n:
+    m: int = i % 10
+    dept_name: str = "Dept_0"
+    if m == 1:
+        dept_name = "Dept_1"
+    elif m == 2:
+        dept_name = "Dept_2"
+    elif m == 3:
+        dept_name = "Dept_3"
+    elif m == 4:
+        dept_name = "Dept_4"
+    elif m == 5:
+        dept_name = "Dept_5"
+    elif m == 6:
+        dept_name = "Dept_6"
+    elif m == 7:
+        dept_name = "Dept_7"
+    elif m == 8:
+        dept_name = "Dept_8"
+    elif m == 9:
+        dept_name = "Dept_9"
+
+    v: int = (i * 37) % 1000
+    rows.append([cell_int(i), cell_str(dept_name), cell_int(v)])
+    i = i + 1
+
+t: Table = Table(s, rows)
+gen_ms: int = nox.time.now_ms() - t0
+print("[1] Ingested 100,000 rows in " + str(gen_ms) + " ms")
+
+# Benchmark 2: Single Window Operation (row_number)
+t0 = nox.time.now_ms()
+t_single: Table = t.with_row_number(output_col="rn", partition_by=["dept"], order_by=["val"], ascending=True)
+single_ms: int = nox.time.now_ms() - t0
+print("[2] Single Window (row_number over 10 partitions) in " + str(single_ms) + " ms")
+
+# Benchmark 3: Chained WindowContext Pipeline (sort once, compute 4 window columns)
+t0 = nox.time.now_ms()
+ctx: WindowContext = t.window(partition_by=["dept"], order_by=["val"], ascending=True)
+ctx = ctx.with_row_number("rn")
+ctx = ctx.with_rank("val", "rk")
+ctx = ctx.with_cumulative_sum("val", "cumsum")
+ctx = ctx.with_lag("val", "prev_val", 1, default_val=cell_int(0))
+t_piped: Table = ctx.to_table()
+pipe_ms: int = nox.time.now_ms() - t0
+print("[3] WindowContext Pipeline (4 window columns, single sort) in " + str(pipe_ms) + " ms")
+print("    Result table rows: " + str(t_piped.row_count()) + ", columns: " + str(t_piped.column_count()))
+print("==========================================================")
+print("Window Benchmark Completed Successfully!")

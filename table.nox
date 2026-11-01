@@ -509,6 +509,11 @@ class Table:
         return join.join_cross(self, right, suffix_left, suffix_right)
 
     # Window functions
+    def window(self: Table, partition_by: list[str] | None = None,
+               order_by: list[str] | None = None,
+               ascending: bool = True) -> window.WindowContext:
+        return window.WindowContext(self, partition_by, order_by, ascending)
+
     def with_row_number(self: Table, output_col: str = "row_nr",
                         partition_by: list[str] | None = None,
                         order_by: list[str] | None = None,
@@ -543,8 +548,9 @@ class Table:
                             partition_by: list[str] | None = None,
                             order_by: list[str] | None = None,
                             ascending: bool = True,
-                            skip_null: bool = True) -> Table:
-        return window.cumulative_sum(self, target_col, output_col, partition_by, order_by, ascending, skip_null)
+                            skip_null: bool = True,
+                            null_policy: str = "skip") -> Table:
+        return window.cumulative_sum(self, target_col, output_col, partition_by, order_by, ascending, skip_null, null_policy)
 
     def with_moving_average(self: Table, target_col: str, window_size: int, output_col: str = "moving_avg",
                             partition_by: list[str] | None = None,

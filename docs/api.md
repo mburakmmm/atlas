@@ -283,27 +283,40 @@ us_total_amount: float = open_csv_stream("sales.csv") \
 summary: Table = stream_group_by("sales.csv", ["region"], [agg_count(), agg_sum("sales")])
 ```
 
-## 11. Window Functions (`window.nox`)
+## 11. Window Functions & WindowContext Pipeline (`window.nox`)
 
 ```nox
 import atlas
-from atlas import row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
+from atlas import WindowContext, row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
 
-# Functional API:
+# 1. High-Performance Chained Window Pipeline (WindowContext):
+# Partitions and sorts once, then computes multiple window columns in O(N) time each:
+ctx: WindowContext = table.window(partition_by=["dept"], order_by=["salary"], ascending=False)
+t_pipelined: Table = ctx \
+    .with_row_number("row_nr") \
+    .with_rank("salary", "salary_rank") \
+    .with_dense_rank("salary", "dense_rank") \
+    .with_lag("sales", "prev_sales", offset=1) \
+    .with_cumulative_sum("sales", "cumsum_sales", null_policy="propagate") \
+    .with_moving_average("sales", window_size=5, output_col="mavg_sales") \
+    .to_table()
+
+# 2. Functional API:
 t1 = row_number(table, output_col="row_nr", partition_by=["dept"], order_by=["salary"], ascending=False)
 t2 = rank(table, order_col="salary", output_col="rank", partition_by=["dept"])
 t3 = dense_rank(table, order_col="salary", output_col="dense_rank", partition_by=["dept"])
 t4 = lag(table, target_col="sales", output_col="prev_sales", offset=1, partition_by=["dept"], order_by=["date"])
 t5 = lead(table, target_col="sales", output_col="next_sales", offset=1, partition_by=["dept"], order_by=["date"])
-t6 = cumulative_sum(table, target_col="sales", output_col="cum_sales", partition_by=["dept"], order_by=["date"], skip_null=True)
+# null_policy options: "skip" (default), "null_row", "propagate"
+t6 = cumulative_sum(table, target_col="sales", output_col="cum_sales", partition_by=["dept"], order_by=["date"], null_policy="skip")
 t7 = moving_average(table, target_col="sales", window_size=3, output_col="moving_avg", partition_by=["dept"], min_periods=1)
 
-# Fluent Table Instance Methods:
+# 3. Direct Table Instance Methods:
 t_analytical: Table = table \
     .with_row_number("row_nr", partition_by=["dept"], order_by=["salary"]) \
     .with_rank("salary", "salary_rank", partition_by=["dept"]) \
     .with_lag("sales", "prev_sales", offset=1, partition_by=["dept"]) \
-    .with_cumulative_sum("sales", "cumsum_sales", partition_by=["dept"], skip_null=True) \
+    .with_cumulative_sum("sales", "cumsum_sales", partition_by=["dept"], null_policy="skip") \
     .with_moving_average("sales", window_size=5, output_col="mavg_sales", partition_by=["dept"])
 ```
 

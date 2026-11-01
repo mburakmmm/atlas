@@ -40,7 +40,7 @@ import join
 from join import join_inner, join_inner_keys, join_left, join_left_keys, join_full, join_full_keys, join_cross
 
 import window
-from window import row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
+from window import WindowContext, row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
 
 import reshape
 from reshape import melt, pivot, pivot_table
