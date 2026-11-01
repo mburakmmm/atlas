@@ -353,6 +353,118 @@ def test_large_chunk_bytes_bounded_memory() -> None:
         if nox.fs.exists(bg_path):
             nox.fs.remove_file(bg_path)
 
+def test_multichar_delim_bytes_accounting() -> None:
+    # 14. Verify multi-character delimiter bytes are fully counted against max_record_bytes
+    # Delimiter is "||||" (4 bytes). 4 delimiters = 16 bytes, total record = 22 bytes.
+    # If max_record_bytes = 15, accurate counting MUST raise CsvImportError.
+    mc_path: str = "temp_mc_bytes.csv"
+    nox.fs.write_string(mc_path, "c1||||c2||||c3||||c4||||c5\na||||b||||c||||d||||e\n")
+    try:
+        opts: CsvOptions = csv_options(delimiter="||||", max_record_bytes=15)
+        reader: StreamingCsvReader = open_csv_stream(mc_path, 10, opts)
+        caught: bool = False
+        try:
+            reader.next_chunk()
+        except CsvImportError as e:
+            caught = True
+        assert caught
+        reader.close()
+    finally:
+        if nox.fs.exists(mc_path):
+            nox.fs.remove_file(mc_path)
+
+def test_eof_delimiter_state_machine_cases() -> None:
+    # 15. Exhaustive EOF edge-case verification
+    # Case A: File ending with single "|" when delimiter is "||" -> treated as field text
+    f_a: str = "temp_eof_a.csv"
+    nox.fs.write_string(f_a, "id||val\n1||abc|")
+    try:
+        reader_a: StreamingCsvReader = open_csv_stream(f_a, 10, csv_options(delimiter="||"))
+        t_a: Table = reader_a.next_chunk()
+        nox.test.assert_eq_int(t_a.row_count(), 1, "case A has 1 row")
+        assert t_a.row(0)[0].as_int() == 1
+        assert t_a.row(0)[1].as_str() == "abc|"
+        reader_a.close()
+    finally:
+        if nox.fs.exists(f_a):
+            nox.fs.remove_file(f_a)
+
+    # Case B: File ending with full "||" -> trailing empty field
+    f_b: str = "temp_eof_b.csv"
+    nox.fs.write_string(f_b, "c1||c2||c3\n1||foo||")
+    try:
+        reader_b: StreamingCsvReader = open_csv_stream(f_b, 10, csv_options(delimiter="||"))
+        t_b: Table = reader_b.next_chunk()
+        nox.test.assert_eq_int(t_b.row_count(), 1, "case B has 1 row")
+        nox.test.assert_eq_int(t_b.column_count(), 3, "case B has 3 columns")
+        assert t_b.row(0)[0].as_int() == 1
+        assert t_b.row(0)[1].as_str() == "foo"
+        assert t_b.row(0)[2].is_missing()
+        reader_b.close()
+    finally:
+        if nox.fs.exists(f_b):
+            nox.fs.remove_file(f_b)
+
+    # Case C: File ending immediately after closing quote -> valid record
+    f_c: str = "temp_eof_c.csv"
+    nox.fs.write_string(f_c, "id,val\n1,\"xyz\"")
+    try:
+        reader_c: StreamingCsvReader = open_csv_stream(f_c, 10)
+        t_c: Table = reader_c.next_chunk()
+        nox.test.assert_eq_int(t_c.row_count(), 1, "case C has 1 row")
+        assert t_c.row(0)[0].as_int() == 1
+        assert t_c.row(0)[1].as_str() == "xyz"
+        reader_c.close()
+    finally:
+        if nox.fs.exists(f_c):
+            nox.fs.remove_file(f_c)
+
+    # Case D: File ending with incomplete/unclosed quoted field -> CsvImportError
+    f_d: str = "temp_eof_d.csv"
+    nox.fs.write_string(f_d, "id,val\n1,\"unclosed text")
+    try:
+        reader_d: StreamingCsvReader = open_csv_stream(f_d, 10)
+        caught_d: bool = False
+        try:
+            reader_d.next_chunk()
+        except CsvImportError as e:
+            caught_d = True
+        assert caught_d
+        reader_d.close()
+    finally:
+        if nox.fs.exists(f_d):
+            nox.fs.remove_file(f_d)
+
+    # Case E: File ending with standalone "\r" -> single row end, no phantom row
+    f_e: str = "temp_eof_e.csv"
+    nox.fs.write_string(f_e, "id,val\n1,10\r")
+    try:
+        reader_e: StreamingCsvReader = open_csv_stream(f_e, 10)
+        t_e: Table = reader_e.next_chunk()
+        nox.test.assert_eq_int(t_e.row_count(), 1, "case E has exactly 1 row")
+        assert t_e.row(0)[0].as_int() == 1
+        assert t_e.row(0)[1].as_int() == 10
+        assert not reader_e.has_next()
+        reader_e.close()
+    finally:
+        if nox.fs.exists(f_e):
+            nox.fs.remove_file(f_e)
+
+    # Case F: File ending with "\r\n" -> single row end, no phantom row
+    f_f: str = "temp_eof_f.csv"
+    nox.fs.write_string(f_f, "id,val\n1,10\r\n")
+    try:
+        reader_f: StreamingCsvReader = open_csv_stream(f_f, 10)
+        t_f: Table = reader_f.next_chunk()
+        nox.test.assert_eq_int(t_f.row_count(), 1, "case F has exactly 1 row")
+        assert t_f.row(0)[0].as_int() == 1
+        assert t_f.row(0)[1].as_int() == 10
+        assert not reader_f.has_next()
+        reader_f.close()
+    finally:
+        if nox.fs.exists(f_f):
+            nox.fs.remove_file(f_f)
+
 test_quote_and_escaped_quote_split()
 test_crlf_split_boundary()
 test_header_only_and_single_row()
@@ -365,5 +477,7 @@ test_explicit_schema_streaming()
 test_multi_char_delimiter_chunk_split()
 test_utf8_multibyte_record_limit()
 test_large_chunk_bytes_bounded_memory()
+test_multichar_delim_bytes_accounting()
+test_eof_delimiter_state_machine_cases()
 
 print("streaming_edge_cases_test passed")

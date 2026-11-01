@@ -19,6 +19,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.7.0** | **Akışlı CSV (Streaming Reader), NaN Sıralama Tutarlılığı & Akış Agregasyonları** | ✅ **TAMAMLANDI & YAYINLANDI** | 29/29 Test Geçti (`noxc test`) |
 | **v0.7.1** | **Streaming Sağlamlaştırma, Durum Makinesi, max_record_bytes & Çevrimiçi İstatistikler** | ✅ **TAMAMLANDI & YAYINLANDI** | 30/30 Test Geçti (`noxc test`) |
 | **v0.7.2** | **Çok Karakterli Delimiter, UTF-8 Bayt Sınırları, Bounded Memory & Diferansiyel Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
+| **v0.7.3** | **Çok Karakterli Delimiter Bayt Sayımı, EOF Sınırları & Property-Based Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -337,6 +338,32 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - Çok karakterli ayraç (`||`), çok satırlı tırnaklı alanlar, kaçışlı tırnaklar ve UTF-8 karakterlerin diferansiyel testi.
 - [x] **Birim Testler, Dokümantasyon & Sürüm Yayın**:
   - `tests/streaming_differential_test.nox` dahil 31 test paketinin tamamının `noxc test` ile geçmesi, `nox.json` sürümünün `0.7.2` yapılması, `CHANGELOG.md` güncellenmesi, git commit, push ve `noxc publish`.
+
+---
+
+## 🛠️ Sürüm 0.7.3 — Delimiter Bayt Sayımı, EOF Sınırları & Property-Based Diferansiyel Doğrulama (Teknik İnceleme İyileştirmeleri)
+
+- [x] **Çok Karakterli Delimiter Tüketiminde Tam Bayt Sayımı (🔴 P1)**:
+  - `streaming.nox`: `feed_chunk` içerisinde `delim_len > 1` eşleştiğinde döngü başında eklenen ilk karakter (`ch`) baytına ek olarak kalan ayracın tüm baytlarının (`delim_bytes - ch_bytes`) `cur_record_bytes` sayacına eklenmesi.
+  - `||||` gibi 4 baytlık ve daha uzun ayraçlarda kayıt sınırının doğru hesaplanması ve `max_record_bytes` aşımının eksiksiz yakalanması.
+  - Escaped quote (`""`) ve EOF tampon boşaltma (`unconsumed_buffer`) işlemlerinde bayt sayacının ve sınır kontrollerinin tam işletilmesi.
+- [x] **Gerçekçi Bellek Üst Sınırı Dokümantasyonu (🟠 P2)**:
+  - `docs/capabilities.md`, `docs/api.md`, `CHANGELOG.md`: Bounded memory modelinin $O(B + R \times S + L)$ formülüyle ($B$: `chunk_bytes`, $R$: `chunk_rows`, $S$: ortalama satır büyüklüğü, $L \le \text{max\_record\_bytes}$) teknik olarak eksiksiz belgelenmesi.
+- [x] **Kapsamlı EOF ve Delimiter Sınır Testleri (🟠 P2)**:
+  - `tests/streaming_edge_cases_test.nox`:
+    1. Dosyanın tek `|` ile bitmesi (`||` ayracında alan verisi olarak korunması).
+    2. Dosyanın tam `||` ile bitmesi (sonda boş alan üretilmesi).
+    3. Dosyanın kapanış tırnağından hemen sonra bitmesi (geçerli kayıt üretimi).
+    4. Dosyanın tamamlanmamış tırnak ile bitmesi (`CsvImportError` fırlatılması).
+    5. Dosyanın `\r` ile bitmesi (tek satır sonu, fazladan boş satır oluşmaması).
+    6. Dosyanın `\r\n` ile bitmesi (tek satır sonu, fazladan boş satır oluşmaması).
+- [x] **Diferansiyel Testte Şema Eşitliği & Property-Based Sentetik Test (🟠 P2)**:
+  - `tests/streaming_differential_test.nox`: `verify_tables_identical` fonksiyonunun yalnızca hücre değerlerini değil; sütun adlarını, veri tiplerini (`data_type`), null olabilirliklerini (`nullable`) ve sıralarını birebir denetlemesi.
+  - Programatik sentetik veri üreteci (`test_property_based_synthetic_generator`) ile 50 satırlık karma tipli, tırnaklı, `::` ayraçlı verinin 10 farklı chunk boyutunda (`1, 2, 3, 5, 7, 13, 27, 64, 256, 1024` bayt) `ParseOffline(x) == ParseStreaming(x, B)` değişmezliğinin doğrulanması.
+- [x] **Streaming Şema Çıkarım (Schema Inference) Politikasının Belgelenmesi (🟠 P2)**:
+  - `docs/capabilities.md` ve `docs/api.md`: İlk chunk üzerinden şema çıkarımı ve sonraki chunk'larda katı validasyon (`ShapeError`, `MissingValueError`) politikası ile `explicit_schema` kullanımının açıkça dokümante edilmesi.
+- [x] **Birim Testler, Dokümantasyon & Sürüm Yayın**:
+  - `tests/streaming_edge_cases_test.nox` ve `tests/streaming_differential_test.nox` dahil 31 test paketinin tamamının `noxc test` ile geçmesi, `nox.json` sürümünün `0.7.3` yapılması, `CHANGELOG.md` güncellenmesi, git commit, push ve `noxc publish`.
 
 ---
 

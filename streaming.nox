@@ -103,6 +103,7 @@ class StreamingCsvReader:
         n: int = len(text)
         delim: str = self.options.delimiter
         delim_len: int = len(delim)
+        delim_bytes: int = nox.strings.byte_len(delim)
         strict: bool = self.options.strict
         max_rec: int = self.options.max_record_bytes
 
@@ -123,6 +124,8 @@ class StreamingCsvReader:
                     # Escaped quote "" split across chunk boundary
                     self.cur_field = self.cur_field + "\""
                     self.cur_record_bytes = self.cur_record_bytes + 1
+                    if self.cur_record_bytes > max_rec:
+                        raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
                     i = i + 1
                     continue
                 else:
@@ -142,6 +145,8 @@ class StreamingCsvReader:
                         if text[i + 1] == "\"":
                             self.cur_field = self.cur_field + "\""
                             self.cur_record_bytes = self.cur_record_bytes + 1
+                            if self.cur_record_bytes > max_rec:
+                                raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
                             i = i + 2
                         else:
                             self.in_quotes = False
@@ -168,6 +173,12 @@ class StreamingCsvReader:
                     self.field_start = True
                     i = i + 1
                 elif delim_len > 1 and i + delim_len <= n and text[i:i + delim_len] == delim:
+                    # Multi-character delimiter consumed: account for remaining bytes
+                    rem_delim_bytes: int = delim_bytes - ch_bytes
+                    if rem_delim_bytes > 0:
+                        self.cur_record_bytes = self.cur_record_bytes + rem_delim_bytes
+                        if self.cur_record_bytes > max_rec:
+                            raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
                     self.cur_row.append(self.cur_field)
                     self.cur_field = ""
                     self.after_quote = False
@@ -176,6 +187,7 @@ class StreamingCsvReader:
                 elif ch == "\r":
                     if i + 1 < n:
                         if text[i + 1] == "\n":
+                            self.cur_record_bytes = self.cur_record_bytes + 1
                             i = i + 1
                     else:
                         self.pending_cr = True
@@ -233,6 +245,12 @@ class StreamingCsvReader:
                     self.field_start = True
                     i = i + 1
                 elif delim_len > 1 and i + delim_len <= n and text[i:i + delim_len] == delim:
+                    # Multi-character delimiter consumed: account for remaining bytes
+                    rem_delim_bytes: int = delim_bytes - ch_bytes
+                    if rem_delim_bytes > 0:
+                        self.cur_record_bytes = self.cur_record_bytes + rem_delim_bytes
+                        if self.cur_record_bytes > max_rec:
+                            raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
                     self.cur_row.append(self.cur_field)
                     self.cur_field = ""
                     self.field_start = True
@@ -240,6 +258,7 @@ class StreamingCsvReader:
                 elif ch == "\r":
                     if i + 1 < n:
                         if text[i + 1] == "\n":
+                            self.cur_record_bytes = self.cur_record_bytes + 1
                             i = i + 1
                     else:
                         self.pending_cr = True
@@ -274,7 +293,10 @@ class StreamingCsvReader:
     def finish_parser(self: StreamingCsvReader) -> None:
         if len(self.unconsumed_buffer) > 0:
             self.cur_field = self.cur_field + self.unconsumed_buffer
+            self.cur_record_bytes = self.cur_record_bytes + nox.strings.byte_len(self.unconsumed_buffer)
             self.unconsumed_buffer = ""
+            if self.cur_record_bytes > self.options.max_record_bytes:
+                raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(self.options.max_record_bytes) + " bytes)")
         if self.pending_quote:
             self.in_quotes = False
             self.after_quote = True

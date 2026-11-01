@@ -5,6 +5,24 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-11-01
+
+### Fixed & Improved
+- **Exact Multi-Character Delimiter Byte Accounting (`streaming.nox`)**:
+  - Fixed byte counting in `feed_chunk` when multi-character delimiters (`||`, `::`, `||||`) are matched, ensuring all trailing bytes of the delimiter (`delim_bytes - ch_bytes`) are counted toward `cur_record_bytes`.
+  - Added strict overflow verification across all multi-character branches (including escaped quotes and unconsumed buffer flushes), preventing unbounded records from evading `max_record_bytes` on wide-delimiter files.
+- **Realistic Memory Upper Bound Documentation**:
+  - Replaced overly generalized $O(\text{chunk\_rows})$ memory claim with precise formulation: $O(B + R \times S + L)$ where $B$ is read buffer size (`chunk_bytes`), $R$ is rows per chunk (`chunk_rows`), $S$ is average row size, and $L \le \text{max\_record\_bytes}$ is the single-record ceiling.
+  - Documented Atlas's early-pause parser mechanism in `docs/capabilities.md` and `docs/api.md`.
+- **Exhaustive EOF & State Machine Sınır Tests (`tests/streaming_edge_cases_test.nox`)**:
+  - Added 6 specialized EOF boundary tests: single delimiter character at EOF (preserved as field text), trailing full delimiter at EOF (produces trailing empty cell), file ending immediately after closing quote, file ending with unclosed quote (raises `CsvImportError`), file ending with `\r` (single row end, zero phantom rows), and file ending with `\r\n`.
+  - Added multi-character delimiter byte limit test verifying 4-byte delimiter `||||` overflow behavior.
+- **Property-Based Differential Testing & Full Schema Equality (`tests/streaming_differential_test.nox`)**:
+  - Upgraded `verify_tables_identical` to assert 100% schema equality: column count, column names, column data types (`data_type`), column nullable flags (`nullable`), and column order, in addition to cell equality.
+  - Added `test_property_based_synthetic_generator` validating $\text{ParseOffline}(x) == \text{ParseStreaming}(x, B)$ across 50 procedurally generated records and 10 chunk sizes ($B \in [1, 1024]$ bytes).
+- **Documented Streaming Schema Inference Policy**:
+  - Clarified first-chunk schema inference behavior vs explicit schema declarations in `docs/capabilities.md` and `docs/api.md`.
+
 ## [0.7.2] - 2026-11-01
 
 ### Added

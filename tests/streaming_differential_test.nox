@@ -5,7 +5,7 @@ import nox.fs
 import values
 from values import Cell
 import schema
-from schema import Schema
+from schema import Schema, ColumnDef
 import table
 from table import Table
 import delimited
@@ -17,11 +17,22 @@ def verify_tables_identical(t1: Table, t2: Table, label: str) -> None:
     nox.test.assert_eq_int(t1.row_count(), t2.row_count(), label + " row counts match")
     nox.test.assert_eq_int(t1.column_count(), t2.column_count(), label + " column counts match")
     
+    # 1. Full Schema Equality: column name, data type, nullable, and ordering
+    c: int = 0
+    num_c: int = t1.column_count()
+    while c < num_c:
+        col1: ColumnDef = t1.schema.columns[c]
+        col2: ColumnDef = t2.schema.columns[c]
+        assert col1.name == col2.name
+        nox.test.assert_eq_int(col1.data_type, col2.data_type, label + " col " + str(c) + " type")
+        assert col1.nullable == col2.nullable
+        c = c + 1
+
+    # 2. Cell-by-Cell Value Equality
     r: int = 0
     num_r: int = t1.row_count()
-    num_c: int = t1.column_count()
     while r < num_r:
-        c: int = 0
+        c = 0
         while c < num_c:
             c1: Cell = t1.cell(r, c)
             c2: Cell = t2.cell(r, c)
@@ -97,8 +108,34 @@ def test_utf8_multibyte_differential() -> None:
     opts: CsvOptions = csv_options(delimiter=",")
     run_differential_test("temp_diff_utf8.csv", content, opts, "UTF-8 Multi-byte Differential")
 
+def test_property_based_synthetic_generator() -> None:
+    # Scenario D: Procedurally generated dataset with 50 diverse rows, multi-character delimiter "::"
+    # and complex escaping to systematically verify: ParseOffline(x) == ParseStreaming(x, B)
+    content: str = "rec_id::category::val_float::is_active::comments\r\n"
+    i: int = 1
+    while i <= 50:
+        f_val: str = str(float(i) * 1.5)
+        b_val: str = "true"
+        if i % 2 == 0:
+            b_val = "false"
+
+        comment: str = "regular comment " + str(i)
+        if i % 5 == 0:
+            comment = "\"Comment with \"\"quotes\"\" and\r\nembedded newline for record " + str(i) + "\""
+        elif i % 7 == 0:
+            comment = "\"Comment with :: colons and , commas\""
+        elif i % 11 == 0:
+            comment = ""
+
+        content = content + str(i) + "::Category_" + str(i % 4) + "::" + f_val + "::" + b_val + "::" + comment + "\r\n"
+        i = i + 1
+
+    opts: CsvOptions = csv_options(delimiter="::")
+    run_differential_test("temp_diff_prop_gen.csv", content, opts, "Property-Based Synthetic Generator")
+
 test_standard_csv_differential()
 test_multichar_delim_differential()
 test_utf8_multibyte_differential()
+test_property_based_synthetic_generator()
 
 print("streaming_differential_test passed")

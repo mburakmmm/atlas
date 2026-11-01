@@ -228,3 +228,8 @@ stream_std(path: str, col_name: str, options: CsvOptions | None = None, is_sampl
 # Configurable options
 opts = csv_options(delimiter=",", has_header=True, blank_is_missing=True, strict=False, safe_spreadsheet=False, max_record_bytes=10485760)
 ```
+
+### Memory Complexity & Schema Policy
+
+- **Streaming Memory Bound**: Bounded by $O(B + R \times S + L)$, where $B$ is `chunk_bytes`, $R$ is `chunk_rows`, $S$ is average row size, and $L \le \text{max\_record\_bytes}$ (default 10 MB in true UTF-8 bytes). Parsing pauses immediately upon accumulating $R$ rows.
+- **Schema Policy**: When `explicit_schema` is omitted, the schema is inferred from the first chunk's data rows. Subsequent rows are strictly validated against this schema (`ShapeError` on column count mismatch, `MissingValueError` on non-nullable nulls). Provide `explicit_schema` when types must be enforced upfront.
