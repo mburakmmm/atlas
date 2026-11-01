@@ -20,6 +20,8 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.7.1** | **Streaming Sağlamlaştırma, Durum Makinesi, max_record_bytes & Çevrimiçi İstatistikler** | ✅ **TAMAMLANDI & YAYINLANDI** | 30/30 Test Geçti (`noxc test`) |
 | **v0.7.2** | **Çok Karakterli Delimiter, UTF-8 Bayt Sınırları, Bounded Memory & Diferansiyel Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v0.7.3** | **Çok Karakterli Delimiter Bayt Sayımı, EOF Sınırları & Property-Based Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
+| **v0.7.4** | **Boş Delimiter Validasyonu, Boş Dosya Şema Koruması & LCG Diferansiyel Testleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
+| **v0.8.0** | **Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline)** | ⏳ **PLANLANDI (Sonraki Büyük Faz)** | — |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -364,6 +366,41 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - `docs/capabilities.md` ve `docs/api.md`: İlk chunk üzerinden şema çıkarımı ve sonraki chunk'larda katı validasyon (`ShapeError`, `MissingValueError`) politikası ile `explicit_schema` kullanımının açıkça dokümante edilmesi.
 - [x] **Birim Testler, Dokümantasyon & Sürüm Yayın**:
   - `tests/streaming_edge_cases_test.nox` ve `tests/streaming_differential_test.nox` dahil 31 test paketinin tamamının `noxc test` ile geçmesi, `nox.json` sürümünün `0.7.3` yapılması, `CHANGELOG.md` güncellenmesi, git commit, push ve `noxc publish`.
+
+---
+
+## 🛠️ Sürüm 0.7.4 — Delimiter Doğrulaması, Boş Dosya Şema Koruması & Rastgeleleştirilmiş Diferansiyel Testler (Teknik İnceleme İyileştirmeleri)
+
+- [x] **Boş Delimiter Doğrulaması (`StreamingCsvReader.__init__`) (🟠 P2)**:
+  - `streaming.nox`: `StreamingCsvReader.__init__` içerisinde `len(self.options.delimiter) == 0` kontrolünün eklenmesi ve `CsvImportError("delimiter cannot be empty")` hatasının fırlatılması.
+  - `delimited.nox` (`parse_delimited`) ile %100 hata sözleşmesi tutarlılığının sağlanması.
+- [x] **Boş Dosyada Explicit Schema Korunması (`next_chunk`) (🟠 P2)**:
+  - `streaming.nox`: `next_chunk()` içerisinde `len(self.pending_rows) == 0` olduğunda, çağıran tarafından açık şema verilmişse (`self.schema.column_count() > 0`), şemanın sıfırlanmayıp `Table(self.schema, [])` şeklinde korunması.
+  - Boş CSV dosyasında sütun isimleri, tipleri ve null olabilirlik bilgilerinin kaybolmasının engellenmesi.
+- [x] **`consume_bytes` Yardımcı Fonksiyonu ile Bayt Sayımı Konsolidasyonu (🟠 P2)**:
+  - `streaming.nox`: `cur_record_bytes` artışları ve `max_record_bytes` limit kontrollerinin `consume_bytes(self: StreamingCsvReader, amount: int)` metodunda merkezileştirilmesi.
+  - `feed_chunk` ve `finish_parser` içerisindeki mükerrer satırların temizlenmesi ve tüm parser durumlarında bayt kontrolünün kaçırılmadan yürütülmesi.
+- [x] **Rastgeleleştirilmiş (Randomized LCG / Property-Based) Diferansiyel Testler (🟠 P2)**:
+  - `tests/streaming_differential_test.nox`: Saf Nox ile Lehmer Doğrusal Eşlik Üreteci (`LcgRng`, asal modülo $2^{31}-1$) geliştirilmesi.
+  - Farklı tohumlarla (`seed=42`, `seed=1337`, `seed=2026`, `seed=9999`) ve farklı ayraçlarla (`,`, `|`, `::`, `---`) tırnaklı, kaçışlı, satır sonlu ve çok baytlı rastgele tablolar üretilmesi.
+  - 10 farklı chunk boyutunda ($B \in [1, 1024]$ bayt) $\text{ParseOffline}(x) == \text{ParseStreaming}(x, B)$ eşitliğinin hem tam şema hem de hücre bazında doğrulanması.
+- [x] **Uç Durum Test Kapsamı & Sürüm Yayın**:
+  - `tests/streaming_edge_cases_test.nox`: `delimiter=""` reddi ve boş dosyada explicit schema koruma testlerinin eklenmesi.
+  - 31 test paketinin tamamının `noxc test` ile geçmesi, büyük veri ve hash kıyaslamalarının doğrulanması, `nox.json` sürümünün `0.7.4` yapılması, `CHANGELOG.md` güncellenmesi, git commit, push ve `noxc publish`.
+
+---
+
+## 🚀 Sürüm 0.8.0 — Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline) (Planlandı)
+
+- [ ] **Akış Tabanlı Filtreleme (`Stream.filter`)**:
+  - Tüm dosyayı belleğe almadan, chunk düzeyinde deklaratif AST filtreleri (`col_eq`, `col_gt` vb.) işleten `StreamingTable` / `StreamTransform` boru hattı.
+- [ ] **Akış Tabanlı Sütun İzdüşümü (`Stream.select`)**:
+  - İstenmeyen sütunları chunk seviyesinde eleyerek bellek ayak izini minimumda tutma.
+- [ ] **Çevrimiçi / Bellek Dostu Akış Gruplama (`Streaming GroupBy`)**:
+  - Milyonlarca satırı bellekte tutmak yerine grup durumlarını (`GroupState`: count, sum, mean, m2, min, max) güncelleyen sabit-durumlu hash tablosu altyapısı.
+  - Bellek karmaşıklığının toplam satır sayısından $O(N)$ bağımsız, yalnızca tekil grup sayısına $O(G)$ bağlı hâle getirilmesi.
+- [ ] **Zincirlenebilir Akış Boru Hattı API'si**:
+  - `open_csv_stream("sales.csv").filter(...).select([...]).group_by([...]).aggregate(...) -> Table` ergonomisi.
 
 ---
 

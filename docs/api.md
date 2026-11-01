@@ -232,4 +232,5 @@ opts = csv_options(delimiter=",", has_header=True, blank_is_missing=True, strict
 ### Memory Complexity & Schema Policy
 
 - **Streaming Memory Bound**: Bounded by $O(B + R \times S + L)$, where $B$ is `chunk_bytes`, $R$ is `chunk_rows`, $S$ is average row size, and $L \le \text{max\_record\_bytes}$ (default 10 MB in true UTF-8 bytes). Parsing pauses immediately upon accumulating $R$ rows.
-- **Schema Policy**: When `explicit_schema` is omitted, the schema is inferred from the first chunk's data rows. Subsequent rows are strictly validated against this schema (`ShapeError` on column count mismatch, `MissingValueError` on non-nullable nulls). Provide `explicit_schema` when types must be enforced upfront.
+- **Schema Policy**: When `explicit_schema` is omitted, the schema is inferred from the first chunk's data rows. Subsequent rows are strictly validated against this schema (`ShapeError` on column count mismatch, `MissingValueError` on non-nullable nulls). Provide `explicit_schema` when types must be enforced upfront; explicit schemas are strictly preserved even when reading empty (0-byte) files.
+- **Validation**: Constructor validates that `chunk_rows > 0`, `chunk_bytes > 0`, `max_record_bytes > 0`, and `len(delimiter) > 0` (raises `CsvImportError("delimiter cannot be empty")`).

@@ -52,6 +52,9 @@ class StreamingCsvReader:
         else:
             self.options = csv_options()
 
+        if len(self.options.delimiter) == 0:
+            raise CsvImportError("delimiter cannot be empty")
+
         if self.options.max_record_bytes <= 0:
             raise AtlasError("max_record_bytes must be a positive integer")
 
@@ -98,6 +101,11 @@ class StreamingCsvReader:
             return False
         return self.has_more
 
+    def consume_bytes(self: StreamingCsvReader, amount: int) -> None:
+        self.cur_record_bytes = self.cur_record_bytes + amount
+        if self.cur_record_bytes > self.options.max_record_bytes:
+            raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(self.options.max_record_bytes) + " bytes)")
+
     def feed_chunk(self: StreamingCsvReader, text: str, target_rows: int) -> None:
         i: int = 0
         n: int = len(text)
@@ -105,7 +113,6 @@ class StreamingCsvReader:
         delim_len: int = len(delim)
         delim_bytes: int = nox.strings.byte_len(delim)
         strict: bool = self.options.strict
-        max_rec: int = self.options.max_record_bytes
 
         while i < n:
             ch: str = text[i]
@@ -123,9 +130,7 @@ class StreamingCsvReader:
                 if ch == "\"":
                     # Escaped quote "" split across chunk boundary
                     self.cur_field = self.cur_field + "\""
-                    self.cur_record_bytes = self.cur_record_bytes + 1
-                    if self.cur_record_bytes > max_rec:
-                        raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
+                    self.consume_bytes(1)
                     i = i + 1
                     continue
                 else:
@@ -135,18 +140,14 @@ class StreamingCsvReader:
                     # fall through to process ch in after_quote state
 
             ch_bytes: int = nox.strings.byte_len(ch)
-            self.cur_record_bytes = self.cur_record_bytes + ch_bytes
-            if self.cur_record_bytes > max_rec:
-                raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
+            self.consume_bytes(ch_bytes)
 
             if self.in_quotes:
                 if ch == "\"":
                     if i + 1 < n:
                         if text[i + 1] == "\"":
                             self.cur_field = self.cur_field + "\""
-                            self.cur_record_bytes = self.cur_record_bytes + 1
-                            if self.cur_record_bytes > max_rec:
-                                raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
+                            self.consume_bytes(1)
                             i = i + 2
                         else:
                             self.in_quotes = False
@@ -176,9 +177,7 @@ class StreamingCsvReader:
                     # Multi-character delimiter consumed: account for remaining bytes
                     rem_delim_bytes: int = delim_bytes - ch_bytes
                     if rem_delim_bytes > 0:
-                        self.cur_record_bytes = self.cur_record_bytes + rem_delim_bytes
-                        if self.cur_record_bytes > max_rec:
-                            raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
+                        self.consume_bytes(rem_delim_bytes)
                     self.cur_row.append(self.cur_field)
                     self.cur_field = ""
                     self.after_quote = False
@@ -187,7 +186,7 @@ class StreamingCsvReader:
                 elif ch == "\r":
                     if i + 1 < n:
                         if text[i + 1] == "\n":
-                            self.cur_record_bytes = self.cur_record_bytes + 1
+                            self.consume_bytes(1)
                             i = i + 1
                     else:
                         self.pending_cr = True
@@ -248,9 +247,7 @@ class StreamingCsvReader:
                     # Multi-character delimiter consumed: account for remaining bytes
                     rem_delim_bytes: int = delim_bytes - ch_bytes
                     if rem_delim_bytes > 0:
-                        self.cur_record_bytes = self.cur_record_bytes + rem_delim_bytes
-                        if self.cur_record_bytes > max_rec:
-                            raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(max_rec) + " bytes)")
+                        self.consume_bytes(rem_delim_bytes)
                     self.cur_row.append(self.cur_field)
                     self.cur_field = ""
                     self.field_start = True
@@ -258,7 +255,7 @@ class StreamingCsvReader:
                 elif ch == "\r":
                     if i + 1 < n:
                         if text[i + 1] == "\n":
-                            self.cur_record_bytes = self.cur_record_bytes + 1
+                            self.consume_bytes(1)
                             i = i + 1
                     else:
                         self.pending_cr = True
@@ -293,10 +290,8 @@ class StreamingCsvReader:
     def finish_parser(self: StreamingCsvReader) -> None:
         if len(self.unconsumed_buffer) > 0:
             self.cur_field = self.cur_field + self.unconsumed_buffer
-            self.cur_record_bytes = self.cur_record_bytes + nox.strings.byte_len(self.unconsumed_buffer)
+            self.consume_bytes(nox.strings.byte_len(self.unconsumed_buffer))
             self.unconsumed_buffer = ""
-            if self.cur_record_bytes > self.options.max_record_bytes:
-                raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(self.options.max_record_bytes) + " bytes)")
         if self.pending_quote:
             self.in_quotes = False
             self.after_quote = True
@@ -348,6 +343,9 @@ class StreamingCsvReader:
 
         if len(self.pending_rows) == 0:
             self.close()
+            if self.schema.column_count() > 0:
+                empty_rows: list[list[Cell]] = []
+                return Table(self.schema, empty_rows)
             empty_cols: list[ColumnDef] = []
             return Table(Schema(empty_cols), [])
 

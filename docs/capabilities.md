@@ -47,6 +47,7 @@ Audit performed against `noxc 2.0.86` on macOS (darwin).
   - Parsing pauses immediately when $R$ rows are accumulated, avoiding unbounded `pending_rows` buffering even when large read chunks are provided.
 - **Streaming Schema Policy**:
   - *Inference (Default)*: When `explicit_schema` is omitted, the table schema is inferred from the first chunk's data rows using `infer_schema`. Subsequent chunks are strictly validated against this schema (`ShapeError` on column count mismatch, `MissingValueError` on non-nullable missing cells, and strict cell parsing).
-  - *Explicit Schema*: For datasets where later rows may contain wider types (e.g. strings in predominantly numeric columns), passing an `explicit_schema` enforces predefined types and nullability across all chunks.
+  - *Explicit Schema*: For datasets where later rows may contain wider types (e.g. strings in predominantly numeric columns), passing an `explicit_schema` enforces predefined types and nullability across all chunks. If an empty file (0 bytes) is read with `explicit_schema`, the specified column definitions and types are strictly preserved.
+  - *Parameter Validation*: `StreamingCsvReader` strictly validates `chunk_rows > 0`, `chunk_bytes > 0`, `max_record_bytes > 0`, and `len(delimiter) > 0` (raising `CsvImportError("delimiter cannot be empty")`).
 - Online Welford / Chan algorithm: Numerically stable running mean, variance, and standard deviation with $O(1)$ memory usage; raises `AggregationError` when observations are insufficient.
 - `try...finally`: Guaranteed file descriptor closure and resource cleanup.

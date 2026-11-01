@@ -5,6 +5,26 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-11-01
+
+### Fixed & Improved
+- **Empty Delimiter Validation (`StreamingCsvReader.__init__`)**:
+  - Added explicit validation in `StreamingCsvReader.__init__` rejecting empty delimiters: raises `CsvImportError("delimiter cannot be empty")` when `len(self.options.delimiter) == 0`.
+  - Guarantees 100% validation parity between offline `parse_delimited` and streaming reader initialization.
+- **Empty File Explicit Schema Preservation (`StreamingCsvReader.next_chunk`)**:
+  - Fixed schema retention when reading an empty (0-byte or 0-data-row) file with an explicit schema.
+  - Rather than returning an empty table with 0 columns, `next_chunk()` returns `Table(self.schema, [])`, preserving caller-specified column names, data types, and nullabilities.
+- **Consolidated Byte Accounting (`consume_bytes` Helper)**:
+  - Centralized all stream byte counting and `max_record_bytes` overflow checks into `StreamingCsvReader.consume_bytes(amount: int)`.
+  - Eliminated duplicate inline logic across `feed_chunk` and `finish_parser`, eliminating risk of uncounted byte branches during parser state machine transitions.
+- **Randomized LCG Property-Based Differential Fuzzing (`tests/streaming_differential_test.nox`)**:
+  - Implemented a pure Nox Lehmer Linear Congruential Generator (`LcgRng`) with prime modulus $2^{31}-1$.
+  - Added `test_randomized_lcg_differential()` that generates randomized CSV datasets across diverse seeds (`seed=42`, `seed=1337`, `seed=2026`, `seed=9999`), testing varied column types, multi-char delimiters (`::`, `---`), quotes, escapes, and newlines across 10 chunk sizes ($B \in [1, 1024]$ bytes).
+  - Proved that offline and streaming parsers yield 100% identical schemas and cell values under randomized fuzzing.
+- **Edge Case Test Suite Updates (`tests/streaming_edge_cases_test.nox`)**:
+  - Added tests for `delimiter=""` rejection in constructor parameter validation.
+  - Added `test_empty_file_explicit_schema_preservation()` verifying empty file explicit schema retention. All 31 test suites passing.
+
 ## [0.7.3] - 2026-11-01
 
 ### Fixed & Improved

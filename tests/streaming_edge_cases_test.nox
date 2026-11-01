@@ -155,7 +155,7 @@ def test_empty_csv() -> None:
             nox.fs.remove_file(e_path)
 
 def test_parameter_validation() -> None:
-    # 6. chunk_rows <= 0, chunk_bytes <= 0, max_record_bytes <= 0
+    # 6. chunk_rows <= 0, chunk_bytes <= 0, max_record_bytes <= 0, delimiter == ""
     dummy: str = "temp_dummy.csv"
     nox.fs.write_string(dummy, "a,b\n1,2\n")
     try:
@@ -179,6 +179,13 @@ def test_parameter_validation() -> None:
         except AtlasError as e:
             caught_rec = True
         assert caught_rec
+
+        caught_delim: bool = False
+        try:
+            StreamingCsvReader(dummy, csv_options(delimiter=""), None, 10, 1024)
+        except CsvImportError as e:
+            caught_delim = True
+        assert caught_delim
     finally:
         if nox.fs.exists(dummy):
             nox.fs.remove_file(dummy)
@@ -465,6 +472,31 @@ def test_eof_delimiter_state_machine_cases() -> None:
         if nox.fs.exists(f_f):
             nox.fs.remove_file(f_f)
 
+def test_empty_file_explicit_schema_preservation() -> None:
+    # Empty 0-byte file with explicit schema must preserve column names and types
+    f_emp: str = "temp_empty_explicit_schema.csv"
+    nox.fs.write_string(f_emp, "")
+    try:
+        sch: Schema = Schema([
+            ColumnDef("code", TYPE_STR, False),
+            ColumnDef("score", TYPE_FLOAT, True),
+        ])
+        reader: StreamingCsvReader = open_csv_stream(f_emp, 10, csv_options(), sch)
+        t_emp: Table = reader.next_chunk()
+        nox.test.assert_eq_int(t_emp.row_count(), 0, "empty file has 0 rows")
+        nox.test.assert_eq_int(t_emp.column_count(), 2, "explicit schema column count preserved")
+        assert t_emp.schema.columns[0].name == "code"
+        nox.test.assert_eq_int(t_emp.schema.columns[0].data_type, TYPE_STR, "col 0 type str preserved")
+        assert not t_emp.schema.columns[0].nullable
+        assert t_emp.schema.columns[1].name == "score"
+        nox.test.assert_eq_int(t_emp.schema.columns[1].data_type, TYPE_FLOAT, "col 1 type float preserved")
+        assert t_emp.schema.columns[1].nullable
+        assert not reader.has_next()
+        reader.close()
+    finally:
+        if nox.fs.exists(f_emp):
+            nox.fs.remove_file(f_emp)
+
 test_quote_and_escaped_quote_split()
 test_crlf_split_boundary()
 test_header_only_and_single_row()
@@ -474,6 +506,7 @@ test_max_record_bytes_limit()
 test_stream_variance_and_std()
 test_resource_cleanup_on_error()
 test_explicit_schema_streaming()
+test_empty_file_explicit_schema_preservation()
 test_multi_char_delimiter_chunk_split()
 test_utf8_multibyte_record_limit()
 test_large_chunk_bytes_bounded_memory()
