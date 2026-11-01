@@ -2,7 +2,7 @@
 
 import nox.test
 import errors
-from errors import ShapeError, ColumnNotFoundError
+from errors import ShapeError, ColumnNotFoundError, SchemaError
 import values
 from values import Cell, cell_str, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR
 import schema
@@ -79,6 +79,32 @@ try:
 except ShapeError:
     caught_dup_error = True
 nox.test.assert_true(caught_dup_error, "pivot caught duplicate error")
+
+# Test Pivot Column Name Collision with index_col ("dept")
+s_coll: Schema = Schema([
+    ColumnDef("dept", TYPE_STR),
+    ColumnDef("category", TYPE_STR),
+    ColumnDef("val", TYPE_INT)
+])
+# Row has category == "dept" -> collides with index_col "dept"
+r_coll: list[Cell] = [cell_str("Sales"), cell_str("dept"), cell_int(10)]
+t_coll: Table = Table(s_coll, [r_coll])
+caught_coll_error: bool = False
+try:
+    pivot(t_coll, "dept", "category", "val")
+except SchemaError:
+    caught_coll_error = True
+nox.test.assert_true(caught_coll_error, "pivot caught column name collision with index_col")
+
+# Test Pivot Empty String Column Error
+r_empty_c: list[Cell] = [cell_str("Sales"), cell_str(""), cell_int(10)]
+t_empty_c: Table = Table(s_coll, [r_empty_c])
+caught_empty_col: bool = False
+try:
+    pivot(t_empty_c, "dept", "category", "val")
+except SchemaError:
+    caught_empty_col = True
+nox.test.assert_true(caught_empty_col, "pivot caught empty string column error")
 
 # 4. Test Pivot Table with Duplicate Aggregation
 # Eng has two Q1 entries: 100 and 999.

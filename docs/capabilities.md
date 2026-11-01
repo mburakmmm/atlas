@@ -77,8 +77,10 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 
 ---
 
-## 8. Window Functions & Analytical Calculations (`window.nox`) (v0.9.0)
+## 8. Window Functions & Analytical Calculations (`window.nox`) (v0.9.0, refined v0.9.1)
 
+- **WindowContext Architecture**:
+  - Centralizes key partitioning, order column resolution, and partition-level stable merge sort into a single reusable `WindowContext` pass, avoiding redundant recalculations across window operations.
 - **Non-Destructive Row Architecture**:
   - Evaluates analytical window calculations partitioned by keys and ordered by specified columns, appending computed result columns without reordering or altering the input table's original row sequence.
 - **Supported Window Operations**:
@@ -87,12 +89,12 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
   - `dense_rank(t, order_col, output_col, partition_by, ascending)`: Dense ranking without gaps on tied values (e.g. 1, 2, 2, 3).
   - `lag(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Look-behind access to preceding rows.
   - `lead(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Look-ahead access to succeeding rows.
-  - `cumulative_sum(t, target_col, output_col, partition_by, order_by, ascending)`: Running cumulative sums for integers and floats.
-  - `moving_average(t, target_col, window_size, output_col, partition_by, order_by, ascending, min_periods)`: Rolling sliding-window means with observation thresholds.
+  - `cumulative_sum(t, target_col, output_col, partition_by, order_by, ascending, skip_null=True)`: Running cumulative sums for integers and floats. Supports `skip_null=True` (running sum retained across missing values) and `skip_null=False` (strict null propagation).
+  - `moving_average(t, target_col, window_size, output_col, partition_by, order_by, ascending, min_periods)`: Rolling sliding-window means based on valid numeric observation count. Validates `min_periods <= window_size`.
 
 ---
 
-## 9. Table Reshaping: Melt & Pivot (`reshape.nox`) (v0.9.0)
+## 9. Table Reshaping: Melt & Pivot (`reshape.nox`) (v0.9.0, refined v0.9.1)
 
 - **Wide to Long Unpivoting (`melt`)**:
   - Converts tabular data from wide to long format across specified identifier and value columns.
@@ -100,6 +102,7 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 - **Long to Wide Pivoting (`pivot`)**:
   - Reshapes long format data into wide format with unique index and column combinations.
   - Strict duplicate checking: raises `ShapeError` when duplicate `(index, column)` pairs are detected.
+  - Collision Safeguards: raises `SchemaError` if a pivot column value matches `index_col` or is empty.
 - **Aggregation Pivoting (`pivot_table`)**:
   - Handles duplicate `(index, column)` pairs with configurable aggregation functions:
     - `"mean"`, `"sum"`, `"count"`, `"min"`, `"max"`, `"first"`, `"last"`.

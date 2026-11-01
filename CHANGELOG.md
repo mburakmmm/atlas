@@ -5,6 +5,36 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-11-01
+
+### Added & Improved
+- **Consolidated WindowContext Engine (`window.nox`)**:
+  - Introduced unified `WindowContext` architecture that centralizes order column resolution, hash-based row partitioning, and partition-level stable merge-sorting.
+  - Reduced redundant sort and partition traversal code across `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `cumulative_sum`, and `moving_average` by ~70%, isolating each window function to pure mathematical evaluation.
+- **Explicit Missing/Null Semantics in Window Functions**:
+  - `cumulative_sum`: Added explicit `skip_null: bool = True` parameter:
+    - When `skip_null=True` (default): Missing (null) values do not affect the running total; the current accumulated sum is retained.
+    - When `skip_null=False`: Missing values trigger null propagation, producing `cell_null()` on null rows while preserving accurate accumulation for subsequent rows.
+  - `moving_average`: Clarified `min_periods` semantics as the number of *valid, non-missing numeric observations* within the sliding window. Added strict validation raising `ShapeError` when `min_periods > window_size` or `min_periods < 1`.
+- **Full Outer Join Key Preservation Verification (`join.nox`)**:
+  - Verified and strictly asserted full key preservation in `join_full_keys` when joining across asymmetric key column names (e.g. `employee_id` vs `staff_id`). Unmatched right rows correctly retain their original right key value (`staff_id=42`) while left columns are padded with `cell_null()`.
+- **Pivot Column Name Collision Safeguards (`reshape.nox`)**:
+  - Added strict validation in `pivot` and `pivot_table` against column collisions:
+    - Raises `SchemaError("pivot column value '...' collides with index column name '...'")` if a pivot category matches `index_col`.
+    - Raises `SchemaError("pivot column value cannot be empty string")` if a pivot category is `""`.
+- **Comprehensive Window Edge-Case Test Suite (`tests/window_edge_cases_test.nox`)**:
+  - Added 9 exhaustive edge-case test scenarios:
+    1. Empty table window evaluation across all functions.
+    2. Single-row partitions.
+    3. `lag` and `lead` with `offset > partition_size`.
+    4. Descending order (`ascending=False`).
+    5. Pure-tie partitions (all identical values).
+    6. Null and NaN sorting order.
+    7. `cumulative_sum` `skip_null=True` vs `skip_null=False` (null propagation).
+    8. `moving_average` `min_periods > window_size` validation.
+    9. 64-bit integer sum preservation near `INT64_MAX`.
+  - Total test suites: 36 (100% passing).
+
 ## [0.9.0] - 2026-11-01
 
 ### Added

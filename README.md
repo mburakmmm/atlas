@@ -5,9 +5,9 @@
 Inspired by Pandas but crafted natively for the **Nox** static type system, Atlas avoids bloated dependencies and delivers native $C$-like performance on medium-sized datasets.
 
 [![Nox Compiler](https://img.shields.io/badge/noxc-2.0.86-blue.svg)](https://github.com/mburakmmm/nox-lang)
-[![Version](https://img.shields.io/badge/version-v0.9.0-orange.svg)](nox.json)
+[![Version](https://img.shields.io/badge/version-v0.9.1-orange.svg)](nox.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-35%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-36%20passed-success.svg)](tests/)
 
 ---
 

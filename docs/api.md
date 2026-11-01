@@ -295,7 +295,7 @@ t2 = rank(table, order_col="salary", output_col="rank", partition_by=["dept"])
 t3 = dense_rank(table, order_col="salary", output_col="dense_rank", partition_by=["dept"])
 t4 = lag(table, target_col="sales", output_col="prev_sales", offset=1, partition_by=["dept"], order_by=["date"])
 t5 = lead(table, target_col="sales", output_col="next_sales", offset=1, partition_by=["dept"], order_by=["date"])
-t6 = cumulative_sum(table, target_col="sales", output_col="cum_sales", partition_by=["dept"], order_by=["date"])
+t6 = cumulative_sum(table, target_col="sales", output_col="cum_sales", partition_by=["dept"], order_by=["date"], skip_null=True)
 t7 = moving_average(table, target_col="sales", window_size=3, output_col="moving_avg", partition_by=["dept"], min_periods=1)
 
 # Fluent Table Instance Methods:
@@ -303,7 +303,7 @@ t_analytical: Table = table \
     .with_row_number("row_nr", partition_by=["dept"], order_by=["salary"]) \
     .with_rank("salary", "salary_rank", partition_by=["dept"]) \
     .with_lag("sales", "prev_sales", offset=1, partition_by=["dept"]) \
-    .with_cumulative_sum("sales", "cumsum_sales", partition_by=["dept"]) \
+    .with_cumulative_sum("sales", "cumsum_sales", partition_by=["dept"], skip_null=True) \
     .with_moving_average("sales", window_size=5, output_col="mavg_sales", partition_by=["dept"])
 ```
 

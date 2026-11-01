@@ -1,0 +1,150 @@
+# tests/window_edge_cases_test.nox — Comprehensive edge-case tests for window functions.
+
+import nox.test
+import errors
+from errors import ShapeError, ColumnNotFoundError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_nan, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import window
+from window import row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
+
+# 1. Edge Case: Empty Table
+s_empty: Schema = Schema([
+    ColumnDef("id", TYPE_INT),
+    ColumnDef("val", TYPE_FLOAT)
+])
+t_empty: Table = Table(s_empty, [])
+
+t_rn_empty: Table = row_number(t_empty, "rn")
+nox.test.assert_eq_int(t_rn_empty.row_count(), 0, "empty table row_number has 0 rows")
+nox.test.assert_eq_int(t_rn_empty.column_count(), 3, "empty table row_number has 3 columns")
+
+t_rank_empty: Table = rank(t_empty, "val", "rank")
+nox.test.assert_eq_int(t_rank_empty.row_count(), 0, "empty table rank has 0 rows")
+
+t_cumsum_empty: Table = cumulative_sum(t_empty, "val", "cumsum")
+nox.test.assert_eq_int(t_cumsum_empty.row_count(), 0, "empty table cumsum has 0 rows")
+
+# 2. Edge Case: Single Row Partition
+s_single: Schema = Schema([
+    ColumnDef("dept", TYPE_STR),
+    ColumnDef("amount", TYPE_INT)
+])
+t_single: Table = Table(s_single, [[cell_str("IT"), cell_int(500)]])
+
+t_rn_single: Table = row_number(t_single, "rn", ["dept"])
+nox.test.assert_eq_int(t_rn_single.rows[0][2].as_int(), 1, "single row rn is 1")
+
+t_lag_single: Table = lag(t_single, "amount", "prev", 1, ["dept"], default_val=cell_int(-99))
+nox.test.assert_eq_int(t_lag_single.rows[0][2].as_int(), -99, "single row lag returns default")
+
+t_lead_single: Table = lead(t_single, "amount", "next", 1, ["dept"], default_val=cell_int(-99))
+nox.test.assert_eq_int(t_lead_single.rows[0][2].as_int(), -99, "single row lead returns default")
+
+t_cs_single: Table = cumulative_sum(t_single, "amount", "cs", ["dept"])
+nox.test.assert_eq_int(t_cs_single.rows[0][2].as_int(), 500, "single row cumsum is 500")
+
+# 3. Edge Case: lag & lead with offset > partition size
+# Partition of 2 rows, offset = 5
+r_p1: list[Cell] = [cell_str("IT"), cell_int(10)]
+r_p2: list[Cell] = [cell_str("IT"), cell_int(20)]
+t_two: Table = Table(s_single, [r_p1, r_p2])
+
+t_lag_huge: Table = lag(t_two, "amount", "prev", 5, ["dept"], default_val=cell_int(-1))
+nox.test.assert_eq_int(t_lag_huge.rows[0][2].as_int(), -1, "row 0 lag with huge offset is -1")
+nox.test.assert_eq_int(t_lag_huge.rows[1][2].as_int(), -1, "row 1 lag with huge offset is -1")
+
+t_lead_huge: Table = lead(t_two, "amount", "next", 5, ["dept"], default_val=cell_int(-1))
+nox.test.assert_eq_int(t_lead_huge.rows[0][2].as_int(), -1, "row 0 lead with huge offset is -1")
+nox.test.assert_eq_int(t_lead_huge.rows[1][2].as_int(), -1, "row 1 lead with huge offset is -1")
+
+# 4. Edge Case: Descending Order (ascending=False)
+# Amounts: 10, 20 -> Descending order is 20 (row 1), 10 (row 0)
+t_rn_desc: Table = row_number(t_two, "rn", ["dept"], ["amount"], False)
+# row 1 (amount=20) should have rn=1, row 0 (amount=10) should have rn=2
+nox.test.assert_eq_int(t_rn_desc.rows[1][2].as_int(), 1, "highest amount has rn 1 in desc")
+nox.test.assert_eq_int(t_rn_desc.rows[0][2].as_int(), 2, "lowest amount has rn 2 in desc")
+
+# 5. Edge Case: All Ties (same values)
+s_ties: Schema = Schema([
+    ColumnDef("team", TYPE_STR),
+    ColumnDef("score", TYPE_INT)
+])
+r_t1: list[Cell] = [cell_str("A"), cell_int(50)]
+r_t2: list[Cell] = [cell_str("A"), cell_int(50)]
+r_t3: list[Cell] = [cell_str("A"), cell_int(50)]
+r_t4: list[Cell] = [cell_str("A"), cell_int(50)]
+t_ties: Table = Table(s_ties, [r_t1, r_t2, r_t3, r_t4])
+
+t_rank_ties: Table = rank(t_ties, "score", "rank", ["team"])
+# All should have rank 1
+nox.test.assert_eq_int(t_rank_ties.rows[0][2].as_int(), 1, "tie row 0 rank 1")
+nox.test.assert_eq_int(t_rank_ties.rows[1][2].as_int(), 1, "tie row 1 rank 1")
+nox.test.assert_eq_int(t_rank_ties.rows[2][2].as_int(), 1, "tie row 2 rank 1")
+nox.test.assert_eq_int(t_rank_ties.rows[3][2].as_int(), 1, "tie row 3 rank 1")
+
+# 6. Edge Case: Null and NaN Ordering in Window
+s_nulls: Schema = Schema([
+    ColumnDef("val", TYPE_FLOAT)
+])
+# 10.0, NaN, NULL, 5.0
+r_n1: list[Cell] = [cell_float(10.0)]
+r_n2: list[Cell] = [cell_nan()]
+r_n3: list[Cell] = [cell_null()]
+r_n4: list[Cell] = [cell_float(5.0)]
+t_nulls: Table = Table(s_nulls, [r_n1, r_n2, r_n3, r_n4])
+
+t_rn_nulls: Table = row_number(t_nulls, "rn", order_by=["val"], ascending=True)
+# In ascending with nulls_last: 5.0 (row 3) -> 1, 10.0 (row 0) -> 2, NaN / NULL at the end
+nox.test.assert_eq_int(t_rn_nulls.rows[3][1].as_int(), 1, "smallest finite float 5.0 is rn 1")
+nox.test.assert_eq_int(t_rn_nulls.rows[0][1].as_int(), 2, "finite float 10.0 is rn 2")
+
+# 7. Edge Case: cumulative_sum Null Semantics (skip_null=True vs skip_null=False)
+s_cs_null: Schema = Schema([
+    ColumnDef("v", TYPE_INT)
+])
+# 10, 20, NULL, 40
+r_c1: list[Cell] = [cell_int(10)]
+r_c2: list[Cell] = [cell_int(20)]
+r_c3: list[Cell] = [cell_null()]
+r_c4: list[Cell] = [cell_int(40)]
+t_cs_data: Table = Table(s_cs_null, [r_c1, r_c2, r_c3, r_c4])
+
+# A) skip_null=True (default): retains current running sum on null
+t_cs_skip: Table = cumulative_sum(t_cs_data, "v", "cs", skip_null=True)
+nox.test.assert_eq_int(t_cs_skip.rows[0][1].as_int(), 10, "skip_null row 0 is 10")
+nox.test.assert_eq_int(t_cs_skip.rows[1][1].as_int(), 30, "skip_null row 1 is 30")
+nox.test.assert_eq_int(t_cs_skip.rows[2][1].as_int(), 30, "skip_null row 2 retains 30")
+nox.test.assert_eq_int(t_cs_skip.rows[3][1].as_int(), 70, "skip_null row 3 is 70")
+
+# B) skip_null=False: null propagation (null row yields null)
+t_cs_noskip: Table = cumulative_sum(t_cs_data, "v", "cs_null", skip_null=False)
+nox.test.assert_eq_int(t_cs_noskip.rows[0][1].as_int(), 10, "noskip row 0 is 10")
+nox.test.assert_eq_int(t_cs_noskip.rows[1][1].as_int(), 30, "noskip row 1 is 30")
+nox.test.assert_true(t_cs_noskip.rows[2][1].is_missing(), "noskip row 2 is NULL")
+nox.test.assert_eq_int(t_cs_noskip.rows[3][1].as_int(), 70, "noskip row 3 resumes to 70")
+
+# 8. Edge Case: moving_average Validation (min_periods > window_size)
+caught_mavg_err: bool = False
+try:
+    moving_average(t_cs_data, "v", 3, "mavg", min_periods=4)
+except ShapeError:
+    caught_mavg_err = True
+nox.test.assert_true(caught_mavg_err, "caught min_periods > window_size ShapeError")
+
+# 9. Edge Case: INT64 Large Sum in cumulative_sum
+s_large: Schema = Schema([
+    ColumnDef("big", TYPE_INT)
+])
+# 9_000_000_000_000_000_000 + 100
+r_lrg1: list[Cell] = [cell_int(9000000000000000000)]
+r_lrg2: list[Cell] = [cell_int(100)]
+t_large: Table = Table(s_large, [r_lrg1, r_lrg2])
+t_cs_large: Table = cumulative_sum(t_large, "big", "cs_big")
+nox.test.assert_eq_int(t_cs_large.rows[1][1].as_int(), 9000000000000000100, "int64 large sum preserved")
+
+print("window_edge_cases_test passed")

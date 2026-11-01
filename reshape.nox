@@ -173,6 +173,11 @@ def pivot(t: Table, index_col: str, columns_col: str, values_col: str) -> Table:
             raise MissingValueError("cannot pivot on missing column key at row " + str(r_idx))
 
         col_str_val: str = col_c.to_string()
+        if col_str_val == "":
+            raise SchemaError("pivot column value cannot be empty string")
+        if col_str_val == index_col:
+            raise SchemaError("pivot column value '" + col_str_val + "' collides with index column name '" + index_col + "'")
+
         if col_str_val not in column_map:
             column_map[col_str_val] = len(unique_columns)
             unique_columns.append(col_str_val)
@@ -313,6 +318,11 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
             raise MissingValueError("cannot pivot on missing column key at row " + str(r_idx))
 
         col_str_val: str = col_c.to_string()
+        if col_str_val == "":
+            raise SchemaError("pivot column value cannot be empty string")
+        if col_str_val == index_col:
+            raise SchemaError("pivot column value '" + col_str_val + "' collides with index column name '" + index_col + "'")
+
         if col_str_val not in column_map:
             column_map[col_str_val] = len(unique_columns)
             unique_columns.append(col_str_val)

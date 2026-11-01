@@ -87,4 +87,43 @@ t_empty: Table = Table(s_empty, [])
 t_cross_empty: Table = join_cross(t_emp, t_empty)
 nox.test.assert_eq_int(t_cross_empty.row_count(), 0, "cross join with empty table is empty")
 
+# 4. Full Outer Join with Different Key Column Names (employee_id vs staff_id)
+s_diff_left: Schema = Schema([
+    ColumnDef("employee_id", TYPE_INT),
+    ColumnDef("emp_name", TYPE_STR)
+])
+r_diff_l1: list[Cell] = [cell_int(1), cell_str("Alice")]
+r_diff_l2: list[Cell] = [cell_int(2), cell_str("Bob")]
+t_diff_left: Table = Table(s_diff_left, [r_diff_l1, r_diff_l2])
+
+s_diff_right: Schema = Schema([
+    ColumnDef("staff_id", TYPE_INT),
+    ColumnDef("dept_name", TYPE_STR)
+])
+r_diff_r1: list[Cell] = [cell_int(1), cell_str("Engineering")]
+r_diff_r2: list[Cell] = [cell_int(42), cell_str("Support")] # Unmatched in left
+t_diff_right: Table = Table(s_diff_right, [r_diff_r1, r_diff_r2])
+
+t_diff_full: Table = join_full_keys(t_diff_left, t_diff_right, ["employee_id"], ["staff_id"])
+# Columns: employee_id, emp_name, staff_id, dept_name
+nox.test.assert_eq_int(t_diff_full.column_count(), 4, "4 columns preserved in different-name full join")
+nox.test.assert_true(t_diff_full.schema.has_column("employee_id"), "has employee_id")
+nox.test.assert_true(t_diff_full.schema.has_column("staff_id"), "has staff_id")
+
+# Rows:
+# 1. Matched row (id 1): employee_id=1, emp_name=Alice, staff_id=1, dept_name=Engineering
+# 2. Unmatched left (id 2): employee_id=2, emp_name=Bob, staff_id=NULL, dept_name=NULL
+# 3. Unmatched right (id 42): employee_id=NULL, emp_name=NULL, staff_id=42, dept_name=Support
+nox.test.assert_eq_int(t_diff_full.row_count(), 3, "3 rows in full join")
+
+# Row 1 (unmatched left)
+nox.test.assert_eq_int(t_diff_full.rows[1][0].as_int(), 2, "Bob employee_id 2")
+nox.test.assert_true(t_diff_full.rows[1][2].is_missing(), "Bob staff_id is NULL")
+
+# Row 2 (unmatched right: Support 42)
+nox.test.assert_true(t_diff_full.rows[2][0].is_missing(), "Support employee_id is NULL")
+nox.test.assert_true(t_diff_full.rows[2][1].is_missing(), "Support emp_name is NULL")
+nox.test.assert_eq_int(t_diff_full.rows[2][2].as_int(), 42, "Support staff_id is 42 preserved!")
+nox.test.assert_eq_str(t_diff_full.rows[2][3].as_str(), "Support", "Support dept_name is Support")
+
 print("advanced_join_test passed")

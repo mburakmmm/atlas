@@ -23,6 +23,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.7.4** | **Boş Delimiter Validasyonu, Boş Dosya Şema Koruması & LCG Diferansiyel Testleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v0.8.0** | **Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline)** | ✅ **TAMAMLANDI & YAYINLANDI** | 32/32 Test Geçti (`noxc test`) |
 | **v0.9.0** | **İleri Seviye Tablo İşlemleri (Window Functions, Reshaping & Gelişmiş Join'ler)** | ✅ **TAMAMLANDI & YAYINLANDI** | 35/35 Test Geçti (`noxc test`) |
+| **v0.9.1** | **Window & Reshape Sınır Durumları, WindowContext Refactoring & Doğrulama** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -440,6 +441,35 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - Akıcı `Table` metotları: `table.join_full()`, `table.join_cross()`, `table.join_inner()`, `table.join_left()`.
 - [x] **Kapsamlı Test Kapsamı**:
   - `tests/window_test.nox`, `tests/reshape_test.nox`, `tests/advanced_join_test.nox` test paketleri yazıldı. Toplam 35 test paketinin tamamı başarıyla geçti (`35 passed, 0 failed`).
+
+---
+
+## 🛠️ Sürüm 0.9.1 — Window & Reshape Sınır Durumları, WindowContext Refactoring & Doğrulama (Tamamlananlar)
+
+- [x] **WindowContext Mimarisi ile Kod Tekrarının Giderilmesi (🟠 P2)**:
+  - `window.nox`: `WindowContext` sınıfı ile partition oluşturma, sıralama sütunlarını çözümleme ve partition içi merge-sort adımlarının merkezileştirilmesi.
+  - `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `cumulative_sum`, `moving_average` fonksiyonlarının `WindowContext` üzerinden tek tip ve temiz çalışacak şekilde refactor edilmesi.
+- [x] **Window Fonksiyonlarında Null Semantiği & Doğrulamalar (🔴 P1)**:
+  - `cumulative_sum`: Eksik değerlerin (null) açık semantiği (`skip_null: bool = True` parametresi; `skip_null=True` iken son kümülatif toplamı koruma, `skip_null=False` iken null yayılımı).
+  - `moving_average`: `min_periods` parametresinin "penceredeki non-missing sayısal gözlem sayısı" olduğunun netleştirilmesi, `min_periods > window_size` ve `min_periods < 1` için `ShapeError` kontrolleri.
+- [x] **Full Outer Join Farklı İsimli Anahtarlar Doğrulaması (🔴 P1)**:
+  - `tests/advanced_join_test.nox`: Farklı isimli anahtar sütunlarıyla (`left_on=["employee_id"]`, `right_on=["staff_id"]`) `join_full_keys` senaryosu. Eşleşmeyen sağ satırda sol anahtarın `NULL`, sağ anahtarın orijinal değerini (`42`) koruduğunun kesin testi.
+- [x] **Pivot İsim Çakışmaları ve Sınır Durumları (🟠 P2)**:
+  - `reshape.nox`: Pivot değerinin `index_col` ile çakışması durumunda açıklayıcı `SchemaError` ("pivot column value '...' collides with index column name '...'") fırlatılması.
+  - Boş dize (`""`) pivot kolon değeri durumunda açıklayıcı `SchemaError` kontrolü.
+- [x] **Kapsamlı Sınır Durumu Test Paketi (🔴 P1 & 🟠 P2)**:
+  - `tests/window_edge_cases_test.nox`:
+    1. Null sıralama değerleri (`nulls_first=False` ile)
+    2. NaN içeren partition ve değerler
+    3. Aynı değere sahip satırlar (ties)
+    4. Boş partition ve tek satırlı partition
+    5. `lag` offset > partition size (tümü default_val)
+    6. `lead` offset > partition size (tümü default_val)
+    7. `moving_average` `min_periods > window_size` (ShapeError)
+    8. `INT64_MAX` ile cumulative sum
+    9. Farklı sıralama yönleri (`ascending=False`)
+- [x] **Dokümantasyon & Yayın**:
+  - `nox.json` sürümünün `0.9.1` yapılması, `CHANGELOG.md`, `docs/capabilities.md`, `docs/api.md`, `README.md` güncellenmesi, `noxc test` (36 test paketi) geçirilmesi, git commit/push ve `noxc publish`.
 
 ---
 
