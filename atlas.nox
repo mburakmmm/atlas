@@ -37,7 +37,13 @@ import io
 from io import read_csv_file, write_csv_file, read_json_file, write_json_file, read_delimited_file, write_delimited_file, read_tsv_file, write_tsv_file
 
 import join
-from join import join_inner, join_inner_keys, join_left, join_left_keys
+from join import join_inner, join_inner_keys, join_left, join_left_keys, join_full, join_full_keys, join_cross
+
+import window
+from window import row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
+
+import reshape
+from reshape import melt, pivot, pivot_table
 
 import concat
 from concat import concat_rows, concat_cols

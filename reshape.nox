@@ -1,0 +1,510 @@
+# reshape.nox — Table reshaping operations: melt, pivot, and pivot_table.
+
+import errors
+from errors import ShapeError, ColumnNotFoundError, SchemaError, MissingValueError
+import values
+from values import Cell, cell_str, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_NULL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import key_encoding
+from key_encoding import cell_hash_key
+
+def _contains_str(lst: list[str], target: str) -> bool:
+    i: int = 0
+    n: int = len(lst)
+    while i < n:
+        if lst[i] == target:
+            return True
+        i = i + 1
+    return False
+
+def melt(t: Table, id_vars: list[str],
+         value_vars: list[str] | None = None,
+         var_name: str = "variable",
+         value_name: str = "value") -> Table:
+    # 1. Resolve id_vars indices
+    id_indices: list[int] = []
+    i: int = 0
+    while i < len(id_vars):
+        col_name: str = id_vars[i]
+        idx: int = t.schema.index_of(col_name)
+        if idx < 0:
+            raise ColumnNotFoundError("id_var not found: '" + col_name + "'")
+        id_indices.append(idx)
+        i = i + 1
+
+    # 2. Resolve value_vars
+    actual_value_vars: list[str] = []
+    val_indices: list[int] = []
+
+    if value_vars is not None:
+        j: int = 0
+        while j < len(value_vars):
+            v_name: str = value_vars[j]
+            if _contains_str(id_vars, v_name):
+                raise ShapeError("column '" + v_name + "' cannot be both an id_var and a value_var")
+            v_idx: int = t.schema.index_of(v_name)
+            if v_idx < 0:
+                raise ColumnNotFoundError("value_var not found: '" + v_name + "'")
+            actual_value_vars.append(v_name)
+            val_indices.append(v_idx)
+            j = j + 1
+    else:
+        # Default: all columns not in id_vars
+        c: int = 0
+        while c < t.schema.column_count():
+            name: str = t.schema.columns[c].name
+            if not _contains_str(id_vars, name):
+                actual_value_vars.append(name)
+                val_indices.append(c)
+            c = c + 1
+
+    if len(actual_value_vars) == 0:
+        raise ShapeError("melt requires at least one value column")
+
+    # 3. Determine value column type promotion
+    # Check if all value columns share identical type
+    common_type: int = t.schema.columns[val_indices[0]].data_type
+    has_mixed_numeric: bool = False
+    has_other_mixed: bool = False
+    any_nullable: bool = False
+
+    k: int = 0
+    while k < len(val_indices):
+        c_def: ColumnDef = t.schema.columns[val_indices[k]]
+        if c_def.nullable:
+            any_nullable = True
+        dt: int = c_def.data_type
+        if dt != common_type:
+            if (common_type == TYPE_INT and dt == TYPE_FLOAT) or (common_type == TYPE_FLOAT and dt == TYPE_INT):
+                has_mixed_numeric = True
+            else:
+                has_other_mixed = True
+        k = k + 1
+
+    final_val_type: int = common_type
+    if has_other_mixed:
+        final_val_type = TYPE_STR
+    elif has_mixed_numeric:
+        final_val_type = TYPE_FLOAT
+
+    # 4. Construct output schema
+    out_cols: list[ColumnDef] = []
+    i = 0
+    while i < len(id_indices):
+        orig_def: ColumnDef = t.schema.columns[id_indices[i]]
+        out_cols.append(ColumnDef(orig_def.name, orig_def.data_type, orig_def.nullable))
+        i = i + 1
+
+    out_cols.append(ColumnDef(var_name, TYPE_STR, False))
+    out_cols.append(ColumnDef(value_name, final_val_type, any_nullable))
+    out_schema: Schema = Schema(out_cols)
+
+    # 5. Populate rows
+    out_rows: list[list[Cell]] = []
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+
+    while r_idx < num_rows:
+        orig_r: list[Cell] = t.rows[r_idx]
+        id_cells: list[Cell] = []
+        i = 0
+        while i < len(id_indices):
+            id_cells.append(orig_r[id_indices[i]])
+            i = i + 1
+
+        v: int = 0
+        while v < len(val_indices):
+            v_col_name: str = actual_value_vars[v]
+            raw_val: Cell = orig_r[val_indices[v]]
+            promoted_val: Cell = raw_val
+
+            if not raw_val.is_missing():
+                if final_val_type == TYPE_FLOAT and raw_val.kind == TYPE_INT:
+                    promoted_val = cell_float(float(raw_val.as_int()))
+                elif final_val_type == TYPE_STR and raw_val.kind != TYPE_STR:
+                    promoted_val = cell_str(raw_val.to_string())
+
+            new_r: list[Cell] = []
+            c_copy: int = 0
+            while c_copy < len(id_cells):
+                new_r.append(id_cells[c_copy])
+                c_copy = c_copy + 1
+            new_r.append(cell_str(v_col_name))
+            new_r.append(promoted_val)
+            out_rows.append(new_r)
+            v = v + 1
+
+        r_idx = r_idx + 1
+
+    return Table(out_schema, out_rows)
+
+def pivot(t: Table, index_col: str, columns_col: str, values_col: str) -> Table:
+    index_idx: int = t.schema.index_of(index_col)
+    if index_idx < 0:
+        raise ColumnNotFoundError("index_col not found: '" + index_col + "'")
+
+    columns_idx: int = t.schema.index_of(columns_col)
+    if columns_idx < 0:
+        raise ColumnNotFoundError("columns_col not found: '" + columns_col + "'")
+
+    values_idx: int = t.schema.index_of(values_col)
+    if values_idx < 0:
+        raise ColumnNotFoundError("values_col not found: '" + values_col + "'")
+
+    # Collect unique indices and columns in first-seen order
+    unique_indices: list[Cell] = []
+    index_hash_map: dict[str, list[int]] = {}
+
+    unique_columns: list[str] = []
+    column_map: dict[str, int] = {}
+
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+
+    while r_idx < num_rows:
+        row: list[Cell] = t.rows[r_idx]
+        idx_c: Cell = row[index_idx]
+        col_c: Cell = row[columns_idx]
+
+        if col_c.is_missing():
+            raise MissingValueError("cannot pivot on missing column key at row " + str(r_idx))
+
+        col_str_val: str = col_c.to_string()
+        if col_str_val not in column_map:
+            column_map[col_str_val] = len(unique_columns)
+            unique_columns.append(col_str_val)
+
+        # Check unique_indices with collision safety
+        h_idx: str = cell_hash_key(idx_c)
+        found_pos: int = -1
+        if h_idx in index_hash_map:
+            cands: list[int] = index_hash_map[h_idx]
+            ci: int = 0
+            while ci < len(cands):
+                cand: int = cands[ci]
+                if unique_indices[cand].equals(idx_c):
+                    found_pos = cand
+                    ci = len(cands)
+                else:
+                    ci = ci + 1
+
+        if found_pos < 0:
+            new_p: int = len(unique_indices)
+            unique_indices.append(idx_c)
+            if h_idx in index_hash_map:
+                c_list: list[int] = index_hash_map[h_idx]
+                c_list.append(new_p)
+                index_hash_map[h_idx] = c_list
+            else:
+                init_l: list[int] = []
+                init_l.append(new_p)
+                index_hash_map[h_idx] = init_l
+
+        r_idx = r_idx + 1
+
+    # Initialize 2D grid
+    grid: list[list[Cell]] = []
+    filled_flags: list[list[bool]] = []
+    num_u_indices: int = len(unique_indices)
+    num_u_cols: int = len(unique_columns)
+
+    ui: int = 0
+    while ui < num_u_indices:
+        grid_row: list[Cell] = []
+        flag_row: list[bool] = []
+        uc: int = 0
+        while uc < num_u_cols:
+            grid_row.append(cell_null())
+            flag_row.append(False)
+            uc = uc + 1
+        grid.append(grid_row)
+        filled_flags.append(flag_row)
+        ui = ui + 1
+
+    # Fill grid and verify no duplicates
+    r_idx = 0
+    while r_idx < num_rows:
+        row = t.rows[r_idx]
+        idx_c = row[index_idx]
+        col_c = row[columns_idx]
+        val_c: Cell = row[values_idx]
+
+        col_str_val = col_c.to_string()
+        c_pos: int = column_map[col_str_val]
+
+        h_idx = cell_hash_key(idx_c)
+        cands = index_hash_map[h_idx]
+        i_pos: int = -1
+        ci = 0
+        while ci < len(cands):
+            cand = cands[ci]
+            if unique_indices[cand].equals(idx_c):
+                i_pos = cand
+                ci = len(cands)
+            else:
+                ci = ci + 1
+
+        if filled_flags[i_pos][c_pos]:
+            raise ShapeError("duplicate index/column entries found in pivot for index '" + idx_c.to_string() + "' and column '" + col_str_val + "', use pivot_table instead")
+
+        grid[i_pos][c_pos] = val_c
+        filled_flags[i_pos][c_pos] = True
+        r_idx = r_idx + 1
+
+    # Build output table
+    val_type: int = t.schema.columns[values_idx].data_type
+    idx_def: ColumnDef = t.schema.columns[index_idx]
+
+    out_cols: list[ColumnDef] = []
+    out_cols.append(ColumnDef(idx_def.name, idx_def.data_type, idx_def.nullable))
+
+    c_i: int = 0
+    while c_i < num_u_cols:
+        out_cols.append(ColumnDef(unique_columns[c_i], val_type, True))
+        c_i = c_i + 1
+
+    out_rows: list[list[Cell]] = []
+    ui = 0
+    while ui < num_u_indices:
+        out_r: list[Cell] = []
+        out_r.append(unique_indices[ui])
+        uc = 0
+        while uc < num_u_cols:
+            out_r.append(grid[ui][uc])
+            uc = uc + 1
+        out_rows.append(out_r)
+        ui = ui + 1
+
+    return Table(Schema(out_cols), out_rows)
+
+def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
+                agg_func: str = "mean") -> Table:
+    index_idx: int = t.schema.index_of(index_col)
+    if index_idx < 0:
+        raise ColumnNotFoundError("index_col not found: '" + index_col + "'")
+
+    columns_idx: int = t.schema.index_of(columns_col)
+    if columns_idx < 0:
+        raise ColumnNotFoundError("columns_col not found: '" + columns_col + "'")
+
+    values_idx: int = t.schema.index_of(values_col)
+    if values_idx < 0:
+        raise ColumnNotFoundError("values_col not found: '" + values_col + "'")
+
+    # Collect unique indices and columns in first-seen order
+    unique_indices: list[Cell] = []
+    index_hash_map: dict[str, list[int]] = {}
+
+    unique_columns: list[str] = []
+    column_map: dict[str, int] = {}
+
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+
+    while r_idx < num_rows:
+        row: list[Cell] = t.rows[r_idx]
+        idx_c: Cell = row[index_idx]
+        col_c: Cell = row[columns_idx]
+
+        if col_c.is_missing():
+            raise MissingValueError("cannot pivot on missing column key at row " + str(r_idx))
+
+        col_str_val: str = col_c.to_string()
+        if col_str_val not in column_map:
+            column_map[col_str_val] = len(unique_columns)
+            unique_columns.append(col_str_val)
+
+        h_idx: str = cell_hash_key(idx_c)
+        found_pos: int = -1
+        if h_idx in index_hash_map:
+            cands: list[int] = index_hash_map[h_idx]
+            ci: int = 0
+            while ci < len(cands):
+                cand: int = cands[ci]
+                if unique_indices[cand].equals(idx_c):
+                    found_pos = cand
+                    ci = len(cands)
+                else:
+                    ci = ci + 1
+
+        if found_pos < 0:
+            new_p: int = len(unique_indices)
+            unique_indices.append(idx_c)
+            if h_idx in index_hash_map:
+                c_list: list[int] = index_hash_map[h_idx]
+                c_list.append(new_p)
+                index_hash_map[h_idx] = c_list
+            else:
+                init_l: list[int] = []
+                init_l.append(new_p)
+                index_hash_map[h_idx] = init_l
+
+        r_idx = r_idx + 1
+
+    # 2D grid storing list of cells for each (i, c)
+    num_u_indices: int = len(unique_indices)
+    num_u_cols: int = len(unique_columns)
+    grid_cells: list[list[list[Cell]]] = []
+
+    ui: int = 0
+    while ui < num_u_indices:
+        grid_row_cells: list[list[Cell]] = []
+        uc: int = 0
+        while uc < num_u_cols:
+            empty_cell_list: list[Cell] = []
+            grid_row_cells.append(empty_cell_list)
+            uc = uc + 1
+        grid_cells.append(grid_row_cells)
+        ui = ui + 1
+
+    # Aggregate cells into grid
+    r_idx = 0
+    while r_idx < num_rows:
+        row = t.rows[r_idx]
+        idx_c = row[index_idx]
+        col_c = row[columns_idx]
+        val_c: Cell = row[values_idx]
+
+        col_str_val = col_c.to_string()
+        c_pos: int = column_map[col_str_val]
+
+        h_idx = cell_hash_key(idx_c)
+        cands = index_hash_map[h_idx]
+        i_pos: int = -1
+        ci = 0
+        while ci < len(cands):
+            cand = cands[ci]
+            if unique_indices[cand].equals(idx_c):
+                i_pos = cand
+                ci = len(cands)
+            else:
+                ci = ci + 1
+
+        cell_bucket: list[Cell] = grid_cells[i_pos][c_pos]
+        cell_bucket.append(val_c)
+        grid_cells[i_pos][c_pos] = cell_bucket
+
+        r_idx = r_idx + 1
+
+    # Compute aggregate for each cell
+    raw_val_type: int = t.schema.columns[values_idx].data_type
+    out_val_type: int = raw_val_type
+    if agg_func == "mean":
+        out_val_type = TYPE_FLOAT
+    elif agg_func == "count":
+        out_val_type = TYPE_INT
+
+    out_rows: list[list[Cell]] = []
+    ui = 0
+    while ui < num_u_indices:
+        out_r: list[Cell] = []
+        out_r.append(unique_indices[ui])
+        uc = 0
+        while uc < num_u_cols:
+            bucket: list[Cell] = grid_cells[ui][uc]
+            agg_result: Cell = cell_null()
+            n_b: int = len(bucket)
+
+            if n_b > 0:
+                if agg_func == "count":
+                    non_missing_cnt: int = 0
+                    bi: int = 0
+                    while bi < n_b:
+                        if not bucket[bi].is_missing():
+                            non_missing_cnt = non_missing_cnt + 1
+                        bi = bi + 1
+                    agg_result = cell_int(non_missing_cnt)
+
+                elif agg_func == "mean":
+                    sum_f: float = 0.0
+                    cnt_f: int = 0
+                    bi = 0
+                    while bi < n_b:
+                        c: Cell = bucket[bi]
+                        if not c.is_missing():
+                            if c.kind == TYPE_INT:
+                                sum_f = sum_f + float(c.as_int())
+                            else:
+                                sum_f = sum_f + c.as_float()
+                            cnt_f = cnt_f + 1
+                        bi = bi + 1
+                    if cnt_f > 0:
+                        agg_result = cell_float(sum_f / float(cnt_f))
+
+                elif agg_func == "sum":
+                    if raw_val_type == TYPE_INT:
+                        sum_i: int = 0
+                        has_any: bool = False
+                        bi = 0
+                        while bi < n_b:
+                            c = bucket[bi]
+                            if not c.is_missing():
+                                sum_i = sum_i + c.as_int()
+                                has_any = True
+                            bi = bi + 1
+                        if has_any:
+                            agg_result = cell_int(sum_i)
+                    else:
+                        sum_fl: float = 0.0
+                        has_any_fl: bool = False
+                        bi = 0
+                        while bi < n_b:
+                            c = bucket[bi]
+                            if not c.is_missing():
+                                sum_fl = sum_fl + c.as_float()
+                                has_any_fl = True
+                            bi = bi + 1
+                        if has_any_fl:
+                            agg_result = cell_float(sum_fl)
+
+                elif agg_func == "first":
+                    agg_result = bucket[0]
+
+                elif agg_func == "last":
+                    agg_result = bucket[n_b - 1]
+
+                elif agg_func == "min":
+                    min_c: Cell = cell_null()
+                    bi = 0
+                    while bi < n_b:
+                        c = bucket[bi]
+                        if not c.is_missing():
+                            if min_c.is_missing() or c.compare(min_c, False) < 0:
+                                min_c = c
+                        bi = bi + 1
+                    agg_result = min_c
+
+                elif agg_func == "max":
+                    max_c: Cell = cell_null()
+                    bi = 0
+                    while bi < n_b:
+                        c = bucket[bi]
+                        if not c.is_missing():
+                            if max_c.is_missing() or c.compare(max_c, False) > 0:
+                                max_c = c
+                        bi = bi + 1
+                    agg_result = max_c
+
+                else:
+                    raise ShapeError("unsupported agg_func: '" + agg_func + "'")
+
+            out_r.append(agg_result)
+            uc = uc + 1
+
+        out_rows.append(out_r)
+        ui = ui + 1
+
+    # Output schema
+    idx_def: ColumnDef = t.schema.columns[index_idx]
+    out_cols: list[ColumnDef] = []
+    out_cols.append(ColumnDef(idx_def.name, idx_def.data_type, idx_def.nullable))
+
+    c_i: int = 0
+    while c_i < num_u_cols:
+        out_cols.append(ColumnDef(unique_columns[c_i], out_val_type, True))
+        c_i = c_i + 1
+
+    return Table(Schema(out_cols), out_rows)

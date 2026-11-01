@@ -1,0 +1,90 @@
+# tests/advanced_join_test.nox — Unit tests for Full Outer Join and Cross Join.
+
+import nox.test
+import errors
+from errors import ColumnNotFoundError, ShapeError
+import values
+from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import join
+from join import join_full, join_full_keys, join_cross
+
+# Setup Employees Table:
+# id, name, dept_id
+s_emp: Schema = Schema([
+    ColumnDef("id", TYPE_INT),
+    ColumnDef("name", TYPE_STR),
+    ColumnDef("dept_id", TYPE_INT)
+])
+
+r_e1: list[Cell] = [cell_int(1), cell_str("Alice"), cell_int(10)]
+r_e2: list[Cell] = [cell_int(2), cell_str("Bob"), cell_int(20)]
+r_e3: list[Cell] = [cell_int(3), cell_str("Charlie"), cell_int(99)]  # Unmatched dept_id
+
+t_emp: Table = Table(s_emp, [r_e1, r_e2, r_e3])
+
+# Setup Departments Table:
+# dept_id, dept_name
+s_dept: Schema = Schema([
+    ColumnDef("dept_id", TYPE_INT),
+    ColumnDef("dept_name", TYPE_STR)
+])
+
+r_d1: list[Cell] = [cell_int(10), cell_str("Engineering")]
+r_d2: list[Cell] = [cell_int(20), cell_str("Marketing")]
+r_d3: list[Cell] = [cell_int(30), cell_str("Sales")]        # Unmatched in emp
+
+t_dept: Table = Table(s_dept, [r_d1, r_d2, r_d3])
+
+# 1. Full Outer Join on ["dept_id"]
+t_full: Table = join_full(t_emp, t_dept, ["dept_id"])
+# Expected rows:
+# Alice(10) -> Engineering
+# Bob(20) -> Marketing
+# Charlie(99) -> None
+# Sales(30) -> None (emp fields null, dept_id=30, dept_name="Sales")
+# Total = 4 rows
+nox.test.assert_eq_int(t_full.row_count(), 4, "full outer join has 4 rows")
+
+# Verify schema
+nox.test.assert_eq_int(t_full.column_count(), 4, "4 columns: id, name, dept_id, dept_name")
+nox.test.assert_true(t_full.schema.columns[0].nullable, "id is nullable in full join")
+nox.test.assert_true(t_full.schema.columns[1].nullable, "name is nullable in full join")
+nox.test.assert_true(t_full.schema.columns[2].nullable, "dept_id is nullable in full join")
+nox.test.assert_true(t_full.schema.columns[3].nullable, "dept_name is nullable in full join")
+
+# Row 3 should be Charlie (unmatched right)
+nox.test.assert_eq_str(t_full.rows[2][1].as_str(), "Charlie", "Row 2 is Charlie")
+nox.test.assert_true(t_full.rows[2][3].is_missing(), "Charlie's dept_name is missing")
+
+# Row 4 should be Sales (unmatched left)
+nox.test.assert_true(t_full.rows[3][0].is_missing(), "Row 3 id is missing")
+nox.test.assert_true(t_full.rows[3][1].is_missing(), "Row 3 name is missing")
+nox.test.assert_eq_int(t_full.rows[3][2].as_int(), 30, "Row 3 dept_id is 30")
+nox.test.assert_eq_str(t_full.rows[3][3].as_str(), "Sales", "Row 3 dept_name is Sales")
+
+# 2. Cross Join
+# t_emp (3 rows) x t_dept (3 rows) = 9 rows
+t_cross: Table = join_cross(t_emp, t_dept)
+nox.test.assert_eq_int(t_cross.row_count(), 9, "cross join has 9 rows")
+# Suffix collisions: dept_id is in both tables -> dept_id_left and dept_id_right
+nox.test.assert_true(t_cross.schema.has_column("dept_id_left"), "has dept_id_left")
+nox.test.assert_true(t_cross.schema.has_column("dept_id_right"), "has dept_id_right")
+nox.test.assert_true(t_cross.schema.has_column("id"), "has id")
+nox.test.assert_true(t_cross.schema.has_column("name"), "has name")
+nox.test.assert_true(t_cross.schema.has_column("dept_name"), "has dept_name")
+
+# Verify first row: Alice with Engineering
+nox.test.assert_eq_str(t_cross.rows[0][1].as_str(), "Alice", "first row emp Alice")
+nox.test.assert_eq_str(t_cross.rows[0][4].as_str(), "Engineering", "first row dept Engineering")
+
+# 3. Cross join with empty table
+s_empty: Schema = Schema([ColumnDef("x", TYPE_INT)])
+t_empty: Table = Table(s_empty, [])
+t_cross_empty: Table = join_cross(t_emp, t_empty)
+nox.test.assert_eq_int(t_cross_empty.row_count(), 0, "cross join with empty table is empty")
+
+print("advanced_join_test passed")

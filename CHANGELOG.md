@@ -5,6 +5,38 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-01
+
+### Added
+- **Window Functions Module (`window.nox`)**:
+  - Implemented standard SQL and Pandas-style analytical window functions with non-destructive row ordering and full partitioning/ordering support:
+    - `row_number(t, output_col="row_nr", partition_by=None, order_by=None, ascending=True)`: Assigns sequential 1-based integers to rows within each partition.
+    - `rank(t, order_col, output_col="rank", partition_by=None, ascending=True)`: Computes rank with gaps on ties (e.g., 1, 2, 2, 4).
+    - `dense_rank(t, order_col, output_col="dense_rank", partition_by=None, ascending=True)`: Computes consecutive rank without gaps on ties (e.g., 1, 2, 2, 3).
+    - `lag(t, target_col, output_col="lag", offset=1, partition_by=None, order_by=None, ascending=True, default_val=None)`: Fetches previous row value by offset within partition.
+    - `lead(t, target_col, output_col="lead", offset=1, partition_by=None, order_by=None, ascending=True, default_val=None)`: Fetches subsequent row value by offset within partition.
+    - `cumulative_sum(t, target_col, output_col="cumsum", partition_by=None, order_by=None, ascending=True)`: Running cumulative summation for integer and floating-point columns.
+    - `moving_average(t, target_col, window_size, output_col="moving_avg", partition_by=None, order_by=None, ascending=True, min_periods=1)`: Sliding window moving average with configurable window size and minimum period thresholds.
+  - Fluent `Table` instance methods: `.with_row_number()`, `.with_rank()`, `.with_dense_rank()`, `.with_lag()`, `.with_lead()`, `.with_cumulative_sum()`, `.with_moving_average()`.
+- **Table Reshaping Module (`reshape.nox`)**:
+  - `melt(t, id_vars, value_vars=None, var_name="variable", value_name="value")`: Wide-to-long format transformation with automatic value column resolution and numeric type promotion (int + float -> float, mixed -> string).
+  - `pivot(t, index_col, columns_col, values_col)`: Long-to-wide format transformation. Enforces uniqueness of index-column pairs, raising `ShapeError` on duplicate entries.
+  - `pivot_table(t, index_col, columns_col, values_col, agg_func="mean")`: Long-to-wide format with aggregations on duplicate entries:
+    - Supported aggregate functions: `"mean"`, `"sum"`, `"count"`, `"min"`, `"max"`, `"first"`, `"last"`.
+  - Fluent `Table` instance methods: `table.melt()`, `table.pivot()`, `table.pivot_table()`.
+- **Advanced Relational Joins (`join.nox`)**:
+  - `join_full_keys(left, right, left_on, right_on, suffix_left="_left", suffix_right="_right")` & `join_full(left, right, on, suffix_left="_left", suffix_right="_right")`:
+    - Full Outer Join retaining unmatched left rows (with null right columns) and unmatched right rows (with null left columns, preserving right join key).
+    - Automatically marks all joined columns as nullable to ensure schema soundness.
+  - `join_cross(left, right, suffix_left="_left", suffix_right="_right")`:
+    - Cartesian product join ($M \times N$ rows) with automatic duplicate column renaming via customizable suffixes.
+  - Fluent `Table` instance methods: `table.join_full()`, `table.join_cross()`, `table.join_inner()`, `table.join_left()`.
+- **New Unit & Property Test Suites**:
+  - `tests/window_test.nox`: Tests global/partitioned row numbers, rank/dense_rank ties, lag/lead boundaries, cumulative sums, and sliding moving averages.
+  - `tests/reshape_test.nox`: Tests wide-to-long melt, long-to-wide pivot, duplicate detection, and pivot_table aggregations.
+  - `tests/advanced_join_test.nox`: Tests full outer joins with unmatched rows on both sides, cross joins, and empty table edge cases.
+  - Total test suites: 35 (all 35 passing).
+
 ## [0.8.0] - 2026-11-01
 
 ### Added

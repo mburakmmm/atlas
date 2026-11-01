@@ -74,3 +74,45 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 - **Materialization & Direct Aggregation**:
   - `.to_table()` drains filtered & selected stream rows into an in-memory typed `Table`.
   - Direct metrics: `.count()`, `.sum(col)`, `.mean(col)`, `.variance(col)`, `.std(col)`.
+
+---
+
+## 8. Window Functions & Analytical Calculations (`window.nox`) (v0.9.0)
+
+- **Non-Destructive Row Architecture**:
+  - Evaluates analytical window calculations partitioned by keys and ordered by specified columns, appending computed result columns without reordering or altering the input table's original row sequence.
+- **Supported Window Operations**:
+  - `row_number(t, output_col, partition_by, order_by, ascending)`: Consecutive 1-based row index per partition.
+  - `rank(t, order_col, output_col, partition_by, ascending)`: Standard ranking with gap skipping on tied values (e.g. 1, 2, 2, 4).
+  - `dense_rank(t, order_col, output_col, partition_by, ascending)`: Dense ranking without gaps on tied values (e.g. 1, 2, 2, 3).
+  - `lag(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Look-behind access to preceding rows.
+  - `lead(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Look-ahead access to succeeding rows.
+  - `cumulative_sum(t, target_col, output_col, partition_by, order_by, ascending)`: Running cumulative sums for integers and floats.
+  - `moving_average(t, target_col, window_size, output_col, partition_by, order_by, ascending, min_periods)`: Rolling sliding-window means with observation thresholds.
+
+---
+
+## 9. Table Reshaping: Melt & Pivot (`reshape.nox`) (v0.9.0)
+
+- **Wide to Long Unpivoting (`melt`)**:
+  - Converts tabular data from wide to long format across specified identifier and value columns.
+  - Automatic type promotion across heterogeneous value columns (int + float -> float, mixed -> string).
+- **Long to Wide Pivoting (`pivot`)**:
+  - Reshapes long format data into wide format with unique index and column combinations.
+  - Strict duplicate checking: raises `ShapeError` when duplicate `(index, column)` pairs are detected.
+- **Aggregation Pivoting (`pivot_table`)**:
+  - Handles duplicate `(index, column)` pairs with configurable aggregation functions:
+    - `"mean"`, `"sum"`, `"count"`, `"min"`, `"max"`, `"first"`, `"last"`.
+  - Missing combinations are consistently populated with `cell_null()`.
+
+---
+
+## 10. Advanced Relational Joins (`join.nox`) (v0.9.0)
+
+- **Full Outer Join (`join_full`, `join_full_keys`)**:
+  - Retains all rows from both left and right tables.
+  - Left-unmatched rows are padded with nulls on the right; right-unmatched rows are padded with nulls on the left while preserving the right join key.
+  - Automatically promotes joined columns to `nullable=True` to maintain schema soundness.
+- **Cartesian Product Cross Join (`join_cross`)**:
+  - Generates full $M \times N$ Cartesian product.
+  - Handles identical column names between tables with customizable suffixes (`_left` and `_right`).

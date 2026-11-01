@@ -1,0 +1,572 @@
+# window.nox — Window functions for Atlas tables (row_number, rank, dense_rank, lag, lead, cumsum, moving_average).
+
+import errors
+from errors import ShapeError, ColumnNotFoundError, SchemaError
+import values
+from values import Cell, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import key_encoding
+from key_encoding import composite_hash_key
+import sort
+from sort import compare_rows
+
+def _cells_equal(c1: list[Cell], c2: list[Cell]) -> bool:
+    if len(c1) != len(c2):
+        return False
+    i: int = 0
+    n: int = len(c1)
+    while i < n:
+        if not c1[i].equals(c2[i]):
+            return False
+        i = i + 1
+    return True
+
+def _partition_row_indices(t: Table, partition_by: list[str] | None) -> list[list[int]]:
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_res: list[list[int]] = []
+        return empty_res
+
+    if partition_by is None or len(partition_by) == 0:
+        single_part: list[int] = []
+        i: int = 0
+        while i < num_rows:
+            single_part.append(i)
+            i = i + 1
+        res: list[list[int]] = []
+        res.append(single_part)
+        return res
+
+    part_col_indices: list[int] = []
+    p_scan: int = 0
+    while p_scan < len(partition_by):
+        idx: int = t.schema.index_of(partition_by[p_scan])
+        if idx < 0:
+            raise ColumnNotFoundError("partition column not found: '" + partition_by[p_scan] + "'")
+        part_col_indices.append(idx)
+        p_scan = p_scan + 1
+
+    partition_keys: list[list[Cell]] = []
+    partitions: list[list[int]] = []
+    hash_to_part_idx: dict[str, list[int]] = {}
+
+    r_idx: int = 0
+    while r_idx < num_rows:
+        row: list[Cell] = t.rows[r_idx]
+        k_cells: list[Cell] = []
+        c_i: int = 0
+        while c_i < len(part_col_indices):
+            k_cells.append(row[part_col_indices[c_i]])
+            c_i = c_i + 1
+
+        h_key: str = composite_hash_key(k_cells)
+        found_idx: int = -1
+
+        if h_key in hash_to_part_idx:
+            candidates: list[int] = hash_to_part_idx[h_key]
+            cand_i: int = 0
+            while cand_i < len(candidates):
+                cand_idx: int = candidates[cand_i]
+                if _cells_equal(partition_keys[cand_idx], k_cells):
+                    found_idx = cand_idx
+                    cand_i = len(candidates)
+                else:
+                    cand_i = cand_i + 1
+
+        if found_idx >= 0:
+            partitions[found_idx].append(r_idx)
+        else:
+            new_idx: int = len(partitions)
+            partition_keys.append(k_cells)
+            new_part: list[int] = []
+            new_part.append(r_idx)
+            partitions.append(new_part)
+            if h_key in hash_to_part_idx:
+                c_list: list[int] = hash_to_part_idx[h_key]
+                c_list.append(new_idx)
+                hash_to_part_idx[h_key] = c_list
+            else:
+                initial_list: list[int] = []
+                initial_list.append(new_idx)
+                hash_to_part_idx[h_key] = initial_list
+
+        r_idx = r_idx + 1
+
+    return partitions
+
+def _sort_partition_indices(rows: list[list[Cell]], indices: list[int],
+                            order_col_indices: list[int], ascending_flags: list[bool]) -> list[int]:
+    n: int = len(indices)
+    if n <= 1 or len(order_col_indices) == 0:
+        res: list[int] = []
+        i: int = 0
+        while i < n:
+            res.append(indices[i])
+            i = i + 1
+        return res
+
+    mid: int = n // 2
+    left_ind: list[int] = []
+    i = 0
+    while i < mid:
+        left_ind.append(indices[i])
+        i = i + 1
+
+    right_ind: list[int] = []
+    while i < n:
+        right_ind.append(indices[i])
+        i = i + 1
+
+    sorted_left: list[int] = _sort_partition_indices(rows, left_ind, order_col_indices, ascending_flags)
+    sorted_right: list[int] = _sort_partition_indices(rows, right_ind, order_col_indices, ascending_flags)
+
+    merged: list[int] = []
+    l_idx: int = 0
+    r_idx: int = 0
+    nl: int = len(sorted_left)
+    nr: int = len(sorted_right)
+
+    while l_idx < nl and r_idx < nr:
+        row_l: list[Cell] = rows[sorted_left[l_idx]]
+        row_r: list[Cell] = rows[sorted_right[r_idx]]
+        cmp_val: int = compare_rows(row_l, row_r, order_col_indices, ascending_flags, False)
+        if cmp_val <= 0:
+            merged.append(sorted_left[l_idx])
+            l_idx = l_idx + 1
+        else:
+            merged.append(sorted_right[r_idx])
+            r_idx = r_idx + 1
+
+    while l_idx < nl:
+        merged.append(sorted_left[l_idx])
+        l_idx = l_idx + 1
+
+    while r_idx < nr:
+        merged.append(sorted_right[r_idx])
+        r_idx = r_idx + 1
+
+    return merged
+
+def _append_column(t: Table, output_col: str, col_type: int, nullable: bool, cells: list[Cell]) -> Table:
+    if t.schema.has_column(output_col):
+        raise SchemaError("column '" + output_col + "' already exists in table")
+
+    new_cols: list[ColumnDef] = []
+    c_i: int = 0
+    while c_i < t.schema.column_count():
+        col: ColumnDef = t.schema.columns[c_i]
+        new_cols.append(ColumnDef(col.name, col.data_type, col.nullable))
+        c_i = c_i + 1
+
+    new_cols.append(ColumnDef(output_col, col_type, nullable))
+    new_schema: Schema = Schema(new_cols)
+
+    new_rows: list[list[Cell]] = []
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+    while r_idx < num_rows:
+        old_r: list[Cell] = t.rows[r_idx]
+        new_r: list[Cell] = []
+        i: int = 0
+        while i < len(old_r):
+            new_r.append(old_r[i])
+            i = i + 1
+        new_r.append(cells[r_idx])
+        new_rows.append(new_r)
+        r_idx = r_idx + 1
+
+    return Table(new_schema, new_rows)
+
+def row_number(t: Table, output_col: str = "row_nr",
+               partition_by: list[str] | None = None,
+               order_by: list[str] | None = None,
+               ascending: bool = True) -> Table:
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_cells: list[Cell] = []
+        return _append_column(t, output_col, TYPE_INT, False, empty_cells)
+
+    order_col_indices: list[int] = []
+    asc_flags: list[bool] = []
+    if order_by is not None:
+        o_i: int = 0
+        while o_i < len(order_by):
+            o_idx: int = t.schema.index_of(order_by[o_i])
+            if o_idx < 0:
+                raise ColumnNotFoundError("order_by column not found: '" + order_by[o_i] + "'")
+            order_col_indices.append(o_idx)
+            asc_flags.append(ascending)
+            o_i = o_i + 1
+
+    partitions: list[list[int]] = _partition_row_indices(t, partition_by)
+    out_cells: list[Cell] = []
+    init_i: int = 0
+    while init_i < num_rows:
+        out_cells.append(cell_null())
+        init_i = init_i + 1
+
+    part_idx: int = 0
+    while part_idx < len(partitions):
+        part: list[int] = partitions[part_idx]
+        sorted_indices: list[int] = _sort_partition_indices(t.rows, part, order_col_indices, asc_flags)
+        i: int = 0
+        while i < len(sorted_indices):
+            orig_idx: int = sorted_indices[i]
+            out_cells[orig_idx] = cell_int(i + 1)
+            i = i + 1
+        part_idx = part_idx + 1
+
+    return _append_column(t, output_col, TYPE_INT, False, out_cells)
+
+def rank(t: Table, order_col: str, output_col: str = "rank",
+         partition_by: list[str] | None = None,
+         ascending: bool = True) -> Table:
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_cells: list[Cell] = []
+        return _append_column(t, output_col, TYPE_INT, False, empty_cells)
+
+    order_idx: int = t.schema.index_of(order_col)
+    if order_idx < 0:
+        raise ColumnNotFoundError("order_col not found: '" + order_col + "'")
+
+    order_col_indices: list[int] = [order_idx]
+    asc_flags: list[bool] = [ascending]
+
+    partitions: list[list[int]] = _partition_row_indices(t, partition_by)
+    out_cells: list[Cell] = []
+    init_i: int = 0
+    while init_i < num_rows:
+        out_cells.append(cell_null())
+        init_i = init_i + 1
+
+    part_idx: int = 0
+    while part_idx < len(partitions):
+        part: list[int] = partitions[part_idx]
+        sorted_indices: list[int] = _sort_partition_indices(t.rows, part, order_col_indices, asc_flags)
+        current_rank: int = 1
+        i: int = 0
+        while i < len(sorted_indices):
+            orig_idx: int = sorted_indices[i]
+            if i == 0:
+                current_rank = 1
+                out_cells[orig_idx] = cell_int(1)
+            else:
+                prev_orig: int = sorted_indices[i - 1]
+                if t.rows[orig_idx][order_idx].equals(t.rows[prev_orig][order_idx]):
+                    out_cells[orig_idx] = cell_int(current_rank)
+                else:
+                    current_rank = i + 1
+                    out_cells[orig_idx] = cell_int(current_rank)
+            i = i + 1
+        part_idx = part_idx + 1
+
+    return _append_column(t, output_col, TYPE_INT, False, out_cells)
+
+def dense_rank(t: Table, order_col: str, output_col: str = "dense_rank",
+               partition_by: list[str] | None = None,
+               ascending: bool = True) -> Table:
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_cells: list[Cell] = []
+        return _append_column(t, output_col, TYPE_INT, False, empty_cells)
+
+    order_idx: int = t.schema.index_of(order_col)
+    if order_idx < 0:
+        raise ColumnNotFoundError("order_col not found: '" + order_col + "'")
+
+    order_col_indices: list[int] = [order_idx]
+    asc_flags: list[bool] = [ascending]
+
+    partitions: list[list[int]] = _partition_row_indices(t, partition_by)
+    out_cells: list[Cell] = []
+    init_i: int = 0
+    while init_i < num_rows:
+        out_cells.append(cell_null())
+        init_i = init_i + 1
+
+    part_idx: int = 0
+    while part_idx < len(partitions):
+        part: list[int] = partitions[part_idx]
+        sorted_indices: list[int] = _sort_partition_indices(t.rows, part, order_col_indices, asc_flags)
+        current_rank: int = 1
+        i: int = 0
+        while i < len(sorted_indices):
+            orig_idx: int = sorted_indices[i]
+            if i == 0:
+                current_rank = 1
+                out_cells[orig_idx] = cell_int(1)
+            else:
+                prev_orig: int = sorted_indices[i - 1]
+                if t.rows[orig_idx][order_idx].equals(t.rows[prev_orig][order_idx]):
+                    out_cells[orig_idx] = cell_int(current_rank)
+                else:
+                    current_rank = current_rank + 1
+                    out_cells[orig_idx] = cell_int(current_rank)
+            i = i + 1
+        part_idx = part_idx + 1
+
+    return _append_column(t, output_col, TYPE_INT, False, out_cells)
+
+def lag(t: Table, target_col: str, output_col: str = "lag", offset: int = 1,
+        partition_by: list[str] | None = None,
+        order_by: list[str] | None = None,
+        ascending: bool = True,
+        default_val: Cell | None = None) -> Table:
+    if offset < 1:
+        raise ShapeError("lag offset must be >= 1")
+
+    target_idx: int = t.schema.index_of(target_col)
+    if target_idx < 0:
+        raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+
+    def_cell: Cell = cell_null()
+    if default_val is not None:
+        def_cell = default_val
+
+    target_type: int = t.schema.columns[target_idx].data_type
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_cells: list[Cell] = []
+        return _append_column(t, output_col, target_type, True, empty_cells)
+
+    order_col_indices: list[int] = []
+    asc_flags: list[bool] = []
+    if order_by is not None:
+        o_i: int = 0
+        while o_i < len(order_by):
+            o_idx: int = t.schema.index_of(order_by[o_i])
+            if o_idx < 0:
+                raise ColumnNotFoundError("order_by column not found: '" + order_by[o_i] + "'")
+            order_col_indices.append(o_idx)
+            asc_flags.append(ascending)
+            o_i = o_i + 1
+
+    partitions: list[list[int]] = _partition_row_indices(t, partition_by)
+    out_cells: list[Cell] = []
+    init_i: int = 0
+    while init_i < num_rows:
+        out_cells.append(cell_null())
+        init_i = init_i + 1
+
+    part_idx: int = 0
+    while part_idx < len(partitions):
+        part: list[int] = partitions[part_idx]
+        sorted_indices: list[int] = _sort_partition_indices(t.rows, part, order_col_indices, asc_flags)
+        i: int = 0
+        while i < len(sorted_indices):
+            orig_idx: int = sorted_indices[i]
+            if i - offset >= 0:
+                source_orig: int = sorted_indices[i - offset]
+                out_cells[orig_idx] = t.rows[source_orig][target_idx]
+            else:
+                out_cells[orig_idx] = def_cell
+            i = i + 1
+        part_idx = part_idx + 1
+
+    return _append_column(t, output_col, target_type, True, out_cells)
+
+def lead(t: Table, target_col: str, output_col: str = "lead", offset: int = 1,
+         partition_by: list[str] | None = None,
+         order_by: list[str] | None = None,
+         ascending: bool = True,
+         default_val: Cell | None = None) -> Table:
+    if offset < 1:
+        raise ShapeError("lead offset must be >= 1")
+
+    target_idx: int = t.schema.index_of(target_col)
+    if target_idx < 0:
+        raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+
+    def_cell: Cell = cell_null()
+    if default_val is not None:
+        def_cell = default_val
+
+    target_type: int = t.schema.columns[target_idx].data_type
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_cells: list[Cell] = []
+        return _append_column(t, output_col, target_type, True, empty_cells)
+
+    order_col_indices: list[int] = []
+    asc_flags: list[bool] = []
+    if order_by is not None:
+        o_i: int = 0
+        while o_i < len(order_by):
+            o_idx: int = t.schema.index_of(order_by[o_i])
+            if o_idx < 0:
+                raise ColumnNotFoundError("order_by column not found: '" + order_by[o_i] + "'")
+            order_col_indices.append(o_idx)
+            asc_flags.append(ascending)
+            o_i = o_i + 1
+
+    partitions: list[list[int]] = _partition_row_indices(t, partition_by)
+    out_cells: list[Cell] = []
+    init_i: int = 0
+    while init_i < num_rows:
+        out_cells.append(cell_null())
+        init_i = init_i + 1
+
+    part_idx: int = 0
+    while part_idx < len(partitions):
+        part: list[int] = partitions[part_idx]
+        sorted_indices: list[int] = _sort_partition_indices(t.rows, part, order_col_indices, asc_flags)
+        n_part: int = len(sorted_indices)
+        i: int = 0
+        while i < n_part:
+            orig_idx: int = sorted_indices[i]
+            if i + offset < n_part:
+                source_orig: int = sorted_indices[i + offset]
+                out_cells[orig_idx] = t.rows[source_orig][target_idx]
+            else:
+                out_cells[orig_idx] = def_cell
+            i = i + 1
+        part_idx = part_idx + 1
+
+    return _append_column(t, output_col, target_type, True, out_cells)
+
+def cumulative_sum(t: Table, target_col: str, output_col: str = "cumsum",
+                   partition_by: list[str] | None = None,
+                   order_by: list[str] | None = None,
+                   ascending: bool = True) -> Table:
+    target_idx: int = t.schema.index_of(target_col)
+    if target_idx < 0:
+        raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+
+    target_type: int = t.schema.columns[target_idx].data_type
+    if target_type != TYPE_INT and target_type != TYPE_FLOAT:
+        raise ShapeError("cumulative_sum requires numeric column (int or float)")
+
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_cells: list[Cell] = []
+        return _append_column(t, output_col, target_type, False, empty_cells)
+
+    order_col_indices: list[int] = []
+    asc_flags: list[bool] = []
+    if order_by is not None:
+        o_i: int = 0
+        while o_i < len(order_by):
+            o_idx: int = t.schema.index_of(order_by[o_i])
+            if o_idx < 0:
+                raise ColumnNotFoundError("order_by column not found: '" + order_by[o_i] + "'")
+            order_col_indices.append(o_idx)
+            asc_flags.append(ascending)
+            o_i = o_i + 1
+
+    partitions: list[list[int]] = _partition_row_indices(t, partition_by)
+    out_cells: list[Cell] = []
+    init_i: int = 0
+    while init_i < num_rows:
+        out_cells.append(cell_null())
+        init_i = init_i + 1
+
+    part_idx: int = 0
+    while part_idx < len(partitions):
+        part: list[int] = partitions[part_idx]
+        sorted_indices: list[int] = _sort_partition_indices(t.rows, part, order_col_indices, asc_flags)
+        
+        if target_type == TYPE_INT:
+            acc_int: int = 0
+            i: int = 0
+            while i < len(sorted_indices):
+                orig_idx: int = sorted_indices[i]
+                c: Cell = t.rows[orig_idx][target_idx]
+                if not c.is_missing():
+                    acc_int = acc_int + c.as_int()
+                out_cells[orig_idx] = cell_int(acc_int)
+                i = i + 1
+        else:
+            acc_float: float = 0.0
+            i: int = 0
+            while i < len(sorted_indices):
+                orig_idx: int = sorted_indices[i]
+                c: Cell = t.rows[orig_idx][target_idx]
+                if not c.is_missing():
+                    acc_float = acc_float + c.as_float()
+                out_cells[orig_idx] = cell_float(acc_float)
+                i = i + 1
+
+        part_idx = part_idx + 1
+
+    return _append_column(t, output_col, target_type, False, out_cells)
+
+def moving_average(t: Table, target_col: str, window_size: int, output_col: str = "moving_avg",
+                   partition_by: list[str] | None = None,
+                   order_by: list[str] | None = None,
+                   ascending: bool = True, min_periods: int = 1) -> Table:
+    if window_size <= 0:
+        raise ShapeError("window_size must be positive")
+
+    target_idx: int = t.schema.index_of(target_col)
+    if target_idx < 0:
+        raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+
+    target_type: int = t.schema.columns[target_idx].data_type
+    if target_type != TYPE_INT and target_type != TYPE_FLOAT:
+        raise ShapeError("moving_average requires numeric column (int or float)")
+
+    num_rows: int = t.row_count()
+    if num_rows == 0:
+        empty_cells: list[Cell] = []
+        return _append_column(t, output_col, TYPE_FLOAT, True, empty_cells)
+
+    order_col_indices: list[int] = []
+    asc_flags: list[bool] = []
+    if order_by is not None:
+        o_i: int = 0
+        while o_i < len(order_by):
+            o_idx: int = t.schema.index_of(order_by[o_i])
+            if o_idx < 0:
+                raise ColumnNotFoundError("order_by column not found: '" + order_by[o_i] + "'")
+            order_col_indices.append(o_idx)
+            asc_flags.append(ascending)
+            o_i = o_i + 1
+
+    partitions: list[list[int]] = _partition_row_indices(t, partition_by)
+    out_cells: list[Cell] = []
+    init_i: int = 0
+    while init_i < num_rows:
+        out_cells.append(cell_null())
+        init_i = init_i + 1
+
+    part_idx: int = 0
+    while part_idx < len(partitions):
+        part: list[int] = partitions[part_idx]
+        sorted_indices: list[int] = _sort_partition_indices(t.rows, part, order_col_indices, asc_flags)
+        
+        i: int = 0
+        n_part: int = len(sorted_indices)
+        while i < n_part:
+            orig_idx: int = sorted_indices[i]
+            w_start: int = 0
+            if i - window_size + 1 > 0:
+                w_start = i - window_size + 1
+
+            w_sum: float = 0.0
+            valid_cnt: int = 0
+            k: int = w_start
+            while k <= i:
+                w_orig: int = sorted_indices[k]
+                c: Cell = t.rows[w_orig][target_idx]
+                if not c.is_missing():
+                    if c.kind == TYPE_INT:
+                        w_sum = w_sum + float(c.as_int())
+                    else:
+                        w_sum = w_sum + c.as_float()
+                    valid_cnt = valid_cnt + 1
+                k = k + 1
+
+            if valid_cnt >= min_periods and valid_cnt > 0:
+                out_cells[orig_idx] = cell_float(w_sum / float(valid_cnt))
+            else:
+                out_cells[orig_idx] = cell_null()
+
+            i = i + 1
+
+        part_idx = part_idx + 1
+
+    return _append_column(t, output_col, TYPE_FLOAT, True, out_cells)

@@ -5,14 +5,17 @@
 Inspired by Pandas but crafted natively for the **Nox** static type system, Atlas avoids bloated dependencies and delivers native $C$-like performance on medium-sized datasets.
 
 [![Nox Compiler](https://img.shields.io/badge/noxc-2.0.86-blue.svg)](https://github.com/mburakmmm/nox-lang)
-[![Version](https://img.shields.io/badge/version-v0.8.0-orange.svg)](nox.json)
+[![Version](https://img.shields.io/badge/version-v0.9.0-orange.svg)](nox.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-32%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-35%20passed-success.svg)](tests/)
 
 ---
 
 ## Features
 
+- 🪟 **Window Functions (`window.nox`)**: Complete analytical window functions (`row_number`, `rank`, `dense_rank`, `lag`, `lead`, `cumulative_sum`, `moving_average`) with non-destructive row ordering and full partition/order-by support.
+- 🔄 **Table Reshaping (`reshape.nox`)**: Wide-to-long format transformation (`melt`), long-to-wide format transformation (`pivot`), and aggregate reshaping (`pivot_table` with mean, sum, count, min, max, first, last).
+- 🔗 **Advanced Relational Joins (`join.nox`)**: Full Outer Join (`join_full`) preserving unmatched rows on both sides with schema nullability guarantees, and Cartesian product Cross Join (`join_cross`).
 - 🌊 **Streaming Transform & Online GroupBy Pipeline**: Fluent, low-memory query engine (`open_csv_stream.filter(...).select([...]).group_by([...]).aggregate(...)`) processing multi-million row datasets in strictly bounded memory ($O(G \times K + B + R \times S)$).
 - 📑 **RFC 4180 CSV, TSV & Custom Delimiters**: Robust parsing of commas, tabs, semicolons, and multi-character delimiters (`||`, `::`) with streaming state machines and automatic schema inference.
 - ⚡ **O(N + M) Hash Join**: Blazing fast inner and left-outer joins (`join_inner`, `join_left`) with hash indexing and null key isolation.

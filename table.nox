@@ -12,6 +12,9 @@ import sort
 from sort import sort_rows
 import stats
 from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
+import join
+import window
+import reshape
 
 class Table:
     schema: Schema
@@ -491,6 +494,76 @@ class Table:
             r_idx = r_idx + 1
         if len(self.rows) > limit:
             print("... (" + str(len(self.rows) - limit) + " more rows)")
+
+    # Relational Join operations
+    def join_inner(self: Table, right: Table, on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+        return join.join_inner(self, right, on, suffix_left, suffix_right)
+
+    def join_left(self: Table, right: Table, on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+        return join.join_left(self, right, on, suffix_left, suffix_right)
+
+    def join_full(self: Table, right: Table, on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+        return join.join_full(self, right, on, suffix_left, suffix_right)
+
+    def join_cross(self: Table, right: Table, suffix_left: str = "_left", suffix_right: str = "_right") -> Table:
+        return join.join_cross(self, right, suffix_left, suffix_right)
+
+    # Window functions
+    def with_row_number(self: Table, output_col: str = "row_nr",
+                        partition_by: list[str] | None = None,
+                        order_by: list[str] | None = None,
+                        ascending: bool = True) -> Table:
+        return window.row_number(self, output_col, partition_by, order_by, ascending)
+
+    def with_rank(self: Table, order_col: str, output_col: str = "rank",
+                  partition_by: list[str] | None = None,
+                  ascending: bool = True) -> Table:
+        return window.rank(self, order_col, output_col, partition_by, ascending)
+
+    def with_dense_rank(self: Table, order_col: str, output_col: str = "dense_rank",
+                        partition_by: list[str] | None = None,
+                        ascending: bool = True) -> Table:
+        return window.dense_rank(self, order_col, output_col, partition_by, ascending)
+
+    def with_lag(self: Table, target_col: str, output_col: str = "lag", offset: int = 1,
+                 partition_by: list[str] | None = None,
+                 order_by: list[str] | None = None,
+                 ascending: bool = True,
+                 default_val: Cell | None = None) -> Table:
+        return window.lag(self, target_col, output_col, offset, partition_by, order_by, ascending, default_val)
+
+    def with_lead(self: Table, target_col: str, output_col: str = "lead", offset: int = 1,
+                  partition_by: list[str] | None = None,
+                  order_by: list[str] | None = None,
+                  ascending: bool = True,
+                  default_val: Cell | None = None) -> Table:
+        return window.lead(self, target_col, output_col, offset, partition_by, order_by, ascending, default_val)
+
+    def with_cumulative_sum(self: Table, target_col: str, output_col: str = "cumsum",
+                            partition_by: list[str] | None = None,
+                            order_by: list[str] | None = None,
+                            ascending: bool = True) -> Table:
+        return window.cumulative_sum(self, target_col, output_col, partition_by, order_by, ascending)
+
+    def with_moving_average(self: Table, target_col: str, window_size: int, output_col: str = "moving_avg",
+                            partition_by: list[str] | None = None,
+                            order_by: list[str] | None = None,
+                            ascending: bool = True, min_periods: int = 1) -> Table:
+        return window.moving_average(self, target_col, window_size, output_col, partition_by, order_by, ascending, min_periods)
+
+    # Reshaping operations
+    def melt(self: Table, id_vars: list[str],
+             value_vars: list[str] | None = None,
+             var_name: str = "variable",
+             value_name: str = "value") -> Table:
+        return reshape.melt(self, id_vars, value_vars, var_name, value_name)
+
+    def pivot(self: Table, index_col: str, columns_col: str, values_col: str) -> Table:
+        return reshape.pivot(self, index_col, columns_col, values_col)
+
+    def pivot_table(self: Table, index_col: str, columns_col: str, values_col: str,
+                    agg_func: str = "mean") -> Table:
+        return reshape.pivot_table(self, index_col, columns_col, values_col, agg_func)
 
 def create_table(s: Schema, rows: list[list[Cell]]) -> Table:
     return Table(s, rows)

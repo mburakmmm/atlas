@@ -22,7 +22,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.7.3** | **Çok Karakterli Delimiter Bayt Sayımı, EOF Sınırları & Property-Based Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v0.7.4** | **Boş Delimiter Validasyonu, Boş Dosya Şema Koruması & LCG Diferansiyel Testleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v0.8.0** | **Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline)** | ✅ **TAMAMLANDI & YAYINLANDI** | 32/32 Test Geçti (`noxc test`) |
-| **v0.9.0** | **İleri Seviye Tablo İşlemleri (Window Functions, Pivot & Reshaping)** | ⏳ **PLANLANDI (Sonraki Büyük Faz)** | — |
+| **v0.9.0** | **İleri Seviye Tablo İşlemleri (Window Functions, Reshaping & Gelişmiş Join'ler)** | ✅ **TAMAMLANDI & YAYINLANDI** | 35/35 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -417,14 +417,29 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
-## 🛠️ Sürüm 0.9.0 — İleri Seviye Tablo İşlemleri (Window Functions, Pivot & Reshaping) (Planlandı)
+## 🚀 Sürüm 0.9.0 — İleri Seviye Tablo İşlemleri (Window Functions, Reshaping & Gelişmiş Join'ler) (Tamamlananlar)
 
-- [ ] **Pencere Fonksiyonları (Window Functions)**:
-  - `row_number()`, `rank()`, `dense_rank()`, `lag()`, `lead()`, `cumulative_sum()`, `moving_average()`.
-- [ ] **Tablo Yeniden Şekillendirme (Reshaping)**:
-  - `pivot_table()`, `melt()`, `unstack()`.
-- [ ] **Gelişmiş Çoklu Join**:
-  - Full outer join ve cross join yetenekleri.
+- [x] **Pencere Fonksiyonları (Window Functions - `window.nox`)**:
+  - `row_number(t, output_col, partition_by, order_by, ascending)`: Her partition için 1'den başlayan ardışık satır numarası.
+  - `rank(t, order_col, output_col, partition_by, ascending)`: Eşit değerlerde aynı derece, sonraki değerlerde atlamalı sıralama (1, 2, 2, 4).
+  - `dense_rank(t, order_col, output_col, partition_by, ascending)`: Eşit değerlerde aynı derece, atlamasız sıralama (1, 2, 2, 3).
+  - `lag(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Partition içinde belirtilen uzaklıktaki önceki satır değeri.
+  - `lead(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Partition içinde belirtilen uzaklıktaki sonraki satır değeri.
+  - `cumulative_sum(t, target_col, output_col, partition_by, order_by, ascending)`: Kümülatif toplam (int ve float desteği).
+  - `moving_average(t, target_col, window_size, output_col, partition_by, order_by, ascending, min_periods)`: Kayan pencere ortalaması ve asgari gözlem eşiği (`min_periods`).
+  - Orijinal satır sırasını koruyan ve tahribatsız yeni sütun ekleyen mimari.
+  - Akıcı `Table` metotları: `table.with_row_number()`, `table.with_rank()`, `table.with_dense_rank()`, `table.with_lag()`, `table.with_lead()`, `table.with_cumulative_sum()`, `table.with_moving_average()`.
+- [x] **Tablo Yeniden Şekillendirme (Reshaping - `reshape.nox`)**:
+  - `melt(t, id_vars, value_vars, var_name, value_name)`: Geniş formattan uzun formata dönüşüm (wide to long) ve otomatik sayısal tip terfisi (int + float -> float, karma tipler -> string).
+  - `pivot(t, index_col, columns_col, values_col)`: Uzun formattan geniş formata dönüşüm (long to wide). Tekil indeks/kolon kombinasyonu zorunluluğu, duplicate durumunda katı `ShapeError`.
+  - `pivot_table(t, index_col, columns_col, values_col, agg_func="mean")`: Duplicate girişlerde özetleme. Desteklenen fonksiyonlar: `"mean"`, `"sum"`, `"count"`, `"min"`, `"max"`, `"first"`, `"last"`.
+  - Akıcı `Table` metotları: `table.melt()`, `table.pivot()`, `table.pivot_table()`.
+- [x] **Gelişmiş Çoklu Join'ler (Advanced Joins - `join.nox`)**:
+  - `join_full_keys` ve `join_full`: Full Outer Join desteği. Sol tarafta eşleşmeyen satırlar (sağ sütunlar NULL) ve sağ tarafta eşleşmeyen satırlar (sol sütunlar NULL, ortak key sağdan dolu) dahil edilir; tüm sütunlar otomatik `nullable` yapılır.
+  - `join_cross`: İki tablo arasında Kartezyen çarpım ($M \times N$ satır) ve çakışan sütun isimleri için otomatik suffix (`_left`, `_right`) yönetimi.
+  - Akıcı `Table` metotları: `table.join_full()`, `table.join_cross()`, `table.join_inner()`, `table.join_left()`.
+- [x] **Kapsamlı Test Kapsamı**:
+  - `tests/window_test.nox`, `tests/reshape_test.nox`, `tests/advanced_join_test.nox` test paketleri yazıldı. Toplam 35 test paketinin tamamı başarıyla geçti (`35 passed, 0 failed`).
 
 ---
 

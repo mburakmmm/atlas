@@ -282,3 +282,65 @@ us_total_amount: float = open_csv_stream("sales.csv") \
 # 6. One-Line Functional GroupBy
 summary: Table = stream_group_by("sales.csv", ["region"], [agg_count(), agg_sum("sales")])
 ```
+
+## 11. Window Functions (`window.nox`)
+
+```nox
+import atlas
+from atlas import row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
+
+# Functional API:
+t1 = row_number(table, output_col="row_nr", partition_by=["dept"], order_by=["salary"], ascending=False)
+t2 = rank(table, order_col="salary", output_col="rank", partition_by=["dept"])
+t3 = dense_rank(table, order_col="salary", output_col="dense_rank", partition_by=["dept"])
+t4 = lag(table, target_col="sales", output_col="prev_sales", offset=1, partition_by=["dept"], order_by=["date"])
+t5 = lead(table, target_col="sales", output_col="next_sales", offset=1, partition_by=["dept"], order_by=["date"])
+t6 = cumulative_sum(table, target_col="sales", output_col="cum_sales", partition_by=["dept"], order_by=["date"])
+t7 = moving_average(table, target_col="sales", window_size=3, output_col="moving_avg", partition_by=["dept"], min_periods=1)
+
+# Fluent Table Instance Methods:
+t_analytical: Table = table \
+    .with_row_number("row_nr", partition_by=["dept"], order_by=["salary"]) \
+    .with_rank("salary", "salary_rank", partition_by=["dept"]) \
+    .with_lag("sales", "prev_sales", offset=1, partition_by=["dept"]) \
+    .with_cumulative_sum("sales", "cumsum_sales", partition_by=["dept"]) \
+    .with_moving_average("sales", window_size=5, output_col="mavg_sales", partition_by=["dept"])
+```
+
+## 12. Table Reshaping (`reshape.nox`)
+
+```nox
+import atlas
+from atlas import melt, pivot, pivot_table
+
+# Wide to Long Format (Unpivot)
+# Converts multiple value columns into (variable, value) row pairs
+long_table: Table = table.melt(id_vars=["id", "name"], value_vars=["q1", "q2"], var_name="quarter", value_name="revenue")
+# Or functional:
+long_table = melt(table, ["id", "name"]) # Default melts all non-id columns
+
+# Long to Wide Format (Pivot)
+# Requires unique (index, column) pairs, raises ShapeError on duplicate entries
+wide_table: Table = table.pivot(index_col="dept", columns_col="quarter", values_col="revenue")
+
+# Long to Wide with Aggregation (Pivot Table)
+# Aggregates duplicate entries using "mean", "sum", "count", "min", "max", "first", or "last"
+summary_table: Table = table.pivot_table(index_col="dept", columns_col="quarter", values_col="revenue", agg_func="sum")
+```
+
+## 13. Advanced Relational Joins (`join.nox`)
+
+```nox
+import atlas
+from atlas import join_full, join_full_keys, join_cross, join_inner, join_left
+
+# Full Outer Join (preserves unmatched rows from both left and right tables)
+t_full: Table = join_full(table_a, table_b, on=["dept_id"])
+# Or instance method:
+t_full = table_a.join_full(table_b, on=["dept_id"])
+
+# Cartesian Product / Cross Join (M x N rows)
+t_cross: Table = join_cross(table_a, table_b, suffix_left="_a", suffix_right="_b")
+# Or instance method:
+t_cross = table_a.join_cross(table_b)
+```
