@@ -4,7 +4,7 @@ import nox.mathx
 import errors
 from errors import AggregationError
 import values
-from values import Cell
+from values import Cell, checked_add_int64, TYPE_INT
 
 def stat_count(cells: list[Cell]) -> int:
     return len(cells)
@@ -37,6 +37,17 @@ def stat_sum(cells: list[Cell]) -> float:
         c: Cell = cells[i]
         if not c.is_missing() and c.is_numeric():
             total = total + c.as_float()
+        i = i + 1
+    return total
+
+def stat_sum_int(cells: list[Cell], context_msg: str = "stat_sum_int") -> int:
+    total: int = 0
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            total = checked_add_int64(total, c.as_int(), context_msg)
         i = i + 1
     return total
 

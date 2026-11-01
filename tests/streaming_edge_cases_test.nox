@@ -5,7 +5,9 @@ import nox.fs
 import errors
 from errors import AtlasError, CsvImportError, ShapeError, AggregationError
 import values
-from values import Cell, TYPE_STR, TYPE_FLOAT
+from values import Cell, TYPE_STR, TYPE_FLOAT, TYPE_INT, INT64_MAX
+import groupby
+from groupby import agg_sum
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -497,6 +499,34 @@ def test_empty_file_explicit_schema_preservation() -> None:
         if nox.fs.exists(f_emp):
             nox.fs.remove_file(f_emp)
 
+def test_streaming_int64_overflow() -> None:
+    f_ov: str = "temp_stream_int_overflow.csv"
+    c_csv: str = "dept,amount\nEng,9223372036854775800\nEng,100\n"
+    nox.fs.write_string(f_ov, c_csv)
+    try:
+        sch: Schema = Schema([ColumnDef("dept", TYPE_STR), ColumnDef("amount", TYPE_INT)])
+
+        # 1. Test StreamingCsvReader.sum INT64 overflow
+        reader: StreamingCsvReader = open_csv_stream(f_ov, 1, csv_options(), sch)
+        caught_sum_ov: bool = False
+        try:
+            reader.sum("amount")
+        except ShapeError:
+            caught_sum_ov = True
+        nox.test.assert_true(caught_sum_ov, "StreamingCsvReader.sum on INT64 overflow raises ShapeError")
+
+        # 2. Test StreamingGroupedTable.aggregate([agg_sum(...)]) INT64 overflow
+        reader2: StreamingCsvReader = open_csv_stream(f_ov, 1, csv_options(), sch)
+        caught_grp_ov: bool = False
+        try:
+            reader2.group_by(["dept"]).aggregate([agg_sum("amount", "tot")])
+        except ShapeError:
+            caught_grp_ov = True
+        nox.test.assert_true(caught_grp_ov, "StreamingGroupedTable.aggregate(sum) on INT64 overflow raises ShapeError")
+    finally:
+        if nox.fs.exists(f_ov):
+            nox.fs.remove_file(f_ov)
+
 test_quote_and_escaped_quote_split()
 test_crlf_split_boundary()
 test_header_only_and_single_row()
@@ -512,5 +542,6 @@ test_utf8_multibyte_record_limit()
 test_large_chunk_bytes_bounded_memory()
 test_multichar_delim_bytes_accounting()
 test_eof_delimiter_state_machine_cases()
+test_streaming_int64_overflow()
 
 print("streaming_edge_cases_test passed")

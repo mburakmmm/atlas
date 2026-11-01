@@ -9,7 +9,7 @@ from schema import Schema, ColumnDef
 import table
 from table import Table
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_min, stat_max, stat_count, stat_count_non_missing
 import key_encoding
 from key_encoding import cell_hash_key, composite_hash_key
 
@@ -132,6 +132,12 @@ class GroupedTable:
                 if target_col_def is None:
                     raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
                 out_type = target_col_def.data_type
+            elif ad.agg_type == AGG_SUM:
+                target_col_def_s: ColumnDef | None = self.source.schema.get_column_by_name(ad.target_col)
+                if target_col_def_s is None:
+                    raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                if target_col_def_s.data_type == TYPE_INT:
+                    out_type = TYPE_INT
             out_cols.append(ColumnDef(ad.output_col, out_type, True))
             agg_idx = agg_idx + 1
 
@@ -173,7 +179,11 @@ class GroupedTable:
                     if ad_cur.agg_type == AGG_COUNT_NON_MISSING:
                         new_r.append(cell_int(stat_count_non_missing(target_cells)))
                     elif ad_cur.agg_type == AGG_SUM:
-                        new_r.append(cell_float(stat_sum(target_cells)))
+                        t_def_s: ColumnDef | None = self.source.schema.get_column_by_name(ad_cur.target_col)
+                        if t_def_s is not None and t_def_s.data_type == TYPE_INT:
+                            new_r.append(cell_int(stat_sum_int(target_cells, "groupby.agg_sum")))
+                        else:
+                            new_r.append(cell_float(stat_sum(target_cells)))
                     elif ad_cur.agg_type == AGG_MEAN:
                         new_r.append(cell_float(stat_mean(target_cells)))
                     elif ad_cur.agg_type == AGG_MEDIAN:

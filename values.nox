@@ -1,7 +1,23 @@
 # values.nox — Typed cell value representation and missing value semantics for Atlas.
 
 import errors
-from errors import TypeConversionError
+from errors import TypeConversionError, ShapeError
+
+INT64_MAX: int = 9223372036854775807
+INT64_MIN: int = -9223372036854775807 - 1
+
+def checked_add_int64(a: int, b: int, context_msg: str = "") -> int:
+    if b > 0 and a > INT64_MAX - b:
+        msg: str = "integer overflow"
+        if len(context_msg) > 0:
+            msg = msg + " in " + context_msg
+        raise ShapeError(msg)
+    if b < 0 and a < INT64_MIN - b:
+        msg: str = "integer underflow"
+        if len(context_msg) > 0:
+            msg = msg + " in " + context_msg
+        raise ShapeError(msg)
+    return a + b
 
 TYPE_NULL: int = 0
 TYPE_INT: int = 1

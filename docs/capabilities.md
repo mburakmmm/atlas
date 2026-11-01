@@ -82,7 +82,8 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 - **Fluent WindowContext Pipeline with Lazy Column Buffering**:
   - `WindowContext` can be instantiated once via `table.window(partition_by=..., order_by=..., ascending=...)` and chained with `.with_row_number()`, `.with_rank()`, `.with_dense_rank()`, `.with_lag()`, `.with_lead()`, `.with_cumulative_sum()`, `.with_moving_average()`, and finalized with `.to_table()`.
   - Hash-partitioning and $O(N \log N)$ stable merge-sorting are executed strictly **once** across chained window operations.
-  - Computed window columns are buffered lazily in `pending_columns` and materialized into the final schema and rows in a single pass ($O(N)$ allocation instead of $K \times O(N \times C)$). Empirically verified at **3.17x faster** than independent unpipelined window operations (96 ms vs 304 ms for 4 window columns over 100,000 rows).
+  - Computed window columns are buffered lazily in `pending_columns` and materialized into the final schema and rows in a single pass ($O(N)$ allocation instead of $K \times O(N \times C)$). Empirically verified at **~2.89x median faster** than independent unpipelined window operations across 10 iterations over 100,000 rows (352 ms control group median vs 122 ms pipeline median). Verified 100% cell-by-cell differential equivalence at the end of the benchmark.
+  - Option A Independent Pipeline Contract: All operations in a `WindowContext` pipeline evaluate independently against the base table columns for optimal performance. Referencing a pending pipeline column before `.to_table()` raises an actionable `SchemaError` guiding the caller to materialize with `.to_table()` before chaining dependent computations.
   - Strict order key validation: `with_rank` and `with_dense_rank` require an active context ordering and validate that `order_col` matches the context's primary order key (`SortError`). Multi-column orderings evaluate ties across all specified order columns according to standard SQL semantics.
 - **Non-Destructive Row Architecture**:
   - Evaluates analytical window calculations partitioned by keys and ordered by specified columns, appending computed result columns without reordering or altering the input table's original row sequence.
@@ -124,3 +125,20 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 - **Cartesian Product Cross Join (`join_cross`)**:
   - Generates full $M \times N$ Cartesian product.
   - Handles identical column names between tables with customizable suffixes (`_left` and `_right`).
+
+---
+
+## 11. Unified 64-bit Integer Checked Arithmetic (`values.nox`, `atlas.nox`) (v0.9.4)
+
+- **`checked_add_int64(a: int, b: int, context_msg: str = "") -> int`**:
+  - Proactive bounds checking against signed 64-bit limits:
+    - $\text{INT64\_MAX} = 9223372036854775807$
+    - $\text{INT64\_MIN} = -9223372036854775807 - 1$
+  - Prevents silent CPU integer wraparound by raising an explicit, descriptive `ShapeError`.
+- **Unified Integer Aggregation Contract**:
+  - `groupby.agg_sum`: When the target column is `TYPE_INT`, exact integer arithmetic is preserved without 53-bit float precision loss; overflows raise `ShapeError`.
+  - `StreamingCsvReader.sum`: When summing a `TYPE_INT` column, values across chunks are checked and accumulated with `checked_add_int64`.
+  - `StreamingGroupedTable.aggregate([agg_sum(...)])`: Computes integer totals with `SingleAggState.sum_val_i`, preserving `TYPE_INT` output and enforcing integer overflow bounds.
+  - `table.Table.sum_val`: Uses `stat_sum_int` when summing integer columns to prevent integer overflow.
+  - `reshape.pivot_table(sum)`: Preserves signed 64-bit integer limits using `checked_add_int64`.
+  - `window.cumulative_sum`: Running integer accumulation uses `checked_add_int64`.

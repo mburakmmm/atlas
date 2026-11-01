@@ -3,11 +3,15 @@
 import nox.test
 import nox.mathx
 import errors
-from errors import AggregationError
+from errors import AggregationError, ShapeError
 import values
-from values import Cell, cell_int, cell_float, cell_null
+from values import Cell, cell_int, cell_float, cell_null, checked_add_int64, INT64_MAX, INT64_MIN, TYPE_INT
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
 
 # 1. Simple dataset: [10, 20, 30, 40, 50]
 c_odd: list[Cell] = [cell_int(10), cell_int(20), cell_int(30), cell_int(40), cell_int(50)]
@@ -69,5 +73,58 @@ nox.test.assert_true(caught_empty_mean, "mean on all-missing must raise Aggregat
 c_large: list[Cell] = [cell_float(100000001.0), cell_float(100000002.0), cell_float(100000003.0)]
 var_large: float = stat_variance(c_large, True)
 nox.test.assert_true(var_large > 0.999 and var_large < 1.001, "Welford computes variance of large numbers accurately (1.0)")
+
+# 7. Checked INT64 Arithmetic & Overflow/Underflow Detection
+nox.test.assert_eq_int(checked_add_int64(100, 200), 300, "checked_add_int64 normal addition")
+nox.test.assert_eq_int(checked_add_int64(INT64_MAX, 0), INT64_MAX, "checked_add_int64 INT64_MAX + 0")
+nox.test.assert_eq_int(checked_add_int64(INT64_MIN, 0), INT64_MIN, "checked_add_int64 INT64_MIN + 0")
+
+caught_ov1: bool = False
+try:
+    checked_add_int64(INT64_MAX, 1, "test")
+except ShapeError:
+    caught_ov1 = True
+nox.test.assert_true(caught_ov1, "INT64_MAX + 1 raises ShapeError")
+
+caught_ov2: bool = False
+try:
+    checked_add_int64(INT64_MAX - 5, 10, "test")
+except ShapeError:
+    caught_ov2 = True
+nox.test.assert_true(caught_ov2, "INT64_MAX - 5 + 10 raises ShapeError")
+
+caught_un1: bool = False
+try:
+    checked_add_int64(INT64_MIN, -1, "test")
+except ShapeError:
+    caught_un1 = True
+nox.test.assert_true(caught_un1, "INT64_MIN - 1 raises ShapeError")
+
+caught_un2: bool = False
+try:
+    checked_add_int64(INT64_MIN + 5, -10, "test")
+except ShapeError:
+    caught_un2 = True
+nox.test.assert_true(caught_un2, "INT64_MIN + 5 - 10 raises ShapeError")
+
+# 8. stat_sum_int
+nox.test.assert_eq_int(stat_sum_int([cell_int(10), cell_int(20), cell_int(30)]), 60, "stat_sum_int standard sum")
+
+caught_stat_sum_ov: bool = False
+try:
+    stat_sum_int([cell_int(INT64_MAX - 3), cell_int(10)])
+except ShapeError:
+    caught_stat_sum_ov = True
+nox.test.assert_true(caught_stat_sum_ov, "stat_sum_int raises ShapeError on overflow")
+
+# 9. Table.sum_val Integer Overflow
+s_ov: Schema = Schema([ColumnDef("val", TYPE_INT)])
+t_ov: Table = Table(s_ov, [[cell_int(INT64_MAX)], [cell_int(1)]])
+caught_tbl_sum_ov: bool = False
+try:
+    t_ov.sum_val("val")
+except ShapeError:
+    caught_tbl_sum_ov = True
+nox.test.assert_true(caught_tbl_sum_ov, "Table.sum_val raises ShapeError on INT64 overflow")
 
 print("stats_test passed")

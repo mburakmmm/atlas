@@ -6,7 +6,7 @@ import nox.strings
 import errors
 from errors import AtlasError, CsvImportError, ShapeError, MissingValueError, ColumnNotFoundError, AggregationError
 import values
-from values import Cell, cell_null, parse_cell, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+from values import Cell, cell_null, cell_int, cell_float, parse_cell, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, checked_add_int64
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -27,9 +27,11 @@ from key_encoding import composite_hash_key
 class SingleAggState:
     agg_type: int
     target_idx: int
+    target_type: int
     count: int
     count_non_missing: int
     sum_val: float
+    sum_val_i: int
     mean_val: float
     m2_val: float
     min_cell: Cell
@@ -37,12 +39,14 @@ class SingleAggState:
     has_val: bool
     is_sample: bool
 
-    def __init__(self: SingleAggState, agg_type: int, target_idx: int, is_sample: bool = True) -> None:
+    def __init__(self: SingleAggState, agg_type: int, target_idx: int, is_sample: bool = True, target_type: int = 2) -> None:
         self.agg_type = agg_type
         self.target_idx = target_idx
+        self.target_type = target_type
         self.count = 0
         self.count_non_missing = 0
         self.sum_val = 0.0
+        self.sum_val_i = 0
         self.mean_val = 0.0
         self.m2_val = 0.0
         self.min_cell = cell_null()
@@ -65,7 +69,10 @@ class SingleAggState:
             return
 
         if self.agg_type == AGG_SUM:
-            self.sum_val = self.sum_val + c.as_float()
+            if self.target_type == TYPE_INT:
+                self.sum_val_i = checked_add_int64(self.sum_val_i, c.as_int(), "streaming groupby sum")
+            else:
+                self.sum_val = self.sum_val + c.as_float()
         elif self.agg_type == AGG_MEAN or self.agg_type == AGG_VARIANCE or self.agg_type == AGG_STD:
             x: float = c.as_float()
             delta: float = x - self.mean_val
@@ -95,6 +102,8 @@ class SingleAggState:
         if self.agg_type == AGG_COUNT_NON_MISSING:
             return cell_int(self.count_non_missing)
         if self.agg_type == AGG_SUM:
+            if self.target_type == TYPE_INT:
+                return cell_int(self.sum_val_i)
             return cell_float(self.sum_val)
         if self.count_non_missing == 0:
             return cell_null()
@@ -235,7 +244,10 @@ class StreamingGroupedTable:
                             new_states: list[SingleAggState] = []
                             ai = 0
                             while ai < num_aggs:
-                                st: SingleAggState = SingleAggState(aggs[ai].agg_type, target_indices[ai], aggs[ai].is_sample)
+                                t_type: int = TYPE_FLOAT
+                                if initialized_schema and target_indices[ai] >= 0:
+                                    t_type = source_schema.columns[target_indices[ai]].data_type
+                                st: SingleAggState = SingleAggState(aggs[ai].agg_type, target_indices[ai], aggs[ai].is_sample, t_type)
                                 st.update(row)
                                 new_states.append(st)
                                 ai = ai + 1
@@ -248,7 +260,10 @@ class StreamingGroupedTable:
                         new_states = []
                         ai = 0
                         while ai < num_aggs:
-                            st = SingleAggState(aggs[ai].agg_type, target_indices[ai], aggs[ai].is_sample)
+                            t_type2: int = TYPE_FLOAT
+                            if initialized_schema and target_indices[ai] >= 0:
+                                t_type2 = source_schema.columns[target_indices[ai]].data_type
+                            st = SingleAggState(aggs[ai].agg_type, target_indices[ai], aggs[ai].is_sample, t_type2)
                             st.update(row)
                             new_states.append(st)
                             ai = ai + 1
@@ -280,6 +295,9 @@ class StreamingGroupedTable:
             elif ad.agg_type == AGG_MIN or ad.agg_type == AGG_MAX:
                 if initialized_schema and target_indices[ai] >= 0:
                     out_type = source_schema.columns[target_indices[ai]].data_type
+            elif ad.agg_type == AGG_SUM:
+                if initialized_schema and target_indices[ai] >= 0 and source_schema.columns[target_indices[ai]].data_type == TYPE_INT:
+                    out_type = TYPE_INT
             out_cols.append(ColumnDef(ad.output_col, out_type, True))
             ai = ai + 1
 
@@ -801,15 +819,37 @@ class StreamingCsvReader:
         return total
 
     def sum(self: StreamingCsvReader, col_name: str) -> float:
-        running_sum: float = 0.0
+        running_sum_f: float = 0.0
+        running_sum_i: int = 0
+        is_int_target: bool = False
+        inited_type: bool = False
         try:
             while self.has_next():
                 chunk_tbl: Table = self.next_chunk()
                 if chunk_tbl.row_count() > 0:
-                    running_sum = running_sum + chunk_tbl.sum_val(col_name)
+                    if not inited_type:
+                        c_def: ColumnDef | None = chunk_tbl.schema.get_column_by_name(col_name)
+                        if c_def is not None and c_def.data_type == TYPE_INT:
+                            is_int_target = True
+                        inited_type = True
+
+                    if is_int_target:
+                        cells: list[Cell] = chunk_tbl.column_cells(col_name)
+                        ci: int = 0
+                        nc: int = len(cells)
+                        while ci < nc:
+                            c_item: Cell = cells[ci]
+                            if not c_item.is_missing():
+                                running_sum_i = checked_add_int64(running_sum_i, c_item.as_int(), "stream_sum")
+                            ci = ci + 1
+                    else:
+                        running_sum_f = running_sum_f + chunk_tbl.sum_val(col_name)
         finally:
             self.close()
-        return running_sum
+
+        if is_int_target:
+            return float(running_sum_i)
+        return running_sum_f
 
     def mean(self: StreamingCsvReader, col_name: str) -> float:
         running_n: int = 0

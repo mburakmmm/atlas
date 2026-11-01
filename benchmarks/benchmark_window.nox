@@ -1,9 +1,41 @@
-# benchmarks/benchmark_window.nox — Rigorous 100,000 row window benchmark with control group.
+# benchmarks/benchmark_window.nox — Rigorous 100,000 row window benchmark with control group, multi-iteration median timing, and differential equivalence.
 
 import nox.time
 import atlas
 from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, WindowContext
 from atlas import TYPE_INT, TYPE_STR
+
+def sort_ints(nums: list[int]) -> list[int]:
+    res: list[int] = []
+    i: int = 0
+    while i < len(nums):
+        res.append(nums[i])
+        i = i + 1
+    i = 1
+    while i < len(res):
+        key: int = res[i]
+        j: int = i - 1
+        while j >= 0 and res[j] > key:
+            res[j + 1] = res[j]
+            j = j - 1
+        res[j + 1] = key
+        i = i + 1
+    return res
+
+def calc_median(nums: list[int]) -> int:
+    sorted_arr: list[int] = sort_ints(nums)
+    mid: int = len(sorted_arr) // 2
+    if len(sorted_arr) % 2 == 1:
+        return sorted_arr[mid]
+    return (sorted_arr[mid - 1] + sorted_arr[mid]) // 2
+
+def calc_min(nums: list[int]) -> int:
+    sorted_arr: list[int] = sort_ints(nums)
+    return sorted_arr[0]
+
+def calc_max(nums: list[int]) -> int:
+    sorted_arr: list[int] = sort_ints(nums)
+    return sorted_arr[len(sorted_arr) - 1]
 
 print("==========================================================================")
 print("Atlas Window Function & Pipeline Benchmark (100,000 synthetic rows)")
@@ -50,37 +82,80 @@ t: Table = Table(s, rows)
 gen_ms: int = nox.time.now_ms() - t0
 print("[1] Ingested 100,000 rows into typed Table in " + str(gen_ms) + " ms")
 
+# Number of iterations for statistical reliability
+ITERATIONS: int = 10
+print("[2] Executing " + str(ITERATIONS) + " iterations per scenario to measure median and distribution...")
+
 # Scenario A: Single standalone window operation
-t0 = nox.time.now_ms()
-t_single: Table = t.with_row_number(output_col="rn", partition_by=["dept"], order_by=["val"], ascending=True)
-single_ms: int = nox.time.now_ms() - t0
-print("[Scenario A] Single window (row_number over 10 partitions): " + str(single_ms) + " ms")
+times_a: list[int] = []
+iter_a: int = 0
+while iter_a < ITERATIONS:
+    t_start: int = nox.time.now_ms()
+    t_single: Table = t.with_row_number(output_col="rn", partition_by=["dept"], order_by=["val"], ascending=True)
+    times_a.append(nox.time.now_ms() - t_start)
+    iter_a = iter_a + 1
+
+med_a: int = calc_median(times_a)
+print("[Scenario A] Single window (row_number): median " + str(med_a) + " ms (min: " + str(calc_min(times_a)) + " ms, max: " + str(calc_max(times_a)) + " ms)")
 
 # Scenario B: Control Group — 4 separate standalone window operations (re-partitions & re-sorts 4x)
-t0 = nox.time.now_ms()
-t_b: Table = t.with_row_number("rn", partition_by=["dept"], order_by=["val"]) \
-              .with_rank("val", "rk", partition_by=["dept"]) \
-              .with_cumulative_sum("val", "cumsum", partition_by=["dept"], order_by=["val"]) \
-              .with_lag("val", "prev_val", 1, partition_by=["dept"], order_by=["val"], default_val=cell_int(0))
-b_ms: int = nox.time.now_ms() - t0
-print("[Scenario B] Control Group (4 standalone window operations, 4x sorts): " + str(b_ms) + " ms")
+times_b: list[int] = []
+iter_b: int = 0
+t_b_last: Table = t
+while iter_b < ITERATIONS:
+    t_start = nox.time.now_ms()
+    t_b_last = t.with_row_number("rn", partition_by=["dept"], order_by=["val"], ascending=True) \
+                .with_rank("val", "rk", partition_by=["dept"], ascending=True) \
+                .with_cumulative_sum("val", "cumsum", partition_by=["dept"], order_by=["val"], ascending=True) \
+                .with_lag("val", "prev_val", 1, partition_by=["dept"], order_by=["val"], ascending=True, default_val=cell_int(0))
+    times_b.append(nox.time.now_ms() - t_start)
+    iter_b = iter_b + 1
+
+med_b: int = calc_median(times_b)
+print("[Scenario B] Control Group (4 standalone calls, 4x sorts): median " + str(med_b) + " ms (min: " + str(calc_min(times_b)) + " ms, max: " + str(calc_max(times_b)) + " ms)")
 
 # Scenario C: WindowContext Pipeline (1 single partition & sort, lazy column buffer, 1 allocation)
-t0 = nox.time.now_ms()
-ctx: WindowContext = t.window(partition_by=["dept"], order_by=["val"], ascending=True)
-ctx = ctx.with_row_number("rn")
-ctx = ctx.with_rank("val", "rk")
-ctx = ctx.with_cumulative_sum("val", "cumsum")
-ctx = ctx.with_lag("val", "prev_val", 1, default_val=cell_int(0))
-t_c: Table = ctx.to_table()
-c_ms: int = nox.time.now_ms() - t0
-print("[Scenario C] WindowContext Pipeline (4 window operations, 1x sort, lazy buffer): " + str(c_ms) + " ms")
+times_c: list[int] = []
+iter_c: int = 0
+t_c_last: Table = t
+while iter_c < ITERATIONS:
+    t_start = nox.time.now_ms()
+    ctx: WindowContext = t.window(partition_by=["dept"], order_by=["val"], ascending=True)
+    ctx = ctx.with_row_number("rn")
+    ctx = ctx.with_rank("val", "rk")
+    ctx = ctx.with_cumulative_sum("val", "cumsum")
+    ctx = ctx.with_lag("val", "prev_val", 1, default_val=cell_int(0))
+    t_c_last = ctx.to_table()
+    times_c.append(nox.time.now_ms() - t_start)
+    iter_c = iter_c + 1
+
+med_c: int = calc_median(times_c)
+print("[Scenario C] WindowContext Pipeline (4 ops, 1x sort, lazy buffer): median " + str(med_c) + " ms (min: " + str(calc_min(times_c)) + " ms, max: " + str(calc_max(times_c)) + " ms)")
 
 # Verification & Empirical Speedup
-if c_ms > 0:
-    speedup: float = float(b_ms) / float(c_ms)
+if med_c > 0:
+    speedup: float = float(med_b) / float(med_c)
     print("--------------------------------------------------------------------------")
-    print("Empirical Speedup (Scenario B / Scenario C): " + str(speedup) + "x")
-print("Verified Table Row Count: " + str(t_c.row_count()) + ", Columns: " + str(t_c.column_count()))
+    print("Empirical Median Speedup (Scenario B / Scenario C): " + str(speedup) + "x")
+
+# Differential Equivalence Check
+print("[Verification] Verifying 100% cell-by-cell differential equivalence between Table B and Table C...")
+if t_b_last.row_count() != t_c_last.row_count():
+    raise Exception("Row count mismatch between Scenario B and Scenario C")
+if t_b_last.column_count() != t_c_last.column_count():
+    raise Exception("Column count mismatch between Scenario B and Scenario C")
+
+r_scan: int = 0
+num_rows_verify: int = t_b_last.row_count()
+num_cols_verify: int = t_b_last.column_count()
+while r_scan < num_rows_verify:
+    c_scan: int = 0
+    while c_scan < num_cols_verify:
+        if not t_b_last.rows[r_scan][c_scan].equals(t_c_last.rows[r_scan][c_scan]):
+            raise Exception("Discrepancy at row " + str(r_scan) + ", col " + str(c_scan))
+        c_scan = c_scan + 1
+    r_scan = r_scan + 1
+
+print("[Verification] Verified: All 100,000 rows and 7 columns are 100% identical between Control Group and Pipeline!")
 print("==========================================================================")
 print("Window Benchmark Completed Successfully!")

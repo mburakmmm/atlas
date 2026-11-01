@@ -3,7 +3,7 @@
 import errors
 from errors import ShapeError, ColumnNotFoundError, SchemaError, MissingValueError
 import values
-from values import Cell, cell_str, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_NULL
+from values import Cell, cell_str, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_NULL, checked_add_int64
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -465,12 +465,7 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
                             c = bucket[bi]
                             if not c.is_missing():
                                 v_i: int = c.as_int()
-                                # 64-bit signed integer overflow check
-                                if v_i > 0 and sum_i > 9223372036854775807 - v_i:
-                                    raise ShapeError("integer overflow in pivot_table(sum)")
-                                if v_i < 0 and sum_i < (-9223372036854775807 - 1) - v_i:
-                                    raise ShapeError("integer underflow in pivot_table(sum)")
-                                sum_i = sum_i + v_i
+                                sum_i = checked_add_int64(sum_i, v_i, "pivot_table(sum)")
                                 has_any = True
                             bi = bi + 1
                         if has_any:

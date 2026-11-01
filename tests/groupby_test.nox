@@ -2,9 +2,9 @@
 
 import nox.test
 import errors
-from errors import ColumnNotFoundError
+from errors import ColumnNotFoundError, ShapeError
 import values
-from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT
+from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_STR, TYPE_FLOAT, INT64_MAX
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -71,5 +71,31 @@ try:
 except ColumnNotFoundError:
     caught_err = True
 nox.test.assert_true(caught_err, "unknown group key raises ColumnNotFoundError")
+
+# 5. INT64 Overflow Protection in groupby.agg_sum
+s_gi: Schema = Schema([ColumnDef("group_key", TYPE_STR), ColumnDef("amount", TYPE_INT)])
+t_gi: Table = Table(s_gi, [
+    [cell_str("G1"), cell_int(100)],
+    [cell_str("G1"), cell_int(200)],
+    [cell_str("G2"), cell_int(500)]
+])
+g_int: GroupedTable = group_by(t_gi, ["group_key"])
+res_int_sum: Table = g_int.aggregate([agg_sum("amount", "total")])
+nox.test.assert_eq_int(res_int_sum.row_count(), 2, "2 groups")
+nox.test.assert_eq_int(res_int_sum.schema.columns[1].data_type, TYPE_INT, "sum of int column is TYPE_INT")
+nox.test.assert_eq_int(res_int_sum.cell(0, 1).as_int(), 300, "G1 sum is 300")
+nox.test.assert_eq_int(res_int_sum.cell(1, 1).as_int(), 500, "G2 sum is 500")
+
+t_gi_ov: Table = Table(s_gi, [
+    [cell_str("G1"), cell_int(INT64_MAX - 5)],
+    [cell_str("G1"), cell_int(10)]
+])
+g_int_ov: GroupedTable = group_by(t_gi_ov, ["group_key"])
+caught_grp_sum_ov: bool = False
+try:
+    g_int_ov.aggregate([agg_sum("amount", "total")])
+except ShapeError:
+    caught_grp_sum_ov = True
+nox.test.assert_true(caught_grp_sum_ov, "groupby.agg_sum on INT64 overflow raises ShapeError")
 
 print("groupby_test passed")

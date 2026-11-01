@@ -290,7 +290,7 @@ import atlas
 from atlas import WindowContext, row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
 
 # 1. High-Performance Chained Window Pipeline (WindowContext):
-# Partitions and sorts once, buffers columns lazily, and materializes rows in a single pass (3.17x faster than standalone calls):
+# Partitions and sorts once, buffers columns lazily, and materializes rows in a single pass (~2.89x median speedup across 10 iterations on 100,000 rows):
 ctx: WindowContext = table.window(partition_by=["dept"], order_by=["salary"], ascending=False)
 t_pipelined: Table = ctx \
     .with_row_number("row_nr") \
@@ -298,8 +298,13 @@ t_pipelined: Table = ctx \
     .with_dense_rank("salary", "dense_rank") \
     .with_lag("sales", "prev_sales", offset=1) \
     .with_cumulative_sum("sales", "cumsum_sales", null_policy="propagate") \
-    .with_moving_average("sales", window_size=5, output_col="mavg_sales") \
+    .with_moving_average("sales", 5, "mavg_sales") \
     .to_table()
+
+# Note on Independent Pipeline Contract (Option A):
+# Operations in a WindowContext pipeline evaluate independently against the base table columns.
+# Referencing a pending pipeline column before calling .to_table() raises SchemaError with guidance.
+# To chain dependent window calculations, call .to_table().window(...) explicitly.
 
 # Note on with_rank / with_dense_rank:
 # The order_col must match the WindowContext's order_by column (raises SortError on mismatch).

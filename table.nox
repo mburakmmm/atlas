@@ -3,7 +3,7 @@
 import errors
 from errors import ShapeError, ColumnNotFoundError, MissingValueError, SchemaError
 import values
-from values import Cell, cell_null
+from values import Cell, cell_null, TYPE_INT
 import schema
 from schema import Schema, ColumnDef
 import expr
@@ -11,7 +11,7 @@ from expr import Expr
 import sort
 from sort import sort_rows
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
 import join
 import window
 import reshape
@@ -316,7 +316,9 @@ class Table:
         return stat_variance(self.column_cells(col_name), is_sample)
 
     def sum_val(self: Table, col_name: str) -> float:
-
+        c_def: ColumnDef | None = self.schema.get_column_by_name(col_name)
+        if c_def is not None and c_def.data_type == TYPE_INT:
+            return float(stat_sum_int(self.column_cells(col_name), "table.sum_val"))
         return stat_sum(self.column_cells(col_name))
 
     def min_val(self: Table, col_name: str) -> Cell:

@@ -328,4 +328,101 @@ except SchemaError:
     caught_schema_col2 = True
 nox.test.assert_true(caught_schema_col2, "pipeline caught duplicate column within pipeline")
 
+# 18. Edge Case: Referencing Pending Pipeline Column raises SchemaError (Option A Contract)
+caught_pending_ref1: bool = False
+try:
+    t_pipe_data.window(order_by=["salary"]).with_row_number("rn").with_lag("rn", "prev_rn")
+except SchemaError:
+    caught_pending_ref1 = True
+nox.test.assert_true(caught_pending_ref1, "referencing pending column in with_lag raises SchemaError")
+
+caught_pending_ref2: bool = False
+try:
+    t_pipe_data.window(order_by=["salary"]).with_row_number("rn").with_lead("rn", "next_rn")
+except SchemaError:
+    caught_pending_ref2 = True
+nox.test.assert_true(caught_pending_ref2, "referencing pending column in with_lead raises SchemaError")
+
+caught_pending_ref3: bool = False
+try:
+    t_pipe_data.window(order_by=["salary"]).with_row_number("rn").with_cumulative_sum("rn", "c_rn")
+except SchemaError:
+    caught_pending_ref3 = True
+nox.test.assert_true(caught_pending_ref3, "referencing pending column in with_cumulative_sum raises SchemaError")
+
+caught_pending_ref4: bool = False
+try:
+    t_pipe_data.window(order_by=["salary"]).with_row_number("rn").with_moving_average("rn", 2, "m_rn")
+except SchemaError:
+    caught_pending_ref4 = True
+nox.test.assert_true(caught_pending_ref4, "referencing pending column in with_moving_average raises SchemaError")
+
+# 19. Edge Case: Large Diverse Differential Equivalence Test (1,000 rows with mixed types & nulls)
+s_lg: Schema = Schema([
+    ColumnDef("id", TYPE_INT),
+    ColumnDef("cat", TYPE_STR),
+    ColumnDef("val_i", TYPE_INT),
+    ColumnDef("val_f", TYPE_FLOAT)
+])
+rows_lg: list[list[Cell]] = []
+idx_lg: int = 0
+while idx_lg < 1000:
+    c_cat: str = "A"
+    if idx_lg % 5 == 1:
+        c_cat = "B"
+    elif idx_lg % 5 == 2:
+        c_cat = "C"
+    elif idx_lg % 5 == 3:
+        c_cat = "D"
+    elif idx_lg % 5 == 4:
+        c_cat = "E"
+
+    cell_i_v: Cell = cell_int((idx_lg * 17) % 500)
+    if idx_lg % 11 == 0:
+        cell_i_v = cell_null()
+
+    cell_f_v: Cell = cell_float(float((idx_lg * 23) % 700) * 0.5)
+    if idx_lg % 13 == 0:
+        cell_f_v = cell_null()
+
+    rows_lg.append([cell_int(idx_lg), cell_str(c_cat), cell_i_v, cell_f_v])
+    idx_lg = idx_lg + 1
+
+t_lg: Table = Table(s_lg, rows_lg)
+
+# Independent calls on 1,000 rows
+t_lg_indep: Table = t_lg.with_row_number("rn", partition_by=["cat"], order_by=["val_i"], ascending=True)
+t_lg_indep = t_lg_indep.with_rank("val_i", "rk", partition_by=["cat"], ascending=True)
+t_lg_indep = t_lg_indep.with_dense_rank("val_i", "drk", partition_by=["cat"], ascending=True)
+t_lg_indep = t_lg_indep.with_lag("val_i", "lag_i", 1, partition_by=["cat"], order_by=["val_i"], ascending=True, default_val=cell_int(-1))
+t_lg_indep = t_lg_indep.with_lead("val_f", "lead_f", 1, partition_by=["cat"], order_by=["val_i"], ascending=True, default_val=cell_float(-1.0))
+t_lg_indep = t_lg_indep.with_cumulative_sum("val_i", "cumsum_i", partition_by=["cat"], order_by=["val_i"], ascending=True)
+t_lg_indep = t_lg_indep.with_moving_average("val_f", 3, "mavg_f", partition_by=["cat"], order_by=["val_i"], ascending=True)
+
+# WindowContext pipeline on 1,000 rows
+ctx_lg: WindowContext = t_lg.window(partition_by=["cat"], order_by=["val_i"], ascending=True)
+ctx_lg = ctx_lg.with_row_number("rn")
+ctx_lg = ctx_lg.with_rank("val_i", "rk")
+ctx_lg = ctx_lg.with_dense_rank("val_i", "drk")
+ctx_lg = ctx_lg.with_lag("val_i", "lag_i", 1, default_val=cell_int(-1))
+ctx_lg = ctx_lg.with_lead("val_f", "lead_f", 1, default_val=cell_float(-1.0))
+ctx_lg = ctx_lg.with_cumulative_sum("val_i", "cumsum_i")
+ctx_lg = ctx_lg.with_moving_average("val_f", 3, "mavg_f")
+t_lg_pipe: Table = ctx_lg.to_table()
+
+nox.test.assert_eq_int(t_lg_pipe.row_count(), 1000, "1,000 rows in pipeline table")
+nox.test.assert_eq_int(t_lg_pipe.column_count(), 11, "11 columns in pipeline table")
+nox.test.assert_eq_int(t_lg_pipe.row_count(), t_lg_indep.row_count(), "large row count matches")
+nox.test.assert_eq_int(t_lg_pipe.column_count(), t_lg_indep.column_count(), "large col count matches")
+
+r_lg: int = 0
+while r_lg < 1000:
+    c_lg: int = 0
+    while c_lg < 11:
+        p_c: Cell = t_lg_pipe.rows[r_lg][c_lg]
+        i_c: Cell = t_lg_indep.rows[r_lg][c_lg]
+        nox.test.assert_true(p_c.equals(i_c), "cell match at row " + str(r_lg) + " col " + str(c_lg))
+        c_lg = c_lg + 1
+    r_lg = r_lg + 1
+
 print("window_edge_cases_test passed")

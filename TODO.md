@@ -26,6 +26,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.9.1** | **Window & Reshape Sınır Durumları, WindowContext Refactoring & Doğrulama** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.2** | **WindowContext Boru Hattı, Null Politikaları, INT64 Taşma Koruması & Benchmark** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.3** | **Sıralama Anahtarı Doğrulaması, Tembel Sütun Tamponlama, 3.17x Hızlanma & Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
+| **v0.9.4** | **Ortak Checked Arithmetic, Bağımsız Pipeline Sözleşmesi & Medyan Benchmark** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -529,6 +530,42 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - `pivot_table(sum)` int64 overflow testi (`ShapeError`).
 - [x] **Dokümantasyon & Sürüm**:
   - `nox.json` sürümü `0.9.3` yapıldı, `CHANGELOG.md`, `docs/capabilities.md`, `docs/api.md`, `README.md` güncellendi, `noxc test` (36 test paketi) geçildi, git commit/push ve `noxc publish`.
+
+---
+
+## 🚀 Sürüm 0.9.4 — Ortak Checked Arithmetic, Bağımsız Pipeline Sözleşmesi & Medyan Benchmark (Tamamlananlar)
+
+- [x] **Ortak INT64 Taşma Koruması ve Kontrol Aritmetiği (🔴 P1 - `values.nox`, `atlas.nox`)**:
+  - `checked_add_int64(a: int, b: int, context_msg: str = "") -> int` ortak yardımcı fonksiyonu ve `INT64_MAX` ($9223372036854775807$), `INT64_MIN` ($-9223372036854775807 - 1$) sınır sabitleri tanımlandı.
+  - Sınır aşımlarında sessiz bit taşması (wraparound) yerine açıklayıcı `ShapeError` üretilmesi sağlandı.
+  - Tüm tamsayı toplaması yapan modüller ortak `checked_add_int64` fonksiyonuna geçirildi:
+    1. `groupby.agg_sum`: Hedef sütun `TYPE_INT` ise integer toplamı hesaplıyor, taşmada `ShapeError` fırlatıyor ve `TYPE_INT` hücresi döndürüyor.
+    2. `streaming.StreamingCsvReader.sum`: `TYPE_INT` sütunlarında int64 taşma kontrolü sağlandı.
+    3. `streaming.SingleAggState` (Streaming GroupBy sum): `target_type == TYPE_INT` için `sum_val_i` üzerinden `checked_add_int64` çalıştırıldı.
+    4. `reshape.pivot_table(sum)`: Ortak `checked_add_int64` fonksiyonuna bağlandı.
+    5. `window.cumulative_sum`: Ortak `checked_add_int64` fonksiyonuna bağlandı.
+    6. `table.Table.sum_val` & `stats.stat_sum_int`: `TYPE_INT` sütunları için taşma korumalı hesaplama sağlandı.
+- [x] **WindowContext Bağımsız Pipeline Sözleşmesi & Açık Hata Denetimi (🟠 P2 - `window.nox`)**:
+  - GPT 6'nın önerdiği Seçenek A (Bağımsız Pencere Hesaplamaları) sözleşmesi benimsendi: Pipeline adımları yalnızca başlangıç tablosundaki sütunları girdi olarak kullanır.
+  - Henüz `.to_table()` ile somutlaştırılmamış bir sütun (`pending_names`) sonraki bir pencere işlemine girdi olarak verilirse, kafa karıştırıcı `ColumnNotFoundError` yerine kullanıcıya rehberlik eden net bir `SchemaError` ("cannot reference pending pipeline column '...': WindowContext pipeline operates independently on base table columns; call .to_table() first to chain dependent window calculations") fırlatılması sağlandı.
+  - `docs/api.md`, `docs/capabilities.md` ve docstring belgelerinde bu bağımsız pipeline sözleşmesi net biçimde dokümante edildi.
+- [x] **Bilimsel Kontrol Grubu Eşdeğerliği, 10 Tekrarlı Ölçüm & Medyan Raporlama (🟠 P2 - `benchmarks/benchmark_window.nox`)**:
+  - Senaryo B (kontrol grubu) ve Senaryo C (pipeline) parametreleri tam simetrik hale getirildi (`partition_by=["dept"]`, `order_by=["val"]`, `ascending=True`).
+  - Zamanlama gürültüsünü elemek için her iki senaryo 10 kez art arda çalıştırıldı; medyan, minimum ve maksimum süreler raporlandı (Kontrol Grubu medyan: 352 ms, Pipeline medyan: 122 ms, **~2.89x medyan hızlanma**).
+  - Benchmark sonunda Tablo B ile Tablo C 100.000 satır ve 7 sütun boyunca hücre hücre karşılaştırılarak %100 diferansiyel eşdeğerlik matematiksel olarak teyit edildi.
+- [x] **Kapsamlı Doğrulama ve Diferansiyel Test Paketi (P2/P3 - `tests/window_edge_cases_test.nox`, `tests/stats_test.nox`, `tests/groupby_test.nox`, `tests/streaming_edge_cases_test.nox`)**:
+  - `WindowContext` içinde `pending_names` referansında açıklayıcı `SchemaError` fırlatılması test edildi.
+  - Büyük ve karmaşık veri setinde (1.000 satır, departmanlar, stringler, sayılar, NULL değerler) bağımsız çağrılar ile pipeline arasındaki hücre hücre tam diferansiyel eşdeğerlik doğrulandı.
+  - `checked_add_int64` sınır testleri (`INT64_MAX + 1` overflow, `INT64_MIN - 1` underflow) eklendi.
+  - `groupby.agg_sum` tamsayı sütununda taşma olduğunda `ShapeError` testi eklendi.
+  - `StreamingCsvReader.sum` ve `StreamingGroupedTable` tamsayı toplamında taşma olduğunda `ShapeError` testi eklendi.
+  - `table.sum_val` tamsayı sütununda taşma olduğunda `ShapeError` testi eklendi.
+- [x] **Dokümantasyon & Sürüm 0.9.4**:
+  - `nox.json` sürümü `0.9.4` olarak güncellendi.
+  - `CHANGELOG.md`, `README.md`, `docs/capabilities.md`, `docs/api.md` güncellendi.
+  - `noxc test` ile 36 test paketinin tamamının başarıyla geçtiği doğrulandı.
+  - `benchmarks/benchmark_window.nox` çalıştırılıp medyan hızlanma ve diferansiyel doğrulama çıktısı alındı.
+  - Git commit, push ve `noxc publish` ile sürüm tamamlandı.
 
 ---
 

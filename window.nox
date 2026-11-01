@@ -3,7 +3,7 @@
 import errors
 from errors import ShapeError, ColumnNotFoundError, SchemaError, SortError
 import values
-from values import Cell, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT
+from values import Cell, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, checked_add_int64
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -244,6 +244,17 @@ class WindowContext:
                 raise SchemaError("column already exists in window pipeline: '" + output_col + "'")
             i = i + 1
 
+    def _resolve_target_col(self: WindowContext, col_name: str, purpose: str = "target column") -> int:
+        idx: int = self.base_table.schema.index_of(col_name)
+        if idx < 0:
+            i: int = 0
+            while i < len(self.pending_names):
+                if self.pending_names[i] == col_name:
+                    raise SchemaError("cannot reference pending pipeline column '" + col_name + "': WindowContext pipeline operates independently on base table columns; call .to_table() first to chain dependent window calculations")
+                i = i + 1
+            raise ColumnNotFoundError(purpose + " not found: '" + col_name + "'")
+        return idx
+
     def _add_pending_column(self: WindowContext, output_col: str, col_type: int, is_nullable: bool, cells: list[Cell]) -> None:
         self.pending_names.append(output_col)
         self.pending_types.append(col_type)
@@ -335,10 +346,7 @@ class WindowContext:
 
     def with_rank(self: WindowContext, order_col: str, output_col: str = "rank") -> WindowContext:
         self._check_output_col(output_col)
-
-        order_idx: int = self.base_table.schema.index_of(order_col)
-        if order_idx < 0:
-            raise ColumnNotFoundError("order_col not found: '" + order_col + "'")
+        order_idx: int = self._resolve_target_col(order_col, "order_col")
 
         if len(self.order_cols) == 0:
             raise SortError("cannot compute rank: WindowContext has no order_by column specified")
@@ -393,10 +401,7 @@ class WindowContext:
 
     def with_dense_rank(self: WindowContext, order_col: str, output_col: str = "dense_rank") -> WindowContext:
         self._check_output_col(output_col)
-
-        order_idx: int = self.base_table.schema.index_of(order_col)
-        if order_idx < 0:
-            raise ColumnNotFoundError("order_col not found: '" + order_col + "'")
+        order_idx: int = self._resolve_target_col(order_col, "order_col")
 
         if len(self.order_cols) == 0:
             raise SortError("cannot compute dense_rank: WindowContext has no order_by column specified")
@@ -454,9 +459,7 @@ class WindowContext:
         if offset < 1:
             raise ShapeError("lag offset must be >= 1")
 
-        target_idx: int = self.base_table.schema.index_of(target_col)
-        if target_idx < 0:
-            raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+        target_idx: int = self._resolve_target_col(target_col, "target_col")
 
         def_cell: Cell = cell_null()
         if default_val is not None:
@@ -497,9 +500,7 @@ class WindowContext:
         if offset < 1:
             raise ShapeError("lead offset must be >= 1")
 
-        target_idx: int = self.base_table.schema.index_of(target_col)
-        if target_idx < 0:
-            raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+        target_idx: int = self._resolve_target_col(target_col, "target_col")
 
         def_cell: Cell = cell_null()
         if default_val is not None:
@@ -538,10 +539,7 @@ class WindowContext:
     def with_cumulative_sum(self: WindowContext, target_col: str, output_col: str = "cumsum",
                             skip_null: bool = True, null_policy: str = "skip") -> WindowContext:
         self._check_output_col(output_col)
-
-        target_idx: int = self.base_table.schema.index_of(target_col)
-        if target_idx < 0:
-            raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+        target_idx: int = self._resolve_target_col(target_col, "target_col")
 
         target_type: int = self.base_table.schema.columns[target_idx].data_type
         if target_type != TYPE_INT and target_type != TYPE_FLOAT:
@@ -590,12 +588,7 @@ class WindowContext:
                             out_cells[orig_idx] = cell_null()
                         else:
                             v_int: int = c.as_int()
-                            # 64-bit signed integer overflow check
-                            if v_int > 0 and acc_int > 9223372036854775807 - v_int:
-                                raise ShapeError("integer overflow in cumulative_sum at row " + str(orig_idx))
-                            if v_int < 0 and acc_int < (-9223372036854775807 - 1) - v_int:
-                                raise ShapeError("integer overflow in cumulative_sum at row " + str(orig_idx))
-                            acc_int = acc_int + v_int
+                            acc_int = checked_add_int64(acc_int, v_int, "cumulative_sum at row " + str(orig_idx))
                             out_cells[orig_idx] = cell_int(acc_int)
                     i = i + 1
             else:
@@ -636,9 +629,7 @@ class WindowContext:
         if min_periods > window_size:
             raise ShapeError("min_periods (" + str(min_periods) + ") cannot exceed window_size (" + str(window_size) + ")")
 
-        target_idx: int = self.base_table.schema.index_of(target_col)
-        if target_idx < 0:
-            raise ColumnNotFoundError("target_col not found: '" + target_col + "'")
+        target_idx: int = self._resolve_target_col(target_col, "target_col")
 
         target_type: int = self.base_table.schema.columns[target_idx].data_type
         if target_type != TYPE_INT and target_type != TYPE_FLOAT:
