@@ -51,3 +51,26 @@ Audit performed against `noxc 2.0.86` on macOS (darwin).
   - *Parameter Validation*: `StreamingCsvReader` strictly validates `chunk_rows > 0`, `chunk_bytes > 0`, `max_record_bytes > 0`, and `len(delimiter) > 0` (raising `CsvImportError("delimiter cannot be empty")`).
 - Online Welford / Chan algorithm: Numerically stable running mean, variance, and standard deviation with $O(1)$ memory usage; raises `AggregationError` when observations are insufficient.
 - `try...finally`: Guaranteed file descriptor closure and resource cleanup.
+
+## 4. Streaming Transform Pipeline & Online GroupBy Engine
+
+Atlas v0.8.0 provides a fluent, chainable streaming query engine that processes arbitrary-sized CSV datasets with bounded memory:
+
+```text
+CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggregate Table
+```
+
+- **Chunk-Level Declarative Filtering (`filter`)**:
+  - Declarative AST expressions (`col_gt`, `col_eq`, `expr_and`, etc.) are evaluated directly on chunks as they are read.
+  - Non-matching rows are discarded immediately, preventing working-set accumulation.
+  - Automatically navigates consecutive non-matching chunks when filtering sparse datasets.
+- **Chunk-Level Column Projection (`select`)**:
+  - Drops unselected columns at the chunk boundary, dramatically compressing row memory width.
+- **Online Hash GroupBy Engine (`StreamingGroupedTable`)**:
+  - Bounded Memory: $O(G \times K + B + R \times S)$, where $G$ is the number of distinct groups, $K$ is key column count, $B$ is read chunk bytes, $R$ is rows per chunk, and $S$ is average row size.
+  - Instead of accumulating raw rows into memory buckets, maintains compact `SingleAggState` per unique group.
+  - Computes counts, non-missing counts, sums, online means, Welford variances/stddevs, and extrema simultaneously in a single pass.
+  - Complete collision bucket resolution with exact cell equality verification.
+- **Materialization & Direct Aggregation**:
+  - `.to_table()` drains filtered & selected stream rows into an in-memory typed `Table`.
+  - Direct metrics: `.count()`, `.sum(col)`, `.mean(col)`, `.variance(col)`, `.std(col)`.

@@ -234,3 +234,51 @@ opts = csv_options(delimiter=",", has_header=True, blank_is_missing=True, strict
 - **Streaming Memory Bound**: Bounded by $O(B + R \times S + L)$, where $B$ is `chunk_bytes`, $R$ is `chunk_rows`, $S$ is average row size, and $L \le \text{max\_record\_bytes}$ (default 10 MB in true UTF-8 bytes). Parsing pauses immediately upon accumulating $R$ rows.
 - **Schema Policy**: When `explicit_schema` is omitted, the schema is inferred from the first chunk's data rows. Subsequent rows are strictly validated against this schema (`ShapeError` on column count mismatch, `MissingValueError` on non-nullable nulls). Provide `explicit_schema` when types must be enforced upfront; explicit schemas are strictly preserved even when reading empty (0-byte) files.
 - **Validation**: Constructor validates that `chunk_rows > 0`, `chunk_bytes > 0`, `max_record_bytes > 0`, and `len(delimiter) > 0` (raises `CsvImportError("delimiter cannot be empty")`).
+
+## 10. Streaming Transform Pipeline & Online GroupBy Engine
+
+Atlas v0.8.0 provides a fluent, chainable streaming query engine that processes arbitrary-sized CSV datasets with bounded memory:
+
+```nox
+import atlas
+from atlas import open_csv_stream, col_gt_float, col_eq_str, agg_sum, agg_mean, agg_count, stream_group_by
+
+# 1. Fluent Transform Pipeline (Filter -> Select -> Online GroupBy -> Aggregate)
+result: Table = open_csv_stream("sales.csv") \
+    .filter(col_gt_float("amount", 100.0)) \
+    .select(["country", "amount"]) \
+    .group_by(["country"]) \
+    .aggregate([
+        agg_count("order_count"),
+        agg_sum("amount", "total_sales"),
+        agg_mean("amount", "avg_sales")
+    ])
+
+# 2. Single Aggregate Convenience
+total_by_country: Table = open_csv_stream("sales.csv") \
+    .group_by(["country"]) \
+    .agg(agg_sum("amount")) # Default output column: "sum_amount"
+
+# 3. Frequency Tables
+country_counts: Table = open_csv_stream("sales.csv") \
+    .group_by(["country"]) \
+    .count("num_records")
+
+# 4. Stream Materialization into In-Memory Table
+filtered_table: Table = open_csv_stream("sales.csv") \
+    .filter(col_eq_str("status", "completed")) \
+    .select(["id", "customer", "amount"]) \
+    .to_table()
+
+# 5. Direct Stream Aggregations with Active Filters
+us_order_count: int = open_csv_stream("sales.csv") \
+    .filter(col_eq_str("country", "US")) \
+    .count()
+
+us_total_amount: float = open_csv_stream("sales.csv") \
+    .filter(col_eq_str("country", "US")) \
+    .sum("amount")
+
+# 6. One-Line Functional GroupBy
+summary: Table = stream_group_by("sales.csv", ["region"], [agg_count(), agg_sum("sales")])
+```

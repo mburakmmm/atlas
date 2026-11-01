@@ -1,6 +1,6 @@
 {
   "name": "atlas",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "entry": "main.nox",
   "bin": { "name": "atlas", "path": "main.nox" },
   "requires": []

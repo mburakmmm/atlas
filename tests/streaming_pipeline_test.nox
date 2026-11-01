@@ -1,0 +1,309 @@
+# tests/streaming_pipeline_test.nox — Comprehensive verification for Atlas v0.8.0 streaming transform & online GroupBy pipeline.
+
+import nox.test
+import nox.fs
+import errors
+from errors import ColumnNotFoundError, AggregationError
+import values
+from values import Cell, cell_int, cell_float, cell_str
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import expr
+from expr import col_gt, col_gt_float, col_gt_int, col_eq, col_eq_str, col_eq_int, col_gte, col_in, expr_and
+import groupby
+from groupby import agg_count, agg_sum, agg_mean, agg_std, agg_variance, agg_min, agg_max, agg_count_non_missing
+import delimited
+from delimited import csv_options, CsvOptions
+import streaming
+from streaming import StreamingCsvReader, StreamingGroupedTable, open_csv_stream, stream_group_by
+
+def test_streaming_filter_and_select() -> None:
+    fpath: str = "temp_pipeline_filter_select.csv"
+    content: str = "id,name,country,amount\n"
+    content = content + "1,Alice,US,120.0\n"
+    content = content + "2,Bob,UK,80.0\n"
+    content = content + "3,Charlie,US,250.0\n"
+    content = content + "4,Dave,DE,45.0\n"
+    content = content + "5,Eve,US,310.0\n"
+    content = content + "6,Frank,UK,190.0\n"
+    nox.fs.write_string(fpath, content)
+
+    try:
+        # 1. Basic streaming filter: only amount > 100.0
+        stream1: StreamingCsvReader = open_csv_stream(fpath, 2)
+        t_filtered: Table = stream1.filter(col_gt_float("amount", 100.0)).to_table()
+        nox.test.assert_eq_int(t_filtered.row_count(), 4, "4 rows with amount > 100")
+        assert t_filtered.row(0)[0].as_int() == 1 # Alice
+        assert t_filtered.row(1)[0].as_int() == 3 # Charlie
+        assert t_filtered.row(2)[0].as_int() == 5 # Eve
+        assert t_filtered.row(3)[0].as_int() == 6 # Frank
+
+        # 2. Chained filter: amount > 100 AND country == "US"
+        stream2: StreamingCsvReader = open_csv_stream(fpath, 2)
+        t_chain: Table = stream2.filter(col_gt_float("amount", 100.0)).filter(col_eq_str("country", "US")).to_table()
+        nox.test.assert_eq_int(t_chain.row_count(), 3, "3 US rows with amount > 100")
+        assert t_chain.row(0)[1].as_str() == "Alice"
+        assert t_chain.row(1)[1].as_str() == "Charlie"
+        assert t_chain.row(2)[1].as_str() == "Eve"
+
+        # 3. Filter on a column NOT present in select projection
+        stream3: StreamingCsvReader = open_csv_stream(fpath, 2)
+        t_proj: Table = stream3.filter(col_gt_float("amount", 150.0)).select(["id", "name"]).to_table()
+        nox.test.assert_eq_int(t_proj.row_count(), 3, "3 rows with amount > 150")
+        nox.test.assert_eq_int(t_proj.column_count(), 2, "projected to 2 columns")
+        assert t_proj.schema.columns[0].name == "id"
+        assert t_proj.schema.columns[1].name == "name"
+        assert t_proj.row(0)[1].as_str() == "Charlie"
+        assert t_proj.row(1)[1].as_str() == "Eve"
+        assert t_proj.row(2)[1].as_str() == "Frank"
+
+        # 4. Select invalid column name raises ColumnNotFoundError
+        stream4: StreamingCsvReader = open_csv_stream(fpath, 2)
+        caught_col: bool = False
+        try:
+            stream4.select(["id", "non_existent_column"]).to_table()
+        except ColumnNotFoundError as e:
+            caught_col = True
+        assert caught_col
+
+    finally:
+        if nox.fs.exists(fpath):
+            nox.fs.remove_file(fpath)
+
+def test_streaming_direct_aggregations() -> None:
+    fpath: str = "temp_pipeline_aggregations.csv"
+    content: str = "dept,salary\n"
+    content = content + "Eng,1000.0\n"
+    content = content + "Eng,1500.0\n"
+    content = content + "Sales,800.0\n"
+    content = content + "Eng,2000.0\n"
+    content = content + "Sales,1200.0\n"
+    nox.fs.write_string(fpath, content)
+
+    try:
+        # Count on filtered stream
+        c_eng: int = open_csv_stream(fpath, 2).filter(col_eq_str("dept", "Eng")).count()
+        nox.test.assert_eq_int(c_eng, 3, "3 Eng rows")
+
+        # Sum on filtered stream
+        s_eng: float = open_csv_stream(fpath, 2).filter(col_eq_str("dept", "Eng")).sum("salary")
+        assert s_eng == 4500.0
+
+        # Mean on filtered stream
+        m_eng: float = open_csv_stream(fpath, 2).filter(col_eq_str("dept", "Eng")).mean("salary")
+        assert m_eng == 1500.0
+
+        # Variance on filtered stream
+        v_eng: float = open_csv_stream(fpath, 2).filter(col_eq_str("dept", "Eng")).variance("salary", True)
+        assert v_eng == 250000.0
+
+        # Std on filtered stream
+        std_eng: float = open_csv_stream(fpath, 2).filter(col_eq_str("dept", "Eng")).std("salary", True)
+        assert std_eng == 500.0
+
+    finally:
+        if nox.fs.exists(fpath):
+            nox.fs.remove_file(fpath)
+
+def test_streaming_online_group_by_single_key() -> None:
+    fpath: str = "temp_pipeline_groupby.csv"
+    content: str = "region,sales\n"
+    content = content + "North,100.0\n"
+    content = content + "South,200.0\n"
+    content = content + "North,300.0\n"
+    content = content + "West,50.0\n"
+    content = content + "South,400.0\n"
+    content = content + "North,200.0\n"
+    nox.fs.write_string(fpath, content)
+
+    try:
+        # 1. GroupBy with multi-aggregations via stream_group_by
+        # Chunk rows = 2 forces multiple chunks and tests cross-chunk online state updates!
+        res: Table = open_csv_stream(fpath, 2).group_by(["region"]).aggregate([
+            agg_count("num_orders"),
+            agg_sum("sales", "total_sales"),
+            agg_mean("sales", "avg_sales"),
+            agg_min("sales", "min_sale"),
+            agg_max("sales", "max_sale")
+        ])
+
+        nox.test.assert_eq_int(res.row_count(), 3, "3 unique regions")
+        nox.test.assert_eq_int(res.column_count(), 6, "1 key + 5 aggregates")
+        assert res.schema.columns[0].name == "region"
+        assert res.schema.columns[1].name == "num_orders"
+        assert res.schema.columns[2].name == "total_sales"
+        assert res.schema.columns[3].name == "avg_sales"
+        assert res.schema.columns[4].name == "min_sale"
+        assert res.schema.columns[5].name == "max_sale"
+
+        # Row 0: North (3 orders, total 600.0, avg 200.0, min 100.0, max 300.0)
+        r0: list[Cell] = res.row(0)
+        assert r0[0].as_str() == "North"
+        assert r0[1].as_int() == 3
+        assert r0[2].as_float() == 600.0
+        assert r0[3].as_float() == 200.0
+        assert r0[4].as_float() == 100.0
+        assert r0[5].as_float() == 300.0
+
+        # Row 1: South (2 orders, total 600.0, avg 300.0, min 200.0, max 400.0)
+        r1: list[Cell] = res.row(1)
+        assert r1[0].as_str() == "South"
+        assert r1[1].as_int() == 2
+        assert r1[2].as_float() == 600.0
+        assert r1[3].as_float() == 300.0
+        assert r1[4].as_float() == 200.0
+        assert r1[5].as_float() == 400.0
+
+        # Row 2: West (1 order, total 50.0, avg 50.0, min 50.0, max 50.0)
+        r2: list[Cell] = res.row(2)
+        assert r2[0].as_str() == "West"
+        assert r2[1].as_int() == 1
+        assert r2[2].as_float() == 50.0
+        assert r2[3].as_float() == 50.0
+        assert r2[4].as_float() == 50.0
+        assert r2[5].as_float() == 50.0
+
+        # 2. Test single aggregate convenience: .agg(agg_sum("sales"))
+        res_single: Table = open_csv_stream(fpath, 2).group_by(["region"]).agg(agg_sum("sales"))
+        nox.test.assert_eq_int(res_single.row_count(), 3, "3 regions")
+        assert res_single.schema.columns[1].name == "sum_sales"
+        assert res_single.row(0)[1].as_float() == 600.0
+
+        # 3. Test count convenience: .count("order_count")
+        res_cnt: Table = open_csv_stream(fpath, 2).group_by(["region"]).count("order_count")
+        nox.test.assert_eq_int(res_cnt.row_count(), 3, "3 regions")
+        assert res_cnt.schema.columns[1].name == "order_count"
+        assert res_cnt.row(0)[1].as_int() == 3
+
+    finally:
+        if nox.fs.exists(fpath):
+            nox.fs.remove_file(fpath)
+
+def test_streaming_pipeline_full_chain() -> None:
+    # Full end-to-end chain: open -> filter -> select -> group_by -> aggregate
+    fpath: str = "temp_pipeline_chain.csv"
+    content: str = "dept,emp_id,status,score\n"
+    content = content + "HR,1,active,80.0\n"
+    content = content + "Eng,2,active,95.0\n"
+    content = content + "Eng,3,inactive,60.0\n"
+    content = content + "Eng,4,active,90.0\n"
+    content = content + "Sales,5,active,75.0\n"
+    content = content + "HR,6,inactive,50.0\n"
+    content = content + "Eng,7,active,85.0\n"
+    nox.fs.write_string(fpath, content)
+
+    try:
+        # Pipeline: filter status == "active" -> select ["dept", "score"] -> group_by ["dept"] -> agg_mean
+        result: Table = open_csv_stream(fpath, 2) \
+            .filter(col_eq_str("status", "active")) \
+            .select(["dept", "score"]) \
+            .group_by(["dept"]) \
+            .agg(agg_mean("score", "avg_active_score"))
+
+        nox.test.assert_eq_int(result.row_count(), 3, "3 departments with active employees")
+        assert result.schema.columns[0].name == "dept"
+        assert result.schema.columns[1].name == "avg_active_score"
+
+        # Check values: HR has 1 active (80.0), Eng has 3 active (95, 90, 85 -> avg 90.0), Sales has 1 active (75.0)
+        assert result.row(0)[0].as_str() == "HR"
+        assert result.row(0)[1].as_float() == 80.0
+
+        assert result.row(1)[0].as_str() == "Eng"
+        assert result.row(1)[1].as_float() == 90.0
+
+        assert result.row(2)[0].as_str() == "Sales"
+        assert result.row(2)[1].as_float() == 75.0
+
+    finally:
+        if nox.fs.exists(fpath):
+            nox.fs.remove_file(fpath)
+
+def test_streaming_composite_keys_and_variance() -> None:
+    fpath: str = "temp_pipeline_composite.csv"
+    content: str = "city,dept,salary\n"
+    content = content + "Istanbul,Eng,1000.0\n"
+    content = content + "Ankara,Eng,1200.0\n"
+    content = content + "Istanbul,Sales,800.0\n"
+    content = content + "Istanbul,Eng,1500.0\n"
+    content = content + "Ankara,Eng,1600.0\n"
+    content = content + "Istanbul,Eng,2000.0\n"
+    nox.fs.write_string(fpath, content)
+
+    try:
+        res: Table = open_csv_stream(fpath, 2).group_by(["city", "dept"]).aggregate([
+            agg_count("cnt"),
+            agg_variance("salary", "var_sal", True),
+            agg_std("salary", "std_sal", True)
+        ])
+
+        # Unique groups:
+        # (Istanbul, Eng): [1000, 1500, 2000] -> n=3, mean=1500, var=250000, std=500
+        # (Ankara, Eng): [1200, 1600] -> n=2, mean=1400, var=80000, std=282.8427
+        # (Istanbul, Sales): [800] -> n=1, sample var=null, sample std=null
+        nox.test.assert_eq_int(res.row_count(), 3, "3 composite groups")
+
+        r0: list[Cell] = res.row(0)
+        assert r0[0].as_str() == "Istanbul"
+        assert r0[1].as_str() == "Eng"
+        assert r0[2].as_int() == 3
+        assert r0[3].as_float() == 250000.0
+        assert r0[4].as_float() == 500.0
+
+        r1: list[Cell] = res.row(1)
+        assert r1[0].as_str() == "Ankara"
+        assert r1[1].as_str() == "Eng"
+        assert r1[2].as_int() == 2
+        assert r1[3].as_float() == 80000.0
+
+        r2: list[Cell] = res.row(2)
+        assert r2[0].as_str() == "Istanbul"
+        assert r2[1].as_str() == "Sales"
+        assert r2[2].as_int() == 1
+        assert r2[3].is_missing() # sample variance with n=1 is null!
+        assert r2[4].is_missing() # sample std with n=1 is null!
+
+    finally:
+        if nox.fs.exists(fpath):
+            nox.fs.remove_file(fpath)
+
+def test_streaming_sparse_filters() -> None:
+    # 20 rows where only row 15 matches the filter
+    fpath: str = "temp_pipeline_sparse.csv"
+    content: str = "id,val\n"
+    i: int = 1
+    while i <= 20:
+        val: int = 10
+        if i == 15:
+            val = 999
+        content = content + str(i) + "," + str(val) + "\n"
+        i = i + 1
+    nox.fs.write_string(fpath, content)
+
+    try:
+        # chunk_rows = 2 forces reader to traverse 7 consecutive empty filtered chunks before hitting row 15
+        stream: StreamingCsvReader = open_csv_stream(fpath, 2).filter(col_eq_int("val", 999))
+        t: Table = stream.to_table()
+        nox.test.assert_eq_int(t.row_count(), 1, "exactly 1 matching row found across sparse chunks")
+        assert t.row(0)[0].as_int() == 15
+        assert t.row(0)[1].as_int() == 999
+
+        # Filter matching zero rows across all chunks returns empty table with schema
+        stream_empty: StreamingCsvReader = open_csv_stream(fpath, 2).filter(col_eq_int("val", 999999))
+        t_empty: Table = stream_empty.to_table()
+        nox.test.assert_eq_int(t_empty.row_count(), 0, "0 rows matched")
+        nox.test.assert_eq_int(t_empty.column_count(), 2, "schema preserved")
+
+    finally:
+        if nox.fs.exists(fpath):
+            nox.fs.remove_file(fpath)
+
+test_streaming_filter_and_select()
+test_streaming_direct_aggregations()
+test_streaming_online_group_by_single_key()
+test_streaming_pipeline_full_chain()
+test_streaming_composite_keys_and_variance()
+test_streaming_sparse_filters()
+
+print("streaming_pipeline_test passed")

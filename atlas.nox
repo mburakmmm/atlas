@@ -52,7 +52,7 @@ import key_encoding
 from key_encoding import cell_hash_key, composite_hash_key
 
 import streaming
-from streaming import StreamingCsvReader, open_csv_stream, stream_count, stream_sum, stream_mean, stream_variance, stream_std
+from streaming import StreamingCsvReader, StreamingGroupedTable, open_csv_stream, stream_count, stream_sum, stream_mean, stream_variance, stream_std, stream_group_by
 
 # Convenience functional statistics API matching AGENTS.md:
 def col_mean(t: Table, col_name: str) -> float:

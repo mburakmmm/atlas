@@ -21,7 +21,8 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.7.2** | **Çok Karakterli Delimiter, UTF-8 Bayt Sınırları, Bounded Memory & Diferansiyel Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v0.7.3** | **Çok Karakterli Delimiter Bayt Sayımı, EOF Sınırları & Property-Based Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
 | **v0.7.4** | **Boş Delimiter Validasyonu, Boş Dosya Şema Koruması & LCG Diferansiyel Testleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 31/31 Test Geçti (`noxc test`) |
-| **v0.8.0** | **Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline)** | ⏳ **PLANLANDI (Sonraki Büyük Faz)** | — |
+| **v0.8.0** | **Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline)** | ✅ **TAMAMLANDI & YAYINLANDI** | 32/32 Test Geçti (`noxc test`) |
+| **v0.9.0** | **İleri Seviye Tablo İşlemleri (Window Functions, Pivot & Reshaping)** | ⏳ **PLANLANDI (Sonraki Büyük Faz)** | — |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -390,17 +391,40 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
-## 🚀 Sürüm 0.8.0 — Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline) (Planlandı)
+## 🚀 Sürüm 0.8.0 — Bellek Dostu Akış Dönüşümleri (Streaming Filter, Select & Online GroupBy Pipeline) (Tamamlananlar)
 
-- [ ] **Akış Tabanlı Filtreleme (`Stream.filter`)**:
-  - Tüm dosyayı belleğe almadan, chunk düzeyinde deklaratif AST filtreleri (`col_eq`, `col_gt` vb.) işleten `StreamingTable` / `StreamTransform` boru hattı.
-- [ ] **Akış Tabanlı Sütun İzdüşümü (`Stream.select`)**:
-  - İstenmeyen sütunları chunk seviyesinde eleyerek bellek ayak izini minimumda tutma.
-- [ ] **Çevrimiçi / Bellek Dostu Akış Gruplama (`Streaming GroupBy`)**:
-  - Milyonlarca satırı bellekte tutmak yerine grup durumlarını (`GroupState`: count, sum, mean, m2, min, max) güncelleyen sabit-durumlu hash tablosu altyapısı.
-  - Bellek karmaşıklığının toplam satır sayısından $O(N)$ bağımsız, yalnızca tekil grup sayısına $O(G)$ bağlı hâle getirilmesi.
-- [ ] **Zincirlenebilir Akış Boru Hattı API'si**:
-  - `open_csv_stream("sales.csv").filter(...).select([...]).group_by([...]).aggregate(...) -> Table` ergonomisi.
+- [x] **Akış Tabanlı Filtreleme (`StreamingCsvReader.filter`)**:
+  - `streaming.nox`: `filter(self: StreamingCsvReader, predicate: Expr) -> StreamingCsvReader` metodu eklendi.
+  - Tüm dosyayı belleğe almadan, chunk düzeyinde deklaratif AST filtreleri (`col_gt`, `col_eq`, `expr_and` vb.) işletilir; eşleşmeyen satırlar anında atılır.
+  - Seyrek eşleşmelerde (arka arkaya boş filtrelenmiş chunk'lar) akış motoru hedef satırları bulana veya EOF'a ulaşana kadar ardışık okumayı otomatik sürdürür.
+- [x] **Akış Tabanlı Sütun İzdüşümü (`StreamingCsvReader.select`)**:
+  - `streaming.nox`: `select(self: StreamingCsvReader, col_names: list[str]) -> StreamingCsvReader` metodu eklendi.
+  - İstenmeyen sütunları chunk seviyesinde eleyerek bellek ayak izini minimuma indirir. Sütun sıralamasını korur ve bilinmeyen sütun isimlerinde `ColumnNotFoundError` fırlatır.
+- [x] **Çevrimiçi / Bellek Dostu Akış Gruplama (`StreamingGroupedTable`)**:
+  - `streaming.nox`: Milyonlarca satırı bellekte tutmak yerine grup durumlarını (`SingleAggState`: count, count_non_missing, sum, mean, m2, min, max) güncelleyen sabit-durumlu hash tablosu motoru geliştirildi.
+  - Bellek karmaşıklığı toplam satır sayısından $O(N)$ tamamen bağımsız, yalnızca tekil grup sayısına $O(G \times K + B + R \times S)$ bağlıdır ($G$: tekil grup sayısı, $K$: anahtar sütun sayısı).
+  - Welford çevrimiçi algoritması ile varyans ve standart sapma tek geçişte sayısal kararlılıkla hesaplanır.
+  - Çok sütunlu bileşik anahtarlar (`composite_hash_key`) ve çakışma kovaları (`collision buckets`) ile %100 hash çakışma güvenliği sağlandı.
+- [x] **Zincirlenebilir Akış Boru Hattı & Kolaylık API'si**:
+  - `open_csv_stream("sales.csv").filter(...).select([...]).group_by([...]).aggregate(...) -> Table` akıcı API ergonomisi.
+  - Tekil agregasyon için `.agg(agg_def)` ve frekans tablosu için `.count(output_col)`.
+  - Akıştan doğrudan tablo üretimi için `.to_table() -> Table` (filtreli ve projeksiyonlu).
+  - Akış üzerinde doğrudan çevrimiçi metrikler: `.count()`, `.sum(col)`, `.mean(col)`, `.variance(col)`, `.std(col)`.
+  - Tek satırda fonksiyonel gruplama: `stream_group_by(path, keys, aggs, options)`.
+  - `groupby.nox`: Tüm `agg_*` fonksiyonlarına varsayılan sütun adı desteği (`agg_sum("amount")` -> `"sum_amount"`).
+- [x] **Kapsamlı Test Paketi (`tests/streaming_pipeline_test.nox`)**:
+  - Filtre, projeksiyon, zincirleme, doğrudan istatistikler, tekli/bileşik anahtarlı online GroupBy ve seyrek filtreleme test edildi. 32 test paketinin tamamı `noxc test` ile geçti.
+
+---
+
+## 🛠️ Sürüm 0.9.0 — İleri Seviye Tablo İşlemleri (Window Functions, Pivot & Reshaping) (Planlandı)
+
+- [ ] **Pencere Fonksiyonları (Window Functions)**:
+  - `row_number()`, `rank()`, `dense_rank()`, `lag()`, `lead()`, `cumulative_sum()`, `moving_average()`.
+- [ ] **Tablo Yeniden Şekillendirme (Reshaping)**:
+  - `pivot_table()`, `melt()`, `unstack()`.
+- [ ] **Gelişmiş Çoklu Join**:
+  - Full outer join ve cross join yetenekleri.
 
 ---
 

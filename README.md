@@ -5,14 +5,16 @@
 Inspired by Pandas but crafted natively for the **Nox** static type system, Atlas avoids bloated dependencies and delivers native $C$-like performance on medium-sized datasets.
 
 [![Nox Compiler](https://img.shields.io/badge/noxc-2.0.86-blue.svg)](https://github.com/mburakmmm/nox-lang)
+[![Version](https://img.shields.io/badge/version-v0.8.0-orange.svg)](nox.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-22%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-32%20passed-success.svg)](tests/)
 
 ---
 
 ## Features
 
-- 📑 **RFC 4180 CSV & TSV I/O**: Robust parsing of commas, tabs, semicolons, and custom delimiters with automatic schema inference.
+- 🌊 **Streaming Transform & Online GroupBy Pipeline**: Fluent, low-memory query engine (`open_csv_stream.filter(...).select([...]).group_by([...]).aggregate(...)`) processing multi-million row datasets in strictly bounded memory ($O(G \times K + B + R \times S)$).
+- 📑 **RFC 4180 CSV, TSV & Custom Delimiters**: Robust parsing of commas, tabs, semicolons, and multi-character delimiters (`||`, `::`) with streaming state machines and automatic schema inference.
 - ⚡ **O(N + M) Hash Join**: Blazing fast inner and left-outer joins (`join_inner`, `join_left`) with hash indexing and null key isolation.
 - ⚡ **O(N) Hash GroupBy**: High-cardinality aggregation engine indexing tens of thousands of unique groups in single-digit milliseconds.
 - 🗄️ **Relational SQL & Feather Bridge**: Generate SQLite/PostgreSQL DDL schemas (`table_to_create_table_sql`), safe quoted identifiers (`quote_identifier`), and parameterized INSERT statements (`table_to_insert_sql`).
@@ -79,6 +81,18 @@ summary: Table = grouped.aggregate([
 ])
 
 summary.print_preview()
+
+# Low-Memory Streaming Pipeline (v0.8.0)
+stream_result: Table = open_csv_stream("data/sales.csv") \
+    .filter(col_gt_float("salary", 50000.0)) \
+    .select(["department", "salary"]) \
+    .group_by(["department"]) \
+    .aggregate([
+        agg_sum("salary", "total_payroll"),
+        agg_mean("salary", "avg_salary")
+    ])
+
+stream_result.print_preview()
 ```
 
 ---

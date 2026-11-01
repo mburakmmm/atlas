@@ -17,6 +17,296 @@ import delimited
 from delimited import CsvOptions, csv_options, parse_delimited
 import csv_adapter
 from csv_adapter import infer_schema
+import expr
+from expr import Expr
+import groupby
+from groupby import AggregateDef, AGG_COUNT, AGG_SUM, AGG_MEAN, AGG_MEDIAN, AGG_STD, AGG_VARIANCE, AGG_MIN, AGG_MAX, AGG_COUNT_NON_MISSING, agg_count
+import key_encoding
+from key_encoding import composite_hash_key
+
+class SingleAggState:
+    agg_type: int
+    target_idx: int
+    count: int
+    count_non_missing: int
+    sum_val: float
+    mean_val: float
+    m2_val: float
+    min_cell: Cell
+    max_cell: Cell
+    has_val: bool
+    is_sample: bool
+
+    def __init__(self: SingleAggState, agg_type: int, target_idx: int, is_sample: bool = True) -> None:
+        self.agg_type = agg_type
+        self.target_idx = target_idx
+        self.count = 0
+        self.count_non_missing = 0
+        self.sum_val = 0.0
+        self.mean_val = 0.0
+        self.m2_val = 0.0
+        self.min_cell = cell_null()
+        self.max_cell = cell_null()
+        self.has_val = False
+        self.is_sample = is_sample
+
+    def update(self: SingleAggState, row: list[Cell]) -> None:
+        if self.agg_type == AGG_COUNT:
+            self.count = self.count + 1
+            return
+
+        c: Cell = row[self.target_idx]
+        if c.is_missing():
+            return
+
+        self.count_non_missing = self.count_non_missing + 1
+
+        if self.agg_type == AGG_COUNT_NON_MISSING:
+            return
+
+        if self.agg_type == AGG_SUM:
+            self.sum_val = self.sum_val + c.as_float()
+        elif self.agg_type == AGG_MEAN or self.agg_type == AGG_VARIANCE or self.agg_type == AGG_STD:
+            x: float = c.as_float()
+            delta: float = x - self.mean_val
+            self.mean_val = self.mean_val + delta / float(self.count_non_missing)
+            delta2: float = x - self.mean_val
+            self.m2_val = self.m2_val + delta * delta2
+        elif self.agg_type == AGG_MIN:
+            if not self.has_val:
+                self.min_cell = c
+                self.has_val = True
+            elif c.compare(self.min_cell) < 0:
+                self.min_cell = c
+        elif self.agg_type == AGG_MAX:
+            if not self.has_val:
+                self.max_cell = c
+                self.has_val = True
+            elif c.compare(self.max_cell) > 0:
+                self.max_cell = c
+        elif self.agg_type == AGG_MEDIAN:
+            raise AggregationError("exact median is not supported in streaming online aggregation; use offline table.group_by() or reservoir aggregation")
+        else:
+            raise AggregationError("unknown aggregation type: " + str(self.agg_type))
+
+    def result_cell(self: SingleAggState) -> Cell:
+        if self.agg_type == AGG_COUNT:
+            return cell_int(self.count)
+        if self.agg_type == AGG_COUNT_NON_MISSING:
+            return cell_int(self.count_non_missing)
+        if self.agg_type == AGG_SUM:
+            return cell_float(self.sum_val)
+        if self.count_non_missing == 0:
+            return cell_null()
+
+        if self.agg_type == AGG_MEAN:
+            return cell_float(self.mean_val)
+        if self.agg_type == AGG_VARIANCE:
+            if self.is_sample:
+                if self.count_non_missing < 2:
+                    return cell_null()
+                return cell_float(self.m2_val / float(self.count_non_missing - 1))
+            return cell_float(self.m2_val / float(self.count_non_missing))
+        if self.agg_type == AGG_STD:
+            v: float = 0.0
+            if self.is_sample:
+                if self.count_non_missing < 2:
+                    return cell_null()
+                v = self.m2_val / float(self.count_non_missing - 1)
+            else:
+                v = self.m2_val / float(self.count_non_missing)
+            if v < 0.0:
+                v = 0.0
+            return cell_float(nox.mathx.sqrt(v))
+        if self.agg_type == AGG_MIN:
+            return self.min_cell
+        if self.agg_type == AGG_MAX:
+            return self.max_cell
+        return cell_null()
+
+class StreamingGroupedTable:
+    stream: StreamingCsvReader
+    keys: list[str]
+
+    def __init__(self: StreamingGroupedTable, stream: StreamingCsvReader, keys: list[str]) -> None:
+        if len(keys) == 0:
+            raise ColumnNotFoundError("group_by requires at least one key column")
+        self.stream = stream
+        self.keys = keys
+
+    def agg(self: StreamingGroupedTable, aggregate_def: AggregateDef) -> Table:
+        aggs: list[AggregateDef] = []
+        aggs.append(aggregate_def)
+        return self.aggregate(aggs)
+
+    def count(self: StreamingGroupedTable, output_col: str = "count") -> Table:
+        aggs: list[AggregateDef] = []
+        aggs.append(agg_count(output_col))
+        return self.aggregate(aggs)
+
+    def aggregate(self: StreamingGroupedTable, aggs: list[AggregateDef]) -> Table:
+        if len(aggs) == 0:
+            raise AggregationError("aggregate requires at least one aggregate definition")
+
+        group_map: dict[str, list[int]] = {}
+        group_keys: list[list[Cell]] = []
+        group_states: list[list[SingleAggState]] = []
+
+        key_indices: list[int] = []
+        target_indices: list[int] = []
+        source_schema: Schema = Schema([])
+        initialized_schema: bool = False
+
+        num_keys: int = len(self.keys)
+        num_aggs: int = len(aggs)
+
+        try:
+            while self.stream.has_next():
+                chunk_tbl: Table = self.stream.next_chunk()
+
+                if not initialized_schema and chunk_tbl.schema.column_count() > 0:
+                    source_schema = chunk_tbl.schema
+                    ki: int = 0
+                    while ki < num_keys:
+                        k_name: str = self.keys[ki]
+                        k_idx: int = source_schema.index_of(k_name)
+                        if k_idx < 0:
+                            raise ColumnNotFoundError("group key column not found: '" + k_name + "'")
+                        key_indices.append(k_idx)
+                        ki = ki + 1
+
+                    ai: int = 0
+                    while ai < num_aggs:
+                        ad: AggregateDef = aggs[ai]
+                        if ad.agg_type == AGG_COUNT:
+                            target_indices.append(-1)
+                        else:
+                            t_idx: int = source_schema.index_of(ad.target_col)
+                            if t_idx < 0:
+                                raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                            target_indices.append(t_idx)
+                        ai = ai + 1
+
+                    initialized_schema = True
+
+                if chunk_tbl.row_count() == 0:
+                    continue
+
+                ri: int = 0
+                nr: int = chunk_tbl.row_count()
+                while ri < nr:
+                    row: list[Cell] = chunk_tbl.row(ri)
+
+                    k_tuple: list[Cell] = []
+                    ki = 0
+                    while ki < num_keys:
+                        k_tuple.append(row[key_indices[ki]])
+                        ki = ki + 1
+
+                    h_key: str = composite_hash_key(k_tuple)
+                    matched_idx: int = -1
+
+                    if h_key in group_map:
+                        candidate_indices: list[int] = group_map[h_key]
+                        cand_scan: int = 0
+                        num_cands: int = len(candidate_indices)
+                        while cand_scan < num_cands and matched_idx < 0:
+                            g_candidate_idx: int = candidate_indices[cand_scan]
+                            candidate_cells: list[Cell] = group_keys[g_candidate_idx]
+                            all_match: bool = True
+                            c_check: int = 0
+                            while c_check < num_keys and all_match:
+                                if not candidate_cells[c_check].equals(k_tuple[c_check]):
+                                    all_match = False
+                                c_check = c_check + 1
+                            if all_match:
+                                matched_idx = g_candidate_idx
+                            cand_scan = cand_scan + 1
+
+                        if matched_idx >= 0:
+                            cur_states: list[SingleAggState] = group_states[matched_idx]
+                            ai = 0
+                            while ai < num_aggs:
+                                cur_states[ai].update(row)
+                                ai = ai + 1
+                        else:
+                            new_idx: int = len(group_keys)
+                            group_keys.append(k_tuple)
+                            new_states: list[SingleAggState] = []
+                            ai = 0
+                            while ai < num_aggs:
+                                st: SingleAggState = SingleAggState(aggs[ai].agg_type, target_indices[ai], aggs[ai].is_sample)
+                                st.update(row)
+                                new_states.append(st)
+                                ai = ai + 1
+                            group_states.append(new_states)
+                            candidate_indices.append(new_idx)
+                            group_map[h_key] = candidate_indices
+                    else:
+                        new_idx = len(group_keys)
+                        group_keys.append(k_tuple)
+                        new_states = []
+                        ai = 0
+                        while ai < num_aggs:
+                            st = SingleAggState(aggs[ai].agg_type, target_indices[ai], aggs[ai].is_sample)
+                            st.update(row)
+                            new_states.append(st)
+                            ai = ai + 1
+                        group_states.append(new_states)
+                        new_cands: list[int] = []
+                        new_cands.append(new_idx)
+                        group_map[h_key] = new_cands
+
+                    ri = ri + 1
+        finally:
+            self.stream.close()
+
+        # Build output schema: key columns + aggregation output columns
+        out_cols: list[ColumnDef] = []
+        ki = 0
+        while ki < num_keys:
+            if initialized_schema:
+                out_cols.append(source_schema.columns[key_indices[ki]].copy())
+            else:
+                out_cols.append(ColumnDef(self.keys[ki], TYPE_STR, True))
+            ki = ki + 1
+
+        ai = 0
+        while ai < num_aggs:
+            ad = aggs[ai]
+            out_type: int = TYPE_FLOAT
+            if ad.agg_type == AGG_COUNT or ad.agg_type == AGG_COUNT_NON_MISSING:
+                out_type = TYPE_INT
+            elif ad.agg_type == AGG_MIN or ad.agg_type == AGG_MAX:
+                if initialized_schema and target_indices[ai] >= 0:
+                    out_type = source_schema.columns[target_indices[ai]].data_type
+            out_cols.append(ColumnDef(ad.output_col, out_type, True))
+            ai = ai + 1
+
+        out_schema: Schema = Schema(out_cols)
+        out_rows: list[list[Cell]] = []
+
+        g_idx: int = 0
+        num_groups: int = len(group_keys)
+        while g_idx < num_groups:
+            k_cells: list[Cell] = group_keys[g_idx]
+            cur_states: list[SingleAggState] = group_states[g_idx]
+
+            out_r: list[Cell] = []
+            ki = 0
+            while ki < num_keys:
+                out_r.append(k_cells[ki])
+                ki = ki + 1
+
+            ai = 0
+            while ai < num_aggs:
+                out_r.append(cur_states[ai].result_cell())
+                ai = ai + 1
+
+            out_rows.append(out_r)
+            g_idx = g_idx + 1
+
+        return Table(out_schema, out_rows)
 
 class StreamingCsvReader:
     path: str
@@ -41,6 +331,10 @@ class StreamingCsvReader:
     pending_cr: bool
     pending_quote: bool
     cur_record_bytes: int
+
+    # Stream transformation pipeline state
+    filter_exprs: list[Expr]
+    select_cols: list[str]
 
     def __init__(self: StreamingCsvReader, path: str, options: CsvOptions | None = None, explicit_schema: Schema | None = None, chunk_rows: int = 1000, chunk_bytes: int = 65536) -> None:
         if chunk_rows <= 0 or chunk_bytes <= 0:
@@ -81,6 +375,10 @@ class StreamingCsvReader:
         self.pending_cr = False
         self.pending_quote = False
         self.cur_record_bytes = 0
+
+        # Initialize stream transformation state
+        self.filter_exprs = []
+        self.select_cols = []
 
         if not nox.fs.exists(path):
             raise AtlasError("file not found: '" + path + "'")
@@ -308,7 +606,7 @@ class StreamingCsvReader:
             self.after_quote = False
             self.cur_record_bytes = 0
 
-    def next_chunk(self: StreamingCsvReader) -> Table:
+    def read_raw_chunk(self: StreamingCsvReader) -> Table:
         if self.closed or (not self.has_more and len(self.pending_rows) == 0):
             raise AtlasError("no more chunks in stream: '" + self.path + "'")
 
@@ -425,122 +723,209 @@ class StreamingCsvReader:
 
         return Table(sch, typed_rows)
 
+    def filter(self: StreamingCsvReader, predicate: Expr) -> StreamingCsvReader:
+        self.filter_exprs.append(predicate)
+        return self
+
+    def select(self: StreamingCsvReader, col_names: list[str]) -> StreamingCsvReader:
+        if len(col_names) == 0:
+            raise ColumnNotFoundError("select requires at least one column")
+        if self.schema.column_count() > 0:
+            i: int = 0
+            while i < len(col_names):
+                if self.schema.index_of(col_names[i]) < 0:
+                    raise ColumnNotFoundError("column not found: '" + col_names[i] + "'")
+                i = i + 1
+        self.select_cols = col_names
+        return self
+
+    def group_by(self: StreamingCsvReader, key_columns: list[str]) -> StreamingGroupedTable:
+        return StreamingGroupedTable(self, key_columns)
+
+    def next_chunk(self: StreamingCsvReader) -> Table:
+        while True:
+            chunk_tbl: Table = self.read_raw_chunk()
+            if chunk_tbl.row_count() == 0:
+                if len(self.select_cols) > 0 and chunk_tbl.column_count() > 0:
+                    chunk_tbl = chunk_tbl.select(self.select_cols)
+                return chunk_tbl
+
+            # 1. Apply active filter predicates
+            fi: int = 0
+            num_filters: int = len(self.filter_exprs)
+            while fi < num_filters:
+                chunk_tbl = chunk_tbl.filter(self.filter_exprs[fi])
+                fi = fi + 1
+
+            # 2. Apply active column selection / projection
+            if len(self.select_cols) > 0:
+                chunk_tbl = chunk_tbl.select(self.select_cols)
+
+            if chunk_tbl.row_count() > 0 or not self.has_next():
+                return chunk_tbl
+        empty_cols: list[ColumnDef] = []
+        return Table(Schema(empty_cols), [])
+
+    def to_table(self: StreamingCsvReader) -> Table:
+        collected_rows: list[list[Cell]] = []
+        final_schema: Schema = Schema([])
+        try:
+            while self.has_next():
+                chunk_tbl: Table = self.next_chunk()
+                if final_schema.column_count() == 0 and chunk_tbl.column_count() > 0:
+                    final_schema = chunk_tbl.schema
+                ri: int = 0
+                nr: int = chunk_tbl.row_count()
+                while ri < nr:
+                    collected_rows.append(chunk_tbl.row(ri))
+                    ri = ri + 1
+        finally:
+            self.close()
+
+        if final_schema.column_count() == 0:
+            if self.schema.column_count() > 0:
+                final_schema = self.schema
+                if len(self.select_cols) > 0:
+                    final_schema = final_schema.select_columns(self.select_cols)
+
+        return Table(final_schema, collected_rows)
+
+    def count(self: StreamingCsvReader) -> int:
+        total: int = 0
+        try:
+            while self.has_next():
+                chunk_tbl: Table = self.next_chunk()
+                total = total + chunk_tbl.row_count()
+        finally:
+            self.close()
+        return total
+
+    def sum(self: StreamingCsvReader, col_name: str) -> float:
+        running_sum: float = 0.0
+        try:
+            while self.has_next():
+                chunk_tbl: Table = self.next_chunk()
+                if chunk_tbl.row_count() > 0:
+                    running_sum = running_sum + chunk_tbl.sum_val(col_name)
+        finally:
+            self.close()
+        return running_sum
+
+    def mean(self: StreamingCsvReader, col_name: str) -> float:
+        running_n: int = 0
+        running_mean: float = 0.0
+        try:
+            while self.has_next():
+                chunk_tbl: Table = self.next_chunk()
+                if chunk_tbl.row_count() == 0:
+                    continue
+                cells: list[Cell] = chunk_tbl.column_cells(col_name)
+                c_idx: int = 0
+                n_cells: int = len(cells)
+                nc: int = 0
+                mc: float = 0.0
+                while c_idx < n_cells:
+                    c: Cell = cells[c_idx]
+                    if not c.is_missing():
+                        nc = nc + 1
+                        x: float = c.as_float()
+                        mc = mc + (x - mc) / float(nc)
+                    c_idx = c_idx + 1
+
+                if nc > 0:
+                    if running_n == 0:
+                        running_n = nc
+                        running_mean = mc
+                    else:
+                        new_n: int = running_n + nc
+                        delta: float = mc - running_mean
+                        running_mean = running_mean + delta * (float(nc) / float(new_n))
+                        running_n = new_n
+        finally:
+            self.close()
+
+        if running_n == 0:
+            raise AggregationError("cannot compute mean: no non-missing numeric observations")
+
+        return running_mean
+
+    def variance(self: StreamingCsvReader, col_name: str, is_sample: bool = True) -> float:
+        running_n: int = 0
+        running_mean: float = 0.0
+        running_m2: float = 0.0
+        try:
+            while self.has_next():
+                chunk_tbl: Table = self.next_chunk()
+                if chunk_tbl.row_count() == 0:
+                    continue
+                cells: list[Cell] = chunk_tbl.column_cells(col_name)
+                c_idx: int = 0
+                n_cells: int = len(cells)
+                nc: int = 0
+                mc: float = 0.0
+                m2c: float = 0.0
+                while c_idx < n_cells:
+                    c: Cell = cells[c_idx]
+                    if not c.is_missing():
+                        nc = nc + 1
+                        x: float = c.as_float()
+                        delta: float = x - mc
+                        mc = mc + delta / float(nc)
+                        delta2: float = x - mc
+                        m2c = m2c + delta * delta2
+                    c_idx = c_idx + 1
+
+                if nc > 0:
+                    if running_n == 0:
+                        running_n = nc
+                        running_mean = mc
+                        running_m2 = m2c
+                    else:
+                        new_n: int = running_n + nc
+                        d: float = mc - running_mean
+                        running_mean = running_mean + d * (float(nc) / float(new_n))
+                        running_m2 = running_m2 + m2c + (d * d) * (float(running_n) * float(nc) / float(new_n))
+                        running_n = new_n
+        finally:
+            self.close()
+
+        if running_n == 0:
+            raise AggregationError("cannot compute variance: no non-missing numeric observations")
+        if is_sample:
+            if running_n < 2:
+                raise AggregationError("sample variance requires at least 2 non-missing numeric observations")
+            return running_m2 / float(running_n - 1)
+        return running_m2 / float(running_n)
+
+    def std(self: StreamingCsvReader, col_name: str, is_sample: bool = True) -> float:
+        v: float = self.variance(col_name, is_sample)
+        if v < 0.0:
+            return 0.0
+        return nox.mathx.sqrt(v)
+
 def open_csv_stream(path: str, chunk_rows: int = 1000, options: CsvOptions | None = None, explicit_schema: Schema | None = None) -> StreamingCsvReader:
     return StreamingCsvReader(path, options, explicit_schema, chunk_rows)
 
 def stream_count(path: str, options: CsvOptions | None = None) -> int:
     reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
-    total: int = 0
-    try:
-        while reader.has_next():
-            chunk_tbl: Table = reader.next_chunk()
-            total = total + chunk_tbl.row_count()
-    finally:
-        reader.close()
-    return total
+    return reader.count()
 
 def stream_sum(path: str, col_name: str, options: CsvOptions | None = None) -> float:
     reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
-    running_sum: float = 0.0
-    try:
-        while reader.has_next():
-            chunk_tbl: Table = reader.next_chunk()
-            if chunk_tbl.row_count() > 0:
-                running_sum = running_sum + chunk_tbl.sum_val(col_name)
-    finally:
-        reader.close()
-    return running_sum
+    return reader.sum(col_name)
 
 def stream_mean(path: str, col_name: str, options: CsvOptions | None = None) -> float:
     reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
-    running_n: int = 0
-    running_mean: float = 0.0
-    try:
-        while reader.has_next():
-            chunk_tbl: Table = reader.next_chunk()
-            if chunk_tbl.row_count() == 0:
-                continue
-            cells: list[Cell] = chunk_tbl.column_cells(col_name)
-            c_idx: int = 0
-            n_cells: int = len(cells)
-            nc: int = 0
-            mc: float = 0.0
-            while c_idx < n_cells:
-                c: Cell = cells[c_idx]
-                if not c.is_missing():
-                    nc = nc + 1
-                    x: float = c.as_float()
-                    mc = mc + (x - mc) / float(nc)
-                c_idx = c_idx + 1
-
-            if nc > 0:
-                if running_n == 0:
-                    running_n = nc
-                    running_mean = mc
-                else:
-                    new_n: int = running_n + nc
-                    delta: float = mc - running_mean
-                    running_mean = running_mean + delta * (float(nc) / float(new_n))
-                    running_n = new_n
-    finally:
-        reader.close()
-
-    if running_n == 0:
-        raise AggregationError("cannot compute mean: no non-missing numeric observations")
-
-    return running_mean
+    return reader.mean(col_name)
 
 def stream_variance(path: str, col_name: str, options: CsvOptions | None = None, is_sample: bool = True) -> float:
     reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
-    running_n: int = 0
-    running_mean: float = 0.0
-    running_m2: float = 0.0
-    try:
-        while reader.has_next():
-            chunk_tbl: Table = reader.next_chunk()
-            if chunk_tbl.row_count() == 0:
-                continue
-            cells: list[Cell] = chunk_tbl.column_cells(col_name)
-            c_idx: int = 0
-            n_cells: int = len(cells)
-            nc: int = 0
-            mc: float = 0.0
-            m2c: float = 0.0
-            while c_idx < n_cells:
-                c: Cell = cells[c_idx]
-                if not c.is_missing():
-                    nc = nc + 1
-                    x: float = c.as_float()
-                    delta: float = x - mc
-                    mc = mc + delta / float(nc)
-                    delta2: float = x - mc
-                    m2c = m2c + delta * delta2
-                c_idx = c_idx + 1
-
-            if nc > 0:
-                if running_n == 0:
-                    running_n = nc
-                    running_mean = mc
-                    running_m2 = m2c
-                else:
-                    new_n: int = running_n + nc
-                    d: float = mc - running_mean
-                    running_mean = running_mean + d * (float(nc) / float(new_n))
-                    running_m2 = running_m2 + m2c + (d * d) * (float(running_n) * float(nc) / float(new_n))
-                    running_n = new_n
-    finally:
-        reader.close()
-
-    if running_n == 0:
-        raise AggregationError("cannot compute variance: no non-missing numeric observations")
-    if is_sample:
-        if running_n < 2:
-            raise AggregationError("sample variance requires at least 2 non-missing numeric observations")
-        return running_m2 / float(running_n - 1)
-    return running_m2 / float(running_n)
+    return reader.variance(col_name, is_sample)
 
 def stream_std(path: str, col_name: str, options: CsvOptions | None = None, is_sample: bool = True) -> float:
-    v: float = stream_variance(path, col_name, options, is_sample)
-    if v < 0.0:
-        return 0.0
-    return nox.mathx.sqrt(v)
+    reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
+    return reader.std(col_name, is_sample)
+
+def stream_group_by(path: str, keys: list[str], aggs: list[AggregateDef], options: CsvOptions | None = None) -> Table:
+    reader: StreamingCsvReader = open_csv_stream(path, 2000, options)
+    return reader.group_by(keys).aggregate(aggs)

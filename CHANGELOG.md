@@ -5,6 +5,33 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-01
+
+### Added
+- **Streaming Transform Pipeline (`StreamingCsvReader`)**:
+  - Added fluent, chainable stream transformations:
+    - `.filter(predicate: Expr)`: Evaluates declarative AST expressions chunk-by-chunk on the stream. Non-matching rows are dropped immediately, never accumulating in memory. Automatically traverses multiple intermediate chunks when filtering sparse records.
+    - `.select(col_names: list[str])`: Drops unselected columns at the chunk boundary, drastically reducing working set width. Supports column reordering and validates schema.
+    - `.to_table() -> Table`: Drains the transformed stream into an in-memory typed `Table` in a single call while safely releasing file resources via `try...finally`.
+    - Direct stream aggregations: `.count()`, `.sum(col)`, `.mean(col)`, `.variance(col, is_sample)`, `.std(col, is_sample)`.
+- **Online Hash GroupBy Engine (`StreamingGroupedTable`)**:
+  - Implemented an online state-aggregation engine for streaming GroupBy that processes unbounded datasets in bounded $O(G \times K + B + R \times S)$ memory (where $G$ is unique groups, $K$ is key columns, $B$ is chunk buffer, $R$ is rows per chunk, and $S$ is average row size).
+  - Maintains `SingleAggState` per unique group rather than storing raw row lists in memory, enabling multi-million row aggregations on constrained hardware.
+  - Full support for composite grouping keys, collision bucket tracking with exact cell equality verification, and simultaneous multi-metric aggregations:
+    - `agg_count()`: exact row count per group.
+    - `agg_count_non_missing(col)`: non-missing observation count per group.
+    - `agg_sum(col)`: running sum.
+    - `agg_mean(col)`: online running mean.
+    - `agg_variance(col, is_sample)` / `agg_std(col, is_sample)`: Welford running variance and sample standard deviation.
+    - `agg_min(col)` / `agg_max(col)`: running extrema.
+  - Ergonomic convenience methods: `.agg(agg_def)` for single aggregate and `.count(output_col)` for frequency tables.
+  - Module-level functional API: `stream_group_by(path, keys, aggs, options)`.
+- **Default Output Columns for Aggregate Definitions (`groupby.nox`)**:
+  - Updated all `agg_*` functions (`agg_sum`, `agg_mean`, `agg_std`, `agg_variance`, `agg_min`, `agg_max`, `agg_count_non_missing`) with optional `output_col: str = ""` defaulting to `"op_colname"` (e.g. `agg_sum("amount")` automatically outputs `"sum_amount"`).
+  - Added `.agg(agg_def)` to in-memory `GroupedTable` for unified API symmetry across in-memory and streaming modes.
+- **Dedicated Streaming Pipeline Test Suite (`tests/streaming_pipeline_test.nox`)**:
+  - Added 6 thorough pipeline test cases covering basic filters, chained filters, projection, direct stream stats, single-key and composite-key online GroupBy with sample/population variance, sparse multi-chunk filters, and full fluent chains. Total test suites: 32 (100% passing).
+
 ## [0.7.4] - 2026-11-01
 
 ### Fixed & Improved

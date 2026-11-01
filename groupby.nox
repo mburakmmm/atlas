@@ -38,29 +38,53 @@ class AggregateDef:
 def agg_count(output_col: str = "count") -> AggregateDef:
     return AggregateDef(AGG_COUNT, "", output_col, True)
 
-def agg_sum(target_col: str, output_col: str) -> AggregateDef:
-    return AggregateDef(AGG_SUM, target_col, output_col, True)
+def agg_sum(target_col: str, output_col: str = "") -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "sum_" + target_col
+    return AggregateDef(AGG_SUM, target_col, out, True)
 
-def agg_mean(target_col: str, output_col: str) -> AggregateDef:
-    return AggregateDef(AGG_MEAN, target_col, output_col, True)
+def agg_mean(target_col: str, output_col: str = "") -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "mean_" + target_col
+    return AggregateDef(AGG_MEAN, target_col, out, True)
 
-def agg_median(target_col: str, output_col: str) -> AggregateDef:
-    return AggregateDef(AGG_MEDIAN, target_col, output_col, True)
+def agg_median(target_col: str, output_col: str = "") -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "median_" + target_col
+    return AggregateDef(AGG_MEDIAN, target_col, out, True)
 
-def agg_std(target_col: str, output_col: str, is_sample: bool = True) -> AggregateDef:
-    return AggregateDef(AGG_STD, target_col, output_col, is_sample)
+def agg_std(target_col: str, output_col: str = "", is_sample: bool = True) -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "std_" + target_col
+    return AggregateDef(AGG_STD, target_col, out, is_sample)
 
-def agg_variance(target_col: str, output_col: str, is_sample: bool = True) -> AggregateDef:
-    return AggregateDef(AGG_VARIANCE, target_col, output_col, is_sample)
+def agg_variance(target_col: str, output_col: str = "", is_sample: bool = True) -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "variance_" + target_col
+    return AggregateDef(AGG_VARIANCE, target_col, out, is_sample)
 
-def agg_min(target_col: str, output_col: str) -> AggregateDef:
-    return AggregateDef(AGG_MIN, target_col, output_col, True)
+def agg_min(target_col: str, output_col: str = "") -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "min_" + target_col
+    return AggregateDef(AGG_MIN, target_col, out, True)
 
-def agg_max(target_col: str, output_col: str) -> AggregateDef:
-    return AggregateDef(AGG_MAX, target_col, output_col, True)
+def agg_max(target_col: str, output_col: str = "") -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "max_" + target_col
+    return AggregateDef(AGG_MAX, target_col, out, True)
 
-def agg_count_non_missing(target_col: str, output_col: str) -> AggregateDef:
-    return AggregateDef(AGG_COUNT_NON_MISSING, target_col, output_col, True)
+def agg_count_non_missing(target_col: str, output_col: str = "") -> AggregateDef:
+    out: str = output_col
+    if out == "":
+        out = "count_" + target_col
+    return AggregateDef(AGG_COUNT_NON_MISSING, target_col, out, True)
 
 class GroupedTable:
     source: Table
@@ -77,8 +101,12 @@ class GroupedTable:
         self.group_rows = group_rows
 
     def group_count(self: GroupedTable) -> int:
-
         return len(self.group_keys)
+
+    def agg(self: GroupedTable, aggregate_def: AggregateDef) -> Table:
+        aggs: list[AggregateDef] = []
+        aggs.append(aggregate_def)
+        return self.aggregate(aggs)
 
     def aggregate(self: GroupedTable, aggs: list[AggregateDef]) -> Table:
 
