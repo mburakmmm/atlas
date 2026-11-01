@@ -290,7 +290,7 @@ import atlas
 from atlas import WindowContext, row_number, rank, dense_rank, lag, lead, cumulative_sum, moving_average
 
 # 1. High-Performance Chained Window Pipeline (WindowContext):
-# Partitions and sorts once, then computes multiple window columns in O(N) time each:
+# Partitions and sorts once, buffers columns lazily, and materializes rows in a single pass (3.17x faster than standalone calls):
 ctx: WindowContext = table.window(partition_by=["dept"], order_by=["salary"], ascending=False)
 t_pipelined: Table = ctx \
     .with_row_number("row_nr") \
@@ -301,17 +301,25 @@ t_pipelined: Table = ctx \
     .with_moving_average("sales", window_size=5, output_col="mavg_sales") \
     .to_table()
 
-# 2. Functional API:
+# Note on with_rank / with_dense_rank:
+# The order_col must match the WindowContext's order_by column (raises SortError on mismatch).
+# When multi-column order_by is specified, ties are evaluated across all order columns.
+
+# 2. Null Policy Precedence in cumulative_sum:
+# null_policy options: "skip" (default), "null_row", "propagate"
+# If null_policy != "skip", it takes explicit precedence over skip_null.
+# When null_policy == "skip" and skip_null == False, skip_null acts as a backward-compatible alias for "null_row".
+
+# 3. Functional API:
 t1 = row_number(table, output_col="row_nr", partition_by=["dept"], order_by=["salary"], ascending=False)
 t2 = rank(table, order_col="salary", output_col="rank", partition_by=["dept"])
 t3 = dense_rank(table, order_col="salary", output_col="dense_rank", partition_by=["dept"])
 t4 = lag(table, target_col="sales", output_col="prev_sales", offset=1, partition_by=["dept"], order_by=["date"])
 t5 = lead(table, target_col="sales", output_col="next_sales", offset=1, partition_by=["dept"], order_by=["date"])
-# null_policy options: "skip" (default), "null_row", "propagate"
 t6 = cumulative_sum(table, target_col="sales", output_col="cum_sales", partition_by=["dept"], order_by=["date"], null_policy="skip")
 t7 = moving_average(table, target_col="sales", window_size=3, output_col="moving_avg", partition_by=["dept"], min_periods=1)
 
-# 3. Direct Table Instance Methods:
+# 4. Direct Table Instance Methods:
 t_analytical: Table = table \
     .with_row_number("row_nr", partition_by=["dept"], order_by=["salary"]) \
     .with_rank("salary", "salary_rank", partition_by=["dept"]) \

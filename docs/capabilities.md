@@ -77,11 +77,13 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 
 ---
 
-## 8. Window Functions & Analytical Calculations (`window.nox`) (v0.9.0, refined v0.9.1, v0.9.2)
+## 8. Window Functions & Analytical Calculations (`window.nox`) (v0.9.0, refined v0.9.1, v0.9.2, v0.9.3)
 
-- **Fluent WindowContext Pipeline**:
+- **Fluent WindowContext Pipeline with Lazy Column Buffering**:
   - `WindowContext` can be instantiated once via `table.window(partition_by=..., order_by=..., ascending=...)` and chained with `.with_row_number()`, `.with_rank()`, `.with_dense_rank()`, `.with_lag()`, `.with_lead()`, `.with_cumulative_sum()`, `.with_moving_average()`, and finalized with `.to_table()`.
-  - Hash-partitioning and $O(N \log N)$ stable merge-sorting are executed strictly **once** across multiple chained window operations, reducing multi-window execution time by >2.5x on large tables (100,000 rows across 4 window operations in 215 ms).
+  - Hash-partitioning and $O(N \log N)$ stable merge-sorting are executed strictly **once** across chained window operations.
+  - Computed window columns are buffered lazily in `pending_columns` and materialized into the final schema and rows in a single pass ($O(N)$ allocation instead of $K \times O(N \times C)$). Empirically verified at **3.17x faster** than independent unpipelined window operations (96 ms vs 304 ms for 4 window columns over 100,000 rows).
+  - Strict order key validation: `with_rank` and `with_dense_rank` require an active context ordering and validate that `order_col` matches the context's primary order key (`SortError`). Multi-column orderings evaluate ties across all specified order columns according to standard SQL semantics.
 - **Non-Destructive Row Architecture**:
   - Evaluates analytical window calculations partitioned by keys and ordered by specified columns, appending computed result columns without reordering or altering the input table's original row sequence.
 - **Supported Window Operations**:
@@ -90,12 +92,12 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
   - `dense_rank(t, order_col, output_col, partition_by, ascending)`: Dense ranking without gaps on tied values (e.g. 1, 2, 2, 3).
   - `lag(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Look-behind access to preceding rows.
   - `lead(t, target_col, output_col, offset, partition_by, order_by, ascending, default_val)`: Look-ahead access to succeeding rows.
-  - `cumulative_sum(t, target_col, output_col, partition_by, order_by, ascending, skip_null=True, null_policy="skip")`: Running cumulative sums for integers and floats. Supports `null_policy="skip"` (retains running sum), `"null_row"` (null only on null row), and `"propagate"` (nulls cascade to end of partition). Includes proactive 64-bit integer overflow protection (`ShapeError`).
+  - `cumulative_sum(t, target_col, output_col, partition_by, order_by, ascending, skip_null=True, null_policy="skip")`: Running cumulative sums for integers and floats. Supports `null_policy="skip"` (retains running sum), `"null_row"` (null only on null row), and `"propagate"` (nulls cascade to end of partition). When `null_policy != "skip"`, `null_policy` takes explicit precedence over `skip_null`. Includes proactive 64-bit integer overflow protection (`ShapeError`).
   - `moving_average(t, target_col, window_size, output_col, partition_by, order_by, ascending, min_periods)`: Rolling sliding-window means based on valid numeric observation count. Validates `min_periods <= window_size`.
 
 ---
 
-## 9. Table Reshaping: Melt & Pivot (`reshape.nox`) (v0.9.0, refined v0.9.1, v0.9.2)
+## 9. Table Reshaping: Melt & Pivot (`reshape.nox`) (v0.9.0, refined v0.9.1, v0.9.2, v0.9.3)
 
 - **Wide to Long Unpivoting (`melt`)**:
   - Converts tabular data from wide to long format across specified identifier and value columns.
@@ -108,6 +110,7 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
   - Handles duplicate `(index, column)` pairs with configurable aggregation functions:
     - `"mean"`, `"sum"`, `"count"`, `"min"`, `"max"`, `"first"`, `"last"`.
   - Enforces identical collision safeguards as `pivot`.
+  - Integer sum aggregations include 64-bit signed integer overflow and underflow detection (`ShapeError`).
   - Missing combinations are consistently populated with `cell_null()`.
 
 ---

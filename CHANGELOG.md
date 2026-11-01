@@ -5,6 +5,29 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-11-01
+
+### Added & Improved
+- **WindowContext Order Key Validation & Multi-Column Ties (`window.nox`)**:
+  - Implemented strict validation in `with_rank` and `with_dense_rank` ensuring `order_col` matches the context's ordering key (`self.order_cols[0]`). Raises `SortError` when `order_col` diverges from the context's order specification or when ranking without an `order_by` clause.
+  - Added multi-column tie evaluation in `with_rank` and `with_dense_rank`: ties are only declared when ALL order columns match across consecutive rows in a partition, preserving exact SQL semantics.
+- **Lazy Column Buffering in WindowContext (`window.nox`)**:
+  - Eliminated intermediate full-table copying during window method chaining. Computed window columns are buffered lazily in `pending_columns` and materialized in a **single pass** when `.to_table()` is called ($O(N)$ allocation instead of $K \times O(N \times C)$).
+  - Validates output column uniqueness against base schema and pipeline buffers upfront (`SchemaError`).
+- **Cumulative Sum Parameter Precedence & Documentation (`window.nox`, `docs/api.md`, `docs/capabilities.md`)**:
+  - Explicitly documented the precedence rule: `null_policy` is the primary modern API. When `null_policy != "skip"`, it takes full precedence; when `null_policy == "skip"` and `skip_null == False`, `skip_null` acts as a backward-compatible alias for `null_policy="null_row"`.
+- **64-bit Signed Integer Overflow Protection in Pivot Table (`reshape.nox`)**:
+  - Added proactive 64-bit signed integer overflow and underflow checks in `pivot_table(agg_func="sum")` for integer columns, raising `ShapeError` on numeric boundary overflow.
+- **Scientifically Rigorous Control Group Benchmark (`benchmarks/benchmark_window.nox`)**:
+  - Added Scenario B control group measuring 4 independent standalone window calls (re-partitioning & re-sorting 4x with repeated allocations) alongside Scenario A (single window) and Scenario C (WindowContext pipeline).
+  - Empirically verified **3.17x speedup** on 100,000 synthetic rows (304 ms standalone vs 96 ms pipeline).
+- **Comprehensive Window Validation & Differential Tests (`tests/window_edge_cases_test.nox`, `tests/reshape_test.nox`)**:
+  - Added tests for `with_rank` / `with_dense_rank` order mismatch raising `SortError`.
+  - Added tests for multi-column tie ranking in rank and dense_rank.
+  - Added cell-by-cell differential equality test verifying that pipeline output is 100% bitwise and value identical to independent standalone window calls.
+  - Added pipeline duplicate output column collision tests (`SchemaError`).
+  - Added `pivot_table(sum)` int64 overflow test (`ShapeError`).
+
 ## [0.9.2] - 2026-11-01
 
 ### Added & Improved

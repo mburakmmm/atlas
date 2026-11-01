@@ -1,13 +1,13 @@
-# benchmarks/benchmark_window.nox — 100,000 row window function benchmark for Atlas.
+# benchmarks/benchmark_window.nox — Rigorous 100,000 row window benchmark with control group.
 
 import nox.time
 import atlas
-from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, cell_float, WindowContext
-from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, WindowContext
+from atlas import TYPE_INT, TYPE_STR
 
-print("==========================================================")
-print("Atlas Window Pipeline Benchmark (100,000 synthetic rows)")
-print("==========================================================")
+print("==========================================================================")
+print("Atlas Window Function & Pipeline Benchmark (100,000 synthetic rows)")
+print("==========================================================================")
 
 t0: int = nox.time.now_ms()
 s: Schema = Schema([
@@ -48,24 +48,39 @@ while i < n:
 
 t: Table = Table(s, rows)
 gen_ms: int = nox.time.now_ms() - t0
-print("[1] Ingested 100,000 rows in " + str(gen_ms) + " ms")
+print("[1] Ingested 100,000 rows into typed Table in " + str(gen_ms) + " ms")
 
-# Benchmark 2: Single Window Operation (row_number)
+# Scenario A: Single standalone window operation
 t0 = nox.time.now_ms()
 t_single: Table = t.with_row_number(output_col="rn", partition_by=["dept"], order_by=["val"], ascending=True)
 single_ms: int = nox.time.now_ms() - t0
-print("[2] Single Window (row_number over 10 partitions) in " + str(single_ms) + " ms")
+print("[Scenario A] Single window (row_number over 10 partitions): " + str(single_ms) + " ms")
 
-# Benchmark 3: Chained WindowContext Pipeline (sort once, compute 4 window columns)
+# Scenario B: Control Group — 4 separate standalone window operations (re-partitions & re-sorts 4x)
+t0 = nox.time.now_ms()
+t_b: Table = t.with_row_number("rn", partition_by=["dept"], order_by=["val"]) \
+              .with_rank("val", "rk", partition_by=["dept"]) \
+              .with_cumulative_sum("val", "cumsum", partition_by=["dept"], order_by=["val"]) \
+              .with_lag("val", "prev_val", 1, partition_by=["dept"], order_by=["val"], default_val=cell_int(0))
+b_ms: int = nox.time.now_ms() - t0
+print("[Scenario B] Control Group (4 standalone window operations, 4x sorts): " + str(b_ms) + " ms")
+
+# Scenario C: WindowContext Pipeline (1 single partition & sort, lazy column buffer, 1 allocation)
 t0 = nox.time.now_ms()
 ctx: WindowContext = t.window(partition_by=["dept"], order_by=["val"], ascending=True)
 ctx = ctx.with_row_number("rn")
 ctx = ctx.with_rank("val", "rk")
 ctx = ctx.with_cumulative_sum("val", "cumsum")
 ctx = ctx.with_lag("val", "prev_val", 1, default_val=cell_int(0))
-t_piped: Table = ctx.to_table()
-pipe_ms: int = nox.time.now_ms() - t0
-print("[3] WindowContext Pipeline (4 window columns, single sort) in " + str(pipe_ms) + " ms")
-print("    Result table rows: " + str(t_piped.row_count()) + ", columns: " + str(t_piped.column_count()))
-print("==========================================================")
+t_c: Table = ctx.to_table()
+c_ms: int = nox.time.now_ms() - t0
+print("[Scenario C] WindowContext Pipeline (4 window operations, 1x sort, lazy buffer): " + str(c_ms) + " ms")
+
+# Verification & Empirical Speedup
+if c_ms > 0:
+    speedup: float = float(b_ms) / float(c_ms)
+    print("--------------------------------------------------------------------------")
+    print("Empirical Speedup (Scenario B / Scenario C): " + str(speedup) + "x")
+print("Verified Table Row Count: " + str(t_c.row_count()) + ", Columns: " + str(t_c.column_count()))
+print("==========================================================================")
 print("Window Benchmark Completed Successfully!")

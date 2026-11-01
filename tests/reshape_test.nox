@@ -160,4 +160,20 @@ nox.test.assert_eq_int(t_pt_count.rows[0][1].as_int(), 2, "Eng Q1 count is 2")
 t_pt_max: Table = pivot_table(t_long_dup, "dept", "quarter", "revenue", "max")
 nox.test.assert_eq_int(t_pt_max.rows[0][1].as_int(), 999, "Eng Q1 max is 999")
 
+# Test pivot_table(sum) INT64 overflow protection
+s_of: Schema = Schema([
+    ColumnDef("id", TYPE_STR),
+    ColumnDef("cat", TYPE_STR),
+    ColumnDef("val", TYPE_INT)
+])
+r_of1: list[Cell] = [cell_str("A"), cell_str("Q1"), cell_int(9223372036854775800)]
+r_of2: list[Cell] = [cell_str("A"), cell_str("Q1"), cell_int(100)]
+t_of_pt: Table = Table(s_of, [r_of1, r_of2])
+caught_pt_of: bool = False
+try:
+    pivot_table(t_of_pt, "id", "cat", "val", "sum")
+except ShapeError:
+    caught_pt_of = True
+nox.test.assert_true(caught_pt_of, "pivot_table(sum) caught int64 overflow")
+
 print("reshape_test passed")

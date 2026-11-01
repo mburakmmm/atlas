@@ -464,7 +464,13 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
                         while bi < n_b:
                             c = bucket[bi]
                             if not c.is_missing():
-                                sum_i = sum_i + c.as_int()
+                                v_i: int = c.as_int()
+                                # 64-bit signed integer overflow check
+                                if v_i > 0 and sum_i > 9223372036854775807 - v_i:
+                                    raise ShapeError("integer overflow in pivot_table(sum)")
+                                if v_i < 0 and sum_i < (-9223372036854775807 - 1) - v_i:
+                                    raise ShapeError("integer underflow in pivot_table(sum)")
+                                sum_i = sum_i + v_i
                                 has_any = True
                             bi = bi + 1
                         if has_any:

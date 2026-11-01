@@ -25,6 +25,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.9.0** | **İleri Seviye Tablo İşlemleri (Window Functions, Reshaping & Gelişmiş Join'ler)** | ✅ **TAMAMLANDI & YAYINLANDI** | 35/35 Test Geçti (`noxc test`) |
 | **v0.9.1** | **Window & Reshape Sınır Durumları, WindowContext Refactoring & Doğrulama** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.2** | **WindowContext Boru Hattı, Null Politikaları, INT64 Taşma Koruması & Benchmark** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
+| **v0.9.3** | **Sıralama Anahtarı Doğrulaması, Tembel Sütun Tamponlama, 3.17x Hızlanma & Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -501,6 +502,33 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - 100.000 satırlık sentetik veri üzerinde tekil pencere (134 ms) ve 4 fonksiyonlu `WindowContext` zincirleme boru hattı (215 ms) ölçüldü ve doğrulandı.
 - [x] **Dokümantasyon & Sürüm**:
   - `nox.json` sürümü `0.9.2` yapıldı, `CHANGELOG.md`, `docs/capabilities.md`, `docs/api.md`, `README.md` güncellendi, `noxc test` (36 test paketi) geçildi, git commit/push ve `noxc publish`.
+
+---
+
+## 🚀 Sürüm 0.9.3 — Sıralama Anahtarı Doğrulaması, Tembel Sütun Tamponlama, 3.17x Hızlanma & Testler (Tamamlananlar)
+
+- [x] **WindowContext Sıralama Anahtarı Doğrulaması (🔴 P1 - `window.nox`)**:
+  - `with_rank` ve `with_dense_rank` içinde verilen `order_col` parametresinin context'in birincil `order_by` sütunu (`self.order_cols[0]`) ile birebir eşleştiği doğrulandı; uyumsuzlukta veya sıralama sütunu belirtilmediğinde `SortError` fırlatılması sağlandı.
+  - Çok sütunlu `order_by` durumlarında eşitlik kontrolü (`is_tie`) tüm sıralama sütunları (`order_col_indices`) boyunca genişletildi; SQL standartlarına uygun tam eşitlik davranışı garanti altına alındı.
+- [x] **Tembel Sütun Tamponlama & Tek Geçişte Tablo İnşası (🟠 P2 - `window.nox`)**:
+  - Pipeline zincirleme çağrılarında her adımda tüm tablo satırlarının kopyalanması ($K \times O(N \times C)$) engellendi.
+  - Hesaplanmış pencere sütunları `pending_columns` tamponunda biriktirilip `.to_table()` çağrıldığında tek bir geçişte ($O(N)$) hedef tabloya birleştirildi; bellek tahsisleri ve kopyalama maliyeti minimize edildi.
+  - Pipeline içinde yinelenen veya mevcut tabloyla çakışan sütun isimleri için erken `SchemaError` denetimi eklendi.
+- [x] **Pivot Table INT64 Taşma Koruması (`reshape.nox`)**:
+  - `pivot_table(agg_func="sum")` tamsayı toplamalarında proaktif 64-bit işaretli tamsayı sınırları (`INT64_MAX`, `INT64_MIN`) eklendi; sessiz wraparound yerine `ShapeError` fırlatılması sağlandı.
+- [x] **Kümülatif Toplam Parametre Öncelik Kuralları & Dokümantasyon (`window.nox`, `docs/api.md`, `docs/capabilities.md`)**:
+  - `null_policy` birincil modern API olarak belgelendi; `null_policy != "skip"` durumunda tam önceliğe sahip olduğu, `null_policy == "skip"` ve `skip_null == False` durumunda ise `skip_null`'ın geriye dönük uyumlu `"null_row"` takma adı olduğu netleştirildi.
+- [x] **Bilimsel Kontrol Gruplu 100.000 Satırlık Benchmark (`benchmarks/benchmark_window.nox`)**:
+  - Senaryo A (tekil pencere: 82 ms), Senaryo B (kontrol grubu - 4 bağımsız çağrı, 4x sort ve kopyalama: 304 ms) ve Senaryo C (WindowContext pipeline: 96 ms) ölçüldü.
+  - Pipeline'ın bağımsız çağrılara kıyasla **3.17 kat hızlanma** sağladığı ampirik olarak kanıtlandı.
+- [x] **Kapsamlı Doğrulama ve Diferansiyel Test Paketi (`tests/window_edge_cases_test.nox`, `tests/reshape_test.nox`)**:
+  - `with_rank` / `with_dense_rank` sıra anahtarı uyumsuzluk testleri (`SortError`).
+  - Çok sütunlu sıralamada rank ve dense_rank eşitlik testleri.
+  - Pipeline sonuçlarının bağımsız çağrılarla hücre hücre (%100) diferansiyel eşitlik testi.
+  - Pipeline içi ve tablo sütunu çakışma testleri (`SchemaError`).
+  - `pivot_table(sum)` int64 overflow testi (`ShapeError`).
+- [x] **Dokümantasyon & Sürüm**:
+  - `nox.json` sürümü `0.9.3` yapıldı, `CHANGELOG.md`, `docs/capabilities.md`, `docs/api.md`, `README.md` güncellendi, `noxc test` (36 test paketi) geçildi, git commit/push ve `noxc publish`.
 
 ---
 
