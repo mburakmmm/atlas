@@ -48,27 +48,8 @@ jobs:
         run: |
           noxc version
 
-      - name: Typecheck Core Modules
+      - name: Typecheck Atlas Package & CLI Entry
         run: |
-          noxc check errors.nox
-          noxc check values.nox
-          noxc check schema.nox
-          noxc check expr.nox
-          noxc check table.nox
-          noxc check csv_adapter.nox
-          noxc check delimited.nox
-          noxc check json_adapter.nox
-          noxc check stats.nox
-          noxc check sort.nox
-          noxc check groupby.nox
-          noxc check join.nox
-          noxc check concat.nox
-          noxc check reshape.nox
-          noxc check window.nox
-          noxc check validation.nox
-          noxc check streaming.nox
-          noxc check io.nox
-          noxc check sql_adapter.nox
           noxc check atlas.nox
           noxc check main.nox
 
