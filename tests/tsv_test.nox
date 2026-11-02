@@ -76,7 +76,7 @@ nox.test.assert_eq_int(t_multi2.row_count(), 2, "multi-char roundtrip row count"
 nox.test.assert_eq_str(t_multi2.cell(0, 1).as_str(), "has||delimiter", "multi-char roundtrip cell")
 
 # 6. Filesystem TSV IO
-tmp_path: str = "/tmp/test_atlas_tsv_io.tsv"
+tmp_path: str = "temp_test_atlas_tsv_io.tsv"
 if nox.fs.exists(tmp_path):
     nox.fs.remove_file(tmp_path)
 

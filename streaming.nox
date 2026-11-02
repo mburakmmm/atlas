@@ -420,6 +420,7 @@ class StreamingCsvReader:
     def consume_bytes(self: StreamingCsvReader, amount: int) -> None:
         self.cur_record_bytes = self.cur_record_bytes + amount
         if self.cur_record_bytes > self.options.max_record_bytes:
+            self.close()
             raise CsvImportError("CSV record exceeds max_record_bytes limit (" + str(self.options.max_record_bytes) + " bytes)")
 
     def feed_chunk(self: StreamingCsvReader, text: str, target_rows: int) -> None:
@@ -533,6 +534,7 @@ class StreamingCsvReader:
                         return
                 else:
                     if strict:
+                        self.close()
                         raise CsvImportError("unexpected character after closing quote in strict mode: '" + ch + "'")
                     self.cur_field = self.cur_field + ch
                     self.after_quote = False
@@ -551,6 +553,7 @@ class StreamingCsvReader:
                     i = i + 1
                 elif ch == "\"":
                     if strict:
+                        self.close()
                         raise CsvImportError("unescaped quote in unquoted field in strict mode")
                     self.cur_field = self.cur_field + "\""
                     i = i + 1
@@ -615,6 +618,7 @@ class StreamingCsvReader:
         if self.pending_cr:
             self.pending_cr = False
         if self.in_quotes:
+            self.close()
             raise CsvImportError("unclosed quoted field in stream at EOF")
         if len(self.cur_field) > 0 or len(self.cur_row) > 0 or self.after_quote:
             self.cur_row.append(self.cur_field)

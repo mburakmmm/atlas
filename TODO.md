@@ -597,6 +597,21 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - 50.000 benzersiz anahtara sahip 100.000 satırlık veri kümesinde hash grouping ve collision bucket ölçeklenmesinin testi (37 ms tamamlama).
 - [x] **Benchmark Genişletmesi: Kardinalite & Bellek Tüketim Raporlaması (`benchmarks/benchmark_window.nox`)**:
   - Farklı partition kardinalitelerinde (10, 100, 1000 partitions) pencere fonksiyonu ölçeklenmesi ölçüldü; tutarlı 2.6x - 3.1x hızlanma doğrulandı.
+- [x] **Windows Platform Uyumluluğu & Dosya Paylaşım/Kilit Hatalarının Giderilmesi (🔴 P1 - `streaming.nox`, `tests/`)**:
+  - `tests/io_test.nox` ve `tests/tsv_test.nox` dosyalarında sabit kodlanmış Unix `/tmp/...` yolları kaldırıldı; yerine taşınabilir göreceli yollar (`temp_*.csv`, `temp_*.json`, `temp_*.tsv`) yerleştirilerek Windows'ta `C:\tmp` eksikliğinden kaynaklanan dosya bulunamadı hataları çözüldü.
+  - `streaming.StreamingCsvReader` içerisinde `CsvImportError` fırlatılmadan önce açık dosya tanıtıcısının kapatılması (`self.close()`) garanti altına alındı. Böylece Windows işletim sisteminde açık tanıtıcılar sebebiyle oluşan paylaşım/kilit ihlalleri (`ERROR_SHARING_VIOLATION` / `ERROR_ACCESS_DENIED`) önlendi.
+- [x] **Çoklu Platform CI Matrisi & Otomasyon (`.github/workflows/ci.yml`) (🔴 P1)**:
+  - GitHub Actions üzerinde `ubuntu-latest`, `macos-latest` ve `windows-latest` çalıştırıcılarını kapsayan eşzamanlı CI matrisi kuruldu.
+  - Platforma özel yerel Nox kurulum betikleri (`install.sh` / `install.ps1`) ve ortam değişkeni yapılandırması entegre edildi.
+  - `noxc check` (21 modül), `noxc test` (39 test paketi), pencere benchmarkı ve 7 örnek uygulama tüm platformlarda otomatik doğrulanır hale getirildi.
+- [x] **Çoklu Platform Release Gate & GitHub Release Otomasyonu (`.github/workflows/release.yml`) (🔴 P1)**:
+  - Sürüm etiketleri (`v*.*.*`) ve el ile tetikleme için Release Gate kuruldu.
+  - Her 3 platformda (Linux, macOS, Windows) testler %100 geçmeden sürüm yayınlanması engellendi.
+  - `nox.json` sürüm eşleşmesi doğrulandı, `CHANGELOG.md`'den sürüm notları otomatik ayıklanıp GitHub Release oluşturulması sağlandı.
+- [x] **GitHub Standartları & Topluluk Belgeleri (🟢 P3)**:
+  - `.github/ISSUE_TEMPLATE/` (hata bildirimi, özellik isteği, config) ve `.github/PULL_REQUEST_TEMPLATE.md` eklendi.
+  - `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1) eklendi; `CONTRIBUTING.md` ve `SECURITY.md` güçlendirildi.
+  - `README.md` baştan sona profesyonel açık kaynak standartlarına taşındı: SVG rozetleri, mimari diyagram, özellikler tablosu, benchmark tabloları, çapraz platform matrisi ve dokümantasyon indeksi eklendi.
 - [x] **Dokümantasyon & Sürüm 0.9.5**:
   - `nox.json` sürümü `0.9.5` olarak güncellendi.
   - `CHANGELOG.md`, `README.md`, `docs/capabilities.md`, `docs/api.md` güncellendi.

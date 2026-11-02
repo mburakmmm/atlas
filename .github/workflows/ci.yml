@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl
+
+      - name: Install Nox (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://noxlang.com/install.sh | bash
+          echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
+
+      - name: Install Nox (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm https://noxlang.com/install.ps1 | iex
+          echo "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify Nox Toolchain
+        run: |
+          noxc version
+
+      - name: Typecheck Core Modules
+        run: |
+          noxc check errors.nox
+          noxc check values.nox
+          noxc check schema.nox
+          noxc check expr.nox
+          noxc check table.nox
+          noxc check csv_adapter.nox
+          noxc check delimited.nox
+          noxc check json_adapter.nox
+          noxc check stats.nox
+          noxc check sort.nox
+          noxc check groupby.nox
+          noxc check join.nox
+          noxc check concat.nox
+          noxc check reshape.nox
+          noxc check window.nox
+          noxc check validation.nox
+          noxc check streaming.nox
+          noxc check io.nox
+          noxc check sql_adapter.nox
+          noxc check atlas.nox
+          noxc check main.nox
+
+      - name: Run Test Suite (All 39 Suites)
+        run: |
+          noxc test
+
+      - name: Run Performance Benchmarks
+        run: |
+          noxc run benchmarks/benchmark_window.nox
+
+      - name: Run Representative Examples
+        run: |
+          noxc run examples/quickstart.nox
+          noxc run examples/csv_cleaning.nox
+          noxc run examples/group_summary.nox
+          noxc run examples/json_conversion.nox
+          noxc run examples/delimited_and_quantiles.nox
+          noxc run examples/table_joins.nox
+          noxc run examples/sql_and_validation.nox

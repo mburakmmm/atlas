@@ -1,0 +1,52 @@
+name: Feature Request
+description: Propose an idea, new analytical capability, or enhancement for Atlas
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We welcome feature requests and design proposals for Atlas!
+        Please review Atlas core principles in `AGENTS.md` before submitting: pure Nox, explicit data types, strict numerical correctness, and no heavy native dependencies.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Target Component
+      description: Which area of Atlas would this proposal expand?
+      options:
+        - "atlas.table (Table transformations, slicing, indexing)"
+        - "atlas.streaming (Streaming reader, pipeline transforms, aggregations)"
+        - "atlas.window (Analytical window functions, frames, rolling operators)"
+        - "atlas.reshape (Reshaping operations, unpivot, crosstab)"
+        - "atlas.join (Relational joins, fuzzy joins, asof joins)"
+        - "atlas.stats (Numerical statistics, quantiles, hypothesis tests)"
+        - "atlas.io (File formats, export formats, compression)"
+        - "Performance / Memory Optimizations"
+        - "Other / Cross-Cutting"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Is your feature request related to a problem or missing tabular operation?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution & API Syntax
+      description: Describe your proposed API design, function signatures, and candidate Nox usage.
+      render: nox
+      placeholder: |
+        import atlas
+        from atlas import Table
+        
+        # Proposed API usage
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative designs, manual workarounds, or prior art (e.g. Pandas, Polars, SQL) considered.

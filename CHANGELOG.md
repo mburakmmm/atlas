@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Validated hash partitioning and `dict[str, SingleAggState]` aggregation performance with 50,000 distinct groups on 100,000 synthetic rows, executing and verifying in ~37 ms.
 - **Benchmark Partition Cardinality Scaling (`benchmarks/benchmark_window.nox`)**:
   - Added multi-cardinality benchmark evaluating $K=10$, $K=100$, and $K=1,000$ partitions on 50,000 rows, confirming consistent 2.6x to 3.1x speedup of `WindowContext` pipeline over standalone calls across varying cardinality densities.
+- **Cross-Platform Windows Portability & File-Locking Fixes (`streaming.nox`, `tests/`)**:
+  - Replaced Unix-specific `/tmp/` paths in `tests/io_test.nox` and `tests/tsv_test.nox` with portable relative paths (`temp_*.csv`, `temp_*.json`, `temp_*.tsv`), fixing test failures on Windows where `C:\tmp` does not exist.
+  - Enforced proactive file handle closure (`self.close()`) before raising `CsvImportError` in `streaming.StreamingCsvReader`, preventing Windows OS sharing violations (`ERROR_SHARING_VIOLATION`) during file cleanup.
+- **Cross-Platform Continuous Integration Matrix (`.github/workflows/ci.yml`)**:
+  - Automated CI matrix running across `ubuntu-latest`, `macos-latest`, and `windows-latest`.
+  - Automatically installs native Nox toolchains on Linux/macOS and Windows PowerShell.
+  - Verifies typecheck (`noxc check`) across all 21 core modules, executes all 39 test suites, window benchmarks, and 7 representative example applications.
+- **Automated Cross-Platform Release Gate (`.github/workflows/release.yml`)**:
+  - Attached automated gate requiring 100% test passage across Ubuntu, macOS, and Windows before releasing tags.
+  - Automatically validates tag vs `nox.json` version alignment, extracts changelog notes, and publishes GitHub releases.
+- **GitHub Community Standards & Documentation**:
+  - Added GitHub issue templates (`bug_report.yml`, `feature_request.yml`), PR template, and Contributor Covenant v2.1 `CODE_OF_CONDUCT.md`.
+  - Revamped `README.md` with SVG status badges, architecture diagrams, benchmark tables, cross-platform matrix, and documentation index.
 - **Test Suite Scale**:
   - Total test suites expanded to **39**, all passing with 100% pass rate.
 

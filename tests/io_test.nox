@@ -13,8 +13,8 @@ from table import Table
 import io
 from io import read_csv_file, write_csv_file, read_json_file, write_json_file
 
-test_csv_path: str = "/tmp/atlas_test_io.csv"
-test_json_path: str = "/tmp/atlas_test_io.json"
+test_csv_path: str = "temp_atlas_test_io.csv"
+test_json_path: str = "temp_atlas_test_io.json"
 
 # Clean up before running if left from previous runs
 if nox.fs.exists(test_csv_path):

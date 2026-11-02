@@ -1,0 +1,93 @@
+name: Bug Report
+description: Report a defect, unexpected behavior, or numerical discrepancy in Atlas
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue! Please verify that your report has not already been submitted by searching existing open and closed issues.
+  - type: input
+    id: version
+    attributes:
+      label: Atlas Version
+      description: What version of Atlas are you running? (Check nox.json or run `noxc list`)
+      placeholder: "0.9.5"
+    validations:
+      required: true
+  - type: input
+    id: noxc_version
+    attributes:
+      label: Nox Compiler Version
+      description: Run `noxc version` in your terminal and paste the exact output.
+      placeholder: "noxc 2.0.86 (darwin arm64)"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What operating system and architecture are you using?
+      options:
+        - Windows 10/11 (x86_64)
+        - Windows (ARM64)
+        - macOS (Apple Silicon / arm64)
+        - macOS (Intel / x86_64)
+        - Ubuntu / Debian Linux (x86_64)
+        - Linux (ARM64 / aarch64)
+        - Other (specify below)
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which module or area of Atlas does this bug affect?
+      options:
+        - "atlas.table (Table, Schema, ColumnDef, Cell)"
+        - "atlas.csv / delimited (RFC 4180 parsing, delimiter handling, TSV)"
+        - "atlas.streaming (StreamingCsvReader, Stream pipeline, Online GroupBy)"
+        - "atlas.window (WindowContext, RowNumber, Rank, DenseRank, Lag/Lead, CumSum, Rolling)"
+        - "atlas.reshape (melt, pivot, pivot_table)"
+        - "atlas.join / concat (Hash Join, Full Outer Join, Cross Join, Row/Col Concat)"
+        - "atlas.stats (Welford variance/stddev, Neumaier compensated sum/mean, quantiles)"
+        - "atlas.values (Checked 64-bit arithmetic, INT64 limits, NaN/Inf semantics)"
+        - "atlas.io / validation / sql_adapter"
+        - "Other / Cross-Cutting"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of the issue or discrepancy.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal Reproducible Example
+      description: Paste a minimal, self-contained Nox script that reproduces the error.
+      render: nox
+      placeholder: |
+        import atlas
+        from atlas import Table, Schema, read_csv
+        
+        # Minimal code to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What result or output did you expect according to specification / Pandas / SQL?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Output / Traceback
+      description: Paste terminal output, error message, or stack trace.
+      render: text
+    validations:
+      required: true
