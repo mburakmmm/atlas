@@ -4,7 +4,7 @@ import nox.mathx
 import errors
 from errors import AggregationError
 import values
-from values import Cell, checked_add_int64, TYPE_INT
+from values import Cell, checked_add_int64, TYPE_INT, float_inf, float_neg_inf, float_nan, is_nan
 
 def stat_count(cells: list[Cell]) -> int:
     return len(cells)
@@ -30,32 +30,53 @@ def stat_count_missing(cells: list[Cell]) -> int:
     return cnt
 
 def stat_sum(cells: list[Cell]) -> float:
-    # Neumaier compensated summation algorithm
-    # Prevents catastrophic cancellation and floating-point precision loss
+    # Neumaier compensated summation algorithm with IEEE-754 Infinity & NaN handling.
+    # Prevents catastrophic cancellation and floating-point precision loss for finite values,
+    # while strictly adhering to IEEE-754 rules for special values (+Inf, -Inf, NaN):
+    #   [+Inf, 1.0] -> +Inf
+    #   [-Inf, 1.0] -> -Inf
+    #   [+Inf, -Inf] -> NaN (indeterminate form infinity - infinity)
+    #   [NaN, ...] -> NaN
     sum_f: float = 0.0
     c_comp: float = 0.0
+    has_pos_inf: bool = False
+    has_neg_inf: bool = False
     i: int = 0
     n: int = len(cells)
     while i < n:
         cell_item: Cell = cells[i]
         if not cell_item.is_missing() and cell_item.is_numeric():
             x: float = cell_item.as_float()
+            # If NaN encountered, IEEE-754 mandates NaN result immediately
             if not (x == x):
                 return x
-            t: float = sum_f + x
-            abs_sum: float = sum_f
-            if abs_sum < 0.0:
-                abs_sum = -abs_sum
-            abs_x: float = x
-            if abs_x < 0.0:
-                abs_x = -abs_x
-
-            if abs_sum >= abs_x:
-                c_comp = c_comp + ((sum_f - t) + x)
+            if x == float_inf():
+                has_pos_inf = True
+            elif x == float_neg_inf():
+                has_neg_inf = True
             else:
-                c_comp = c_comp + ((x - t) + sum_f)
-            sum_f = t
+                # Accumulate finite values with Neumaier compensation
+                t: float = sum_f + x
+                abs_sum: float = sum_f
+                if abs_sum < 0.0:
+                    abs_sum = -abs_sum
+                abs_x: float = x
+                if abs_x < 0.0:
+                    abs_x = -abs_x
+
+                if abs_sum >= abs_x:
+                    c_comp = c_comp + ((sum_f - t) + x)
+                else:
+                    c_comp = c_comp + ((x - t) + sum_f)
+                sum_f = t
         i = i + 1
+
+    if has_pos_inf and has_neg_inf:
+        return float_nan()
+    if has_pos_inf:
+        return float_inf()
+    if has_neg_inf:
+        return float_neg_inf()
     return sum_f + c_comp
 
 def stat_sum_int(cells: list[Cell], context_msg: str = "stat_sum_int") -> int:

@@ -382,10 +382,11 @@ from atlas import INT64_MAX, INT64_MIN, stat_sum, stat_mean
 a: int = checked_add_int64(10, 20, "addition")
 b: int = checked_sub_int64(100, 50, "subtraction")
 c: int = checked_mul_int64(5, 20, "multiplication")
-d: int = checked_div_int64(100, 4, "division") # guards against div-by-zero & INT64_MIN // -1
+d: int = checked_div_int64(-7, 2, "division") # -4 (floor division \floor{a / b}\rfloor; guards against div-by-zero & INT64_MIN // -1)
 
-# Neumaier compensated summation preventing catastrophic cancellation
+# Neumaier compensated summation preventing catastrophic cancellation and preserving IEEE-754 Infinity/NaN
 # [1e16, 1.0, -1e16] -> 1.0 exactly
+# [+Inf, 1.0] -> +Inf, [-Inf, 1.0] -> -Inf, [+Inf, -Inf] -> NaN
 total: float = stat_sum(nums)
 avg: float = stat_mean(nums)
 ```

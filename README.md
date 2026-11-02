@@ -8,7 +8,7 @@ Atlas is a lightweight, zero-dependency, statically typed tabular processing lib
 
 [![CI Matrix](https://github.com/mburakmmm/atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/atlas/actions/workflows/ci.yml)
 [![Release Gate](https://github.com/mburakmmm/atlas/actions/workflows/release.yml/badge.svg)](https://github.com/mburakmmm/atlas/actions/workflows/release.yml)
-[![Version](https://img.shields.io/badge/version-v0.9.5-orange.svg)](nox.json)
+[![Version](https://img.shields.io/badge/version-v0.9.6-orange.svg)](nox.json)
 [![Platform Support](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#-cross-platform--compatibility-matrix)
 [![Tests](https://img.shields.io/badge/tests-39%20passed%20%28100%25%29-brightgreen.svg)](tests/)
 [![Compiler](https://img.shields.io/badge/noxc-2.0.86-purple.svg)](https://github.com/mburakmmm/nox-lang)

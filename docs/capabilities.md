@@ -141,6 +141,8 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
   - Prevents boundary overflow in multiplication with full sign checking, raising `ShapeError`.
 - **`checked_div_int64(a: int, b: int, context_msg: str = "") -> int`**:
   - Validates divisor $\ne 0$ and guards against two's complement boundary overflow ($\text{INT64\_MIN} // -1$), raising `ShapeError`.
+  - **Floor Division Contract**: Follows strict floor division semantics ($\lfloor a / b \rfloor$, rounding toward negative infinity) consistently across LLVM and QBE backends:
+    - `-7 // 2 = -4`, `7 // -2 = -4`, `-7 // -2 = 3`, `7 // 2 = 3`.
 - **Unified Integer Aggregation Contract**:
   - `groupby.agg_sum`: When the target column is `TYPE_INT`, exact integer arithmetic is preserved without 53-bit float precision loss; overflows raise `ShapeError`.
   - `StreamingCsvReader.sum`: When summing a `TYPE_INT` column, values across chunks are checked and accumulated with `checked_add_int64`.
@@ -151,7 +153,7 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 
 ---
 
-## 12. Neumaier Compensated Summation (`stats.nox`) (v0.9.5)
+## 12. Neumaier Compensated Summation (`stats.nox`) (v0.9.5 & v0.9.6)
 
 - **Algorithm & Numerical Stability**:
   - `stat_sum` and `stat_mean` use Neumaier's enhanced compensated summation algorithm.
@@ -159,20 +161,31 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
     $$\text{sum} + \text{correction}$$
   - Accurately computes $[10^{16}, 1.0, -10^{16}] = 1.0$ (naive summation yields $0.0$).
   - Zero performance degradation on ordinary datasets while guaranteeing IEEE 754 precision preservation across high-dynamic-range floats.
+- **IEEE-754 Special Value Preservation (v0.9.6)**:
+  - Finite values are processed through Neumaier compensation, while special floating-point values are handled strictly under IEEE-754 rules:
+    - `[+Inf, 1.0]` $\to$ `+Inf` (both for sum and mean).
+    - `[-Inf, 1.0]` $\to$ `-Inf` (both for sum and mean).
+    - `[+Inf, -Inf]` $\to$ `NaN` (indeterminate form $\infty - \infty$).
+    - `[NaN, ...]` $\to$ `NaN` (non-signaling NaN propagation).
+  - Explicit Infinity predicate suite (`is_inf`, `is_pos_inf`, `is_neg_inf`) in `values.nox` and re-exported via `atlas.nox`.
 
 ---
 
-## 13. Cross-Backend Compatibility & Ground-Truth Reference Verification (v0.9.5)
+## 13. Cross-Backend Compatibility & Ground-Truth Reference Verification (v0.9.5 & v0.9.6)
 
 - **Backend Matrix Verification (`tests/backend_matrix_test.nox`)**:
-  - Systematic cross-backend test suite ensuring portable execution across LLVM, C, and native backends:
-    1. INT64 extreme boundaries and two's complement representation.
+  - Systematic cross-backend test suite ensuring portable execution across LLVM and QBE backends:
+    1. INT64 extreme boundaries, two's complement representation, and floor division semantics.
     2. IEEE 754 float behavior, NaN non-reflexivity (`nan != nan`), Infinity propagation.
     3. Collision-free type-distinct hash keys across string, int, float, bool, and null.
     4. Stable sort tie preservation across primary keys.
     5. Multi-byte UTF-8 character integrity across Turkish characters (`ı, ğ, ü, ş, ö, ç`), CJK characters, and emojis.
     6. Complete `AtlasError` exception class hierarchy.
+- **Automated QBE / LLVM Matrix in CI (`.github/workflows/ci.yml`)**:
+  - CI automatically verifies execution and passes all matrix suites under both `--backend llvm` and `--backend qbe`.
 - **Ground-Truth Analytical Equivalence (`tests/reference_comparison_test.nox`)**:
   - Outputs from multi-key GroupBy, window functions, pivot tables, melt unrolling, and full outer joins are verified directly against analytical reference values precomputed in Pandas 2.x and Polars 1.x.
-- **High Cardinality Scaling (`tests/high_cardinality_test.nox`)**:
-  - Hash GroupBy scales seamlessly to 50,000 unique groups across 100,000 rows in ~37 ms.
+- **Multi-Scale Cardinality & Skewed Distribution Suite (`tests/high_cardinality_test.nox`)**:
+  - Low Cardinality: 10 groups on 100,000 rows (10,000 rows/group).
+  - High Cardinality: 50,000 unique groups across 100,000 rows in ~36 ms.
+  - Heavily Skewed Zipfian Distribution: 80,000-row dominant group with 1,000 tail groups on 100,000 rows in ~25 ms without hash collision degradation.

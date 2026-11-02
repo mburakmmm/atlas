@@ -5,6 +5,32 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-11-02
+
+### Added & Improved
+- **Neumaier Summation IEEE-754 Special Value Protection (`stats.nox`, `values.nox`, `atlas.nox`)**:
+  - Fixed a critical edge-case where Infinity inputs (`+Inf`, `-Inf`) combined with finite numbers collapsed to `NaN` in Neumaier's compensated summation loop due to `(sum_f - t) + x` evaluating to $\infty - \infty = \text{NaN}$.
+  - Special floating-point values are now tracked and handled strictly under IEEE-754 semantics:
+    - `[+Inf, 1.0]` $\to$ `+Inf` (both for sum and mean).
+    - `[-Inf, 1.0]` $\to$ `-Inf` (both for sum and mean).
+    - `[+Inf, -Inf]` $\to$ `NaN` (indeterminate form).
+    - `[NaN, ...]` $\to$ `NaN` (non-signaling NaN propagation).
+  - Implemented exact Infinity predicate suite in `values.nox` (`is_inf`, `is_pos_inf`, `is_neg_inf`) and re-exported through the top-level `atlas` facade.
+- **Signed 64-bit Integer Floor Division Contract (`values.nox`, `atlas.nox`, `docs/`)**:
+  - Verified and formally documented that `checked_div_int64` implements strict floor division ($\lfloor a / b \rfloor$, rounding toward negative infinity) identically across both LLVM and QBE compiler backends:
+    - `-7 // 2 = -4`, `7 // -2 = -4`, `-7 // -2 = 3`, `7 // 2 = 3`.
+  - Added targeted assertions in `tests/values_test.nox` and `tests/backend_matrix_test.nox`.
+- **Automated Cross-Backend Execution Matrix in CI (`.github/workflows/ci.yml`, `.github/workflows/release.yml`)**:
+  - Integrated automated testing across compiler backends in GitHub Actions CI and Release Gate:
+    - Validates both `--backend llvm` and `--backend qbe` on `backend_matrix_test.nox` and `reference_comparison_test.nox`.
+- **Multi-Scale Cardinality & Heavily Skewed Zipfian GroupBy Suite (`tests/high_cardinality_test.nox`)**:
+  - Expanded `tests/high_cardinality_test.nox` into a multi-distribution stress suite on 100,000 synthetic rows:
+    1. High cardinality: 50,000 distinct groups (2 rows/group) executing in ~36 ms.
+    2. Low cardinality: 10 groups (10,000 rows/group).
+    3. Heavily skewed Zipfian distribution: 1 dominant group with 80,000 rows and 1,000 tail groups (20 rows each) executing in ~25 ms with 100% aggregation accuracy and zero hash collision degradation.
+- **Test Suite Scale**:
+  - Total test suites: **39**, all passing 100% across LLVM and QBE backends.
+
 ## [0.9.5] - 2026-11-01
 
 ### Added & Improved

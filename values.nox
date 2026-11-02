@@ -81,6 +81,10 @@ def checked_mul_int64(a: int, b: int, context_msg: str = "") -> int:
 
     return a * b
 
+# Checked 64-bit integer floor division (\floor{a / b}\rfloor, rounding toward negative infinity).
+# Guarantees identical floor division semantics across LLVM and QBE backends:
+#   -7 // 2 = -4, 7 // -2 = -4, -7 // -2 = 3, 7 // 2 = 3
+# Raises ShapeError on division by zero or two's complement overflow (INT64_MIN // -1).
 def checked_div_int64(a: int, b: int, context_msg: str = "") -> int:
     if b == 0:
         msg: str = "division by zero"
@@ -339,7 +343,13 @@ def is_nan(f: float) -> bool:
     return not (f == f)
 
 def is_inf(f: float) -> bool:
-    return f >= 9223372036854775808.0 or f < -9223372036854775808.0
+    return f == float_inf() or f == float_neg_inf()
+
+def is_pos_inf(f: float) -> bool:
+    return f == float_inf()
+
+def is_neg_inf(f: float) -> bool:
+    return f == float_neg_inf()
 
 def float_nan() -> float:
     return 0.0 / 0.0

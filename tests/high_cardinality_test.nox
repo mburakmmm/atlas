@@ -1,4 +1,5 @@
-# tests/high_cardinality_test.nox — High cardinality Hash GroupBy stress test (50,000 unique groups, 100,000 rows).
+# tests/high_cardinality_test.nox — Comprehensive Hash GroupBy stress test suite.
+# Evaluates multi-scale cardinality (Low, Medium, High) and heavily skewed (Zipfian) distributions on 100,000 rows.
 
 import nox.test
 import nox.time
@@ -18,48 +19,120 @@ s: Schema = Schema([
     ColumnDef("val_f", TYPE_FLOAT)
 ])
 
-# 100,000 rows across 50,000 unique groups: each group appears twice (i % 50000)
-num_groups: int = 50000
-num_rows: int = 100000
+# =========================================================================
+# 1. High Cardinality: 100,000 rows across 50,000 unique groups (2 rows/group)
+# =========================================================================
+num_groups_high: int = 50000
+num_rows_high: int = 100000
 
-rows: list[list[Cell]] = []
-i: int = 0
-while i < num_rows:
-    grp_idx: int = i % num_groups
-    rows.append([
+rows_high: list[list[Cell]] = []
+i_h: int = 0
+while i_h < num_rows_high:
+    grp_idx: int = i_h % num_groups_high
+    rows_high.append([
         cell_str("grp_" + str(grp_idx)),
         cell_int(5),
         cell_float(10.5)
     ])
-    i = i + 1
+    i_h = i_h + 1
 
-t: Table = Table(s, rows)
-nox.test.assert_eq_int(t.row_count(), 100000, "100,000 input rows created")
-
-t0: int = nox.time.now_ms()
-g: GroupedTable = group_by(t, ["grp_id"])
-res: Table = g.aggregate([
+t_high: Table = Table(s, rows_high)
+t0_high: int = nox.time.now_ms()
+g_high: GroupedTable = group_by(t_high, ["grp_id"])
+res_high: Table = g_high.aggregate([
     agg_count("cnt"),
     agg_sum("val_i", "sum_int"),
     agg_sum("val_f", "sum_float")
 ])
-duration_ms: int = nox.time.now_ms() - t0
+dur_high: int = nox.time.now_ms() - t0_high
 
-# Assertions
-nox.test.assert_eq_int(g.group_count(), 50000, "50,000 unique groups partitioned")
-nox.test.assert_eq_int(res.row_count(), 50000, "50,000 aggregated rows")
+nox.test.assert_eq_int(g_high.group_count(), 50000, "50,000 unique groups partitioned")
+nox.test.assert_eq_int(res_high.row_count(), 50000, "50,000 aggregated rows")
+nox.test.assert_eq_str(res_high.rows[0][0].to_string(), "grp_0", "First group is grp_0")
+nox.test.assert_eq_int(res_high.rows[0][1].as_int(), 2, "grp_0 count is 2")
+nox.test.assert_eq_int(res_high.rows[0][2].as_int(), 10, "grp_0 sum_int is 10")
+nox.test.assert_eq_float(res_high.rows[0][3].as_float(), 21.0, "grp_0 sum_float is 21.0")
 
-# Spot checks
-# Group 0: cnt=2, sum_int=10, sum_float=21.0
-nox.test.assert_eq_str(res.rows[0][0].to_string(), "grp_0", "First group is grp_0")
-nox.test.assert_eq_int(res.rows[0][1].as_int(), 2, "grp_0 count is 2")
-nox.test.assert_eq_int(res.rows[0][2].as_int(), 10, "grp_0 sum_int is 10")
-nox.test.assert_eq_float(res.rows[0][3].as_float(), 21.0, "grp_0 sum_float is 21.0")
+# =========================================================================
+# 2. Low Cardinality: 100,000 rows across 10 unique groups (10,000 rows/group)
+# =========================================================================
+rows_low: list[list[Cell]] = []
+i_l: int = 0
+while i_l < 100000:
+    rows_low.append([
+        cell_str("low_" + str(i_l % 10)),
+        cell_int(2),
+        cell_float(1.5)
+    ])
+    i_l = i_l + 1
 
-# Group 49999 (last distinct group encountered in first 50k rows)
-nox.test.assert_eq_str(res.rows[49999][0].to_string(), "grp_49999", "Group 49999")
-nox.test.assert_eq_int(res.rows[49999][1].as_int(), 2, "grp_49999 count is 2")
-nox.test.assert_eq_int(res.rows[49999][2].as_int(), 10, "grp_49999 sum_int is 10")
-nox.test.assert_eq_float(res.rows[49999][3].as_float(), 21.0, "grp_49999 sum_float is 21.0")
+t_low: Table = Table(s, rows_low)
+g_low: GroupedTable = group_by(t_low, ["grp_id"])
+res_low: Table = g_low.aggregate([
+    agg_count("cnt"),
+    agg_sum("val_i", "sum_int"),
+    agg_sum("val_f", "sum_float")
+])
 
-print("high_cardinality_test passed (50k groups, 100k rows in " + str(duration_ms) + " ms)")
+nox.test.assert_eq_int(g_low.group_count(), 10, "10 low-cardinality groups")
+nox.test.assert_eq_int(res_low.row_count(), 10, "10 aggregated rows in low-cardinality")
+nox.test.assert_eq_int(res_low.rows[0][1].as_int(), 10000, "Each low group has exactly 10,000 rows")
+nox.test.assert_eq_int(res_low.rows[0][2].as_int(), 20000, "Sum int for low group is 20,000")
+nox.test.assert_eq_float(res_low.rows[0][3].as_float(), 15000.0, "Sum float for low group is 15,000.0")
+
+# =========================================================================
+# 3. Heavily Skewed (Zipfian) Distribution:
+#    1 dominant group with 80,000 rows + 999 tail groups with 20 rows each
+#    Total = 80,000 + (999 * 20) = 80,000 + 19,980 = 99,980 + 20 = 100,000 rows
+# =========================================================================
+rows_skew: list[list[Cell]] = []
+# 80,000 rows in the dominant group
+i_dom: int = 0
+while i_dom < 80000:
+    rows_skew.append([
+        cell_str("grp_dominant"),
+        cell_int(3),
+        cell_float(2.0)
+    ])
+    i_dom = i_dom + 1
+
+# 20,000 rows distributed across 1,000 tail groups (20 rows each)
+i_tail: int = 0
+while i_tail < 20000:
+    t_id: int = i_tail % 1000
+    rows_skew.append([
+        cell_str("grp_tail_" + str(t_id)),
+        cell_int(10),
+        cell_float(5.5)
+    ])
+    i_tail = i_tail + 1
+
+t_skew: Table = Table(s, rows_skew)
+nox.test.assert_eq_int(t_skew.row_count(), 100000, "100,000 skewed rows created")
+
+t0_skew: int = nox.time.now_ms()
+g_skew: GroupedTable = group_by(t_skew, ["grp_id"])
+res_skew: Table = g_skew.aggregate([
+    agg_count("cnt"),
+    agg_sum("val_i", "sum_int"),
+    agg_sum("val_f", "sum_float")
+])
+dur_skew: int = nox.time.now_ms() - t0_skew
+
+# Total groups = 1 dominant + 1,000 tail = 1,001 groups
+nox.test.assert_eq_int(g_skew.group_count(), 1001, "1,001 skewed groups partitioned")
+nox.test.assert_eq_int(res_skew.row_count(), 1001, "1,001 aggregated rows")
+
+# Dominant group is first encountered
+nox.test.assert_eq_str(res_skew.rows[0][0].to_string(), "grp_dominant", "First group is dominant group")
+nox.test.assert_eq_int(res_skew.rows[0][1].as_int(), 80000, "Dominant group count is 80,000")
+nox.test.assert_eq_int(res_skew.rows[0][2].as_int(), 240000, "Dominant group sum_int is 240,000 (80k * 3)")
+nox.test.assert_eq_float(res_skew.rows[0][3].as_float(), 160000.0, "Dominant group sum_float is 160,000.0 (80k * 2.0)")
+
+# Check first tail group (index 1)
+nox.test.assert_eq_str(res_skew.rows[1][0].to_string(), "grp_tail_0", "Second group is tail 0")
+nox.test.assert_eq_int(res_skew.rows[1][1].as_int(), 20, "Tail group count is 20")
+nox.test.assert_eq_int(res_skew.rows[1][2].as_int(), 200, "Tail group sum_int is 200 (20 * 10)")
+nox.test.assert_eq_float(res_skew.rows[1][3].as_float(), 110.0, "Tail group sum_float is 110.0 (20 * 5.5)")
+
+print("high_cardinality_test passed (50k uniform: " + str(dur_high) + " ms, 80k-skewed: " + str(dur_skew) + " ms)")

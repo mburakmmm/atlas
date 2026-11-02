@@ -8,7 +8,7 @@ from atlas import cell_nan, cell_inf, cell_neg_inf, is_nan, is_inf, float_nan, f
 from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_NULL
 from atlas import checked_add_int64, checked_sub_int64, checked_mul_int64, checked_div_int64, INT64_MAX, INT64_MIN
 from atlas import cell_hash_key, composite_hash_key
-from atlas import sort_rows, read_csv, to_csv
+from atlas import sort_rows, read_csv, to_csv, stat_sum, stat_mean
 from atlas import AtlasError, ShapeError, AggregationError, SchemaError, SortError, ColumnNotFoundError, TypeConversionError, MissingValueError, CsvImportError
 
 # =========================================================================
@@ -37,6 +37,12 @@ except ShapeError:
     caught_div_trap = True
 nox.test.assert_true(caught_div_trap, "checked_div_int64 INT64_MIN // -1 raises ShapeError")
 
+# Integer floor division semantics verification across backends (floor toward negative infinity)
+nox.test.assert_eq_int(checked_div_int64(-7, 2), -4, "floor division -7 // 2 is -4")
+nox.test.assert_eq_int(checked_div_int64(7, -2), -4, "floor division 7 // -2 is -4")
+nox.test.assert_eq_int(checked_div_int64(-7, -2), 3, "floor division -7 // -2 is 3")
+nox.test.assert_eq_int(checked_div_int64(7, 2), 3, "floor division 7 // 2 is 3")
+
 # =========================================================================
 # 2. IEEE-754 Float NaN, Inf & Comparison Semantics
 # =========================================================================
@@ -57,6 +63,25 @@ nox.test.assert_true(c_nan.equals(cell_nan()), "Cell NaN equals Cell NaN for has
 nox.test.assert_true(c_inf.compare(c_ninf) > 0, "+Inf > -Inf")
 nox.test.assert_true(c_ninf.compare(cell_float(-1e100)) < 0, "-Inf < any finite float")
 nox.test.assert_true(c_inf.compare(cell_float(1e100)) > 0, "+Inf > any finite float")
+
+# Neumaier summation special value preservation (+Inf, -Inf, NaN)
+c_pos_inf_list: list[Cell] = [cell_inf(), cell_float(1.0)]
+nox.test.assert_true(stat_sum(c_pos_inf_list) == float_inf(), "Neumaier stat_sum(+Inf, 1.0) == +Inf")
+nox.test.assert_true(stat_mean(c_pos_inf_list) == float_inf(), "Neumaier stat_mean(+Inf, 1.0) == +Inf")
+
+c_neg_inf_list: list[Cell] = [cell_neg_inf(), cell_float(1.0)]
+nox.test.assert_true(stat_sum(c_neg_inf_list) == float_neg_inf(), "Neumaier stat_sum(-Inf, 1.0) == -Inf")
+nox.test.assert_true(stat_mean(c_neg_inf_list) == float_neg_inf(), "Neumaier stat_mean(-Inf, 1.0) == -Inf")
+
+c_indeterminate: list[Cell] = [cell_inf(), cell_neg_inf()]
+nox.test.assert_true(is_nan(stat_sum(c_indeterminate)), "Neumaier stat_sum(+Inf, -Inf) is NaN")
+
+c_nan_input: list[Cell] = [cell_nan(), cell_float(1.0)]
+nox.test.assert_true(is_nan(stat_sum(c_nan_input)), "Neumaier stat_sum(NaN, 1.0) is NaN")
+
+# Neumaier cancellation recovery: 1e16 + 1.0 - 1e16 = 1.0
+c_neumaier_canc: list[Cell] = [cell_float(10000000000000000.0), cell_float(1.0), cell_float(-10000000000000000.0)]
+nox.test.assert_eq_float(stat_sum(c_neumaier_canc), 1.0, "Neumaier exact 1.0 recovery")
 
 # =========================================================================
 # 3. Hash Determinsim Across Runs & Type Boundaries

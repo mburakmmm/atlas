@@ -28,6 +28,7 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.9.3** | **Sıralama Anahtarı Doğrulaması, Tembel Sütun Tamponlama, 3.17x Hızlanma & Testler** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.4** | **Ortak Checked Arithmetic, Bağımsız Pipeline Sözleşmesi & Medyan Benchmark** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.5** | **Genişletilmiş Checked Aritmetik, Neumaier Toplamı, Backend Matrisi & Referans Testleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 39/39 Test Geçti (`noxc test`) |
+| **v0.9.6** | **Neumaier Inf/NaN Güvenliği, Tamsayı Bölme Semantiği, QBE/LLVM CI & Skewed GroupBy** | ✅ **TAMAMLANDI & YAYINLANDI** | 39/39 Test Geçti (`noxc test`) |
 | **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
 
 ---
@@ -617,6 +618,35 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
   - `CHANGELOG.md`, `README.md`, `docs/capabilities.md`, `docs/api.md` güncellendi.
   - `noxc test` ile tüm 39 test paketinin geçtiği doğrulandı.
   - Git commit, push ve `noxc publish` ile sürüm tamamlandı.
+
+---
+
+## ✅ Sürüm 0.9.6 — Neumaier Inf/NaN Güvenliği, Tamsayı Bölme Semantiği, QBE/LLVM CI & Skewed GroupBy (Tamamlananlar)
+
+- [x] **Neumaier Toplamı ve Ortalamasında IEEE-754 Infinity & NaN Koruması (🔴 P1 - `stats.nox`, `values.nox`, `atlas.nox`)**:
+  - `stats.stat_sum` içerisinde Infinity (`+Inf`, `-Inf`) ve NaN değerlerinin Neumaier telafi terimi akümülasyonuna (`c_comp`) karışarak `Inf - Inf = NaN` oluşturması ve `+Inf + 1.0 = NaN` sonucuna yol açması hatası giderildi.
+  - Değer tarama döngüsünde `is_nan` durumunda anında `NaN` dönülmesi sağlandı; `+Inf` ve `-Inf` bayrakları ayrıştırıldı.
+  - Sadece sonlu sayıların Neumaier telafi algoritmasına aktarılması temin edildi; `+Inf + (-Inf)` durumunda matematiksel belirsizlik formu gereği `NaN` dönülmesi; `[+Inf, 1.0]` -> `+Inf`, `[-Inf, 1.0]` -> `-Inf` IEEE-754 kuralları sağlandı.
+  - `stats.stat_mean` fonksiyonunun `+Inf` ve `-Inf` girdilerinde doğru `+Inf` / `-Inf` üretmesi sağlandı.
+  - `values.is_inf` fonksiyonu tam IEEE-754 sonsuzluk karşılaştırmasına (`f == float_inf() or f == float_neg_inf()`) dönüştürüldü; `is_pos_inf(f)` ve `is_neg_inf(f)` fonksiyonları eklenip `atlas.nox` facadelerinden dışa aktarıldı.
+- [x] **Tamsayı Bölme (Integer Division) Semantiğinin Doğrulanması ve Belgelenmesi (🟠 P2 - `values.nox`, `docs/capabilities.md`, `tests/`)**:
+  - `checked_div_int64` fonksiyonunda NOX dilinin `//` operatörünün Floor Division ($\lfloor a / b \rfloor$) semantiğine sahip olduğu (`-7 // 2 = -4`, `7 // -2 = -4`, `-7 // -2 = 3`, `7 // 2 = 3`) hem LLVM hem QBE backend'lerinde testlerle doğrulandı.
+  - Davranış `docs/capabilities.md`, `docs/api.md` ve kod içi docstring belgelerinde net olarak belgelendi.
+- [x] **Çapraz Backend CI Matrisi: QBE ve LLVM Doğrulaması (🟠 P2 - `.github/workflows/ci.yml`, `.github/workflows/release.yml`)**:
+  - GitHub Actions CI ve Release Gate iş akışlarına standart LLVM testlerinin yanı sıra `--backend qbe` ile backend uyumluluk testlerinin (`tests/backend_matrix_test.nox`, `tests/reference_comparison_test.nox`) çalıştırılması entegre edildi.
+- [x] **GroupBy Skewed (Çarpık/Zipfian) Dağılım ve Çoklu Kardinalite Test Paketi (🟠 P2 - `tests/high_cardinality_test.nox`)**:
+  - 100.000 satırlık veri setinde 3 kritik kardinalite ve dağılım profili test edildi:
+    1. Yüksek kardinalite: 50.000 grup x 2 satır (~36 ms).
+    2. Düşük kardinalite: 10 grup x 10.000 satır.
+    3. Çarpık (Skewed/Zipfian) dağılım: 80.000 satırlık baskın grup + 1.000 adet küçük kuyruk grubu (~25 ms).
+  - Hash grouping ve collision bucket mekanizmasının her dağılımda deterministik sonuç ürettiği ve bellek/performans çökmesi yaşamadığı teyit edildi.
+- [x] **Zemin Gerçeği (Ground Truth) Karşılaştırma Sözleşmesi ve Belgelendirme (🟠 P2 - `docs/capabilities.md`, `tests/reference_comparison_test.nox`)**:
+  - Atlas ile Pandas 2.x ve Polars 1.x arasındaki veri tipi ve eksik değer politikaları (None vs NaN vs Null, Window ties kuralları `1, 2, 2, 4, 5`) resmi olarak belgelendi.
+- [x] **Dokümantasyon & Sürüm 0.9.6**:
+  - `nox.json` sürümü `0.9.6` olarak güncellendi.
+  - `CHANGELOG.md`, `README.md`, `docs/capabilities.md`, `docs/api.md` güncellendi.
+  - Tüm testlerin (`noxc test`) çalıştırılıp sıfır hata ile geçtiği doğrulandı.
+  - Git commit ve push ile sürüm tamamlandı.
 
 ---
 

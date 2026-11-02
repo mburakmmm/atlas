@@ -4,7 +4,7 @@ import nox.test
 import errors
 from errors import TypeConversionError
 import values
-from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, checked_div_int64, is_inf, is_pos_inf, is_neg_inf, float_inf, float_neg_inf, float_nan
 
 # 1. Null cell
 c_null: Cell = cell_null()
@@ -75,5 +75,21 @@ try:
 except TypeConversionError:
     caught_err = True
 nox.test.assert_true(caught_err, "must raise TypeConversionError on invalid int parse")
+
+# 10. Checked integer floor division semantics (\floor{a / b}\rfloor)
+nox.test.assert_eq_int(checked_div_int64(-7, 2), -4, "floor division -7 // 2 is -4")
+nox.test.assert_eq_int(checked_div_int64(7, -2), -4, "floor division 7 // -2 is -4")
+nox.test.assert_eq_int(checked_div_int64(-7, -2), 3, "floor division -7 // -2 is 3")
+nox.test.assert_eq_int(checked_div_int64(7, 2), 3, "floor division 7 // 2 is 3")
+
+# 11. Infinity and NaN classification helpers
+nox.test.assert_true(is_inf(float_inf()), "float_inf is_inf")
+nox.test.assert_true(is_inf(float_neg_inf()), "float_neg_inf is_inf")
+nox.test.assert_true(is_pos_inf(float_inf()), "float_inf is_pos_inf")
+nox.test.assert_true(not is_neg_inf(float_inf()), "float_inf not is_neg_inf")
+nox.test.assert_true(is_neg_inf(float_neg_inf()), "float_neg_inf is_neg_inf")
+nox.test.assert_true(not is_pos_inf(float_neg_inf()), "float_neg_inf not is_pos_inf")
+nox.test.assert_true(not is_inf(1e25), "large finite float 1e25 is not infinity")
+nox.test.assert_true(not is_inf(float_nan()), "NaN is not infinity")
 
 print("values_test passed")

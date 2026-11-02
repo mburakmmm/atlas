@@ -57,6 +57,14 @@ jobs:
         run: |
           noxc test
 
+      - name: Verify Cross-Backend Execution Matrix (QBE & LLVM)
+        if: runner.os != 'Windows'
+        run: |
+          noxc test --backend llvm tests/backend_matrix_test.nox
+          noxc test --backend qbe tests/backend_matrix_test.nox
+          noxc test --backend llvm tests/reference_comparison_test.nox
+          noxc test --backend qbe tests/reference_comparison_test.nox
+
       - name: Run Performance Benchmarks
         run: |
           noxc run benchmarks/benchmark_window.nox
