@@ -1,9 +1,11 @@
 # reshape.nox — Table reshaping operations: melt, pivot, and pivot_table.
 
+import nox.decimal
+from nox.decimal import Decimal, from_int as decimal_from_int
 import errors
 from errors import ShapeError, ColumnNotFoundError, SchemaError, MissingValueError
 import values
-from values import Cell, cell_str, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_NULL, checked_add_int64
+from values import Cell, cell_str, cell_int, cell_float, cell_null, cell_decimal, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_NULL, TYPE_DECIMAL, checked_add_int64
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -68,6 +70,7 @@ def melt(t: Table, id_vars: list[str],
     # Check if all value columns share identical type
     common_type: int = t.schema.columns[val_indices[0]].data_type
     has_mixed_numeric: bool = False
+    has_decimal_mix: bool = False
     has_other_mixed: bool = False
     any_nullable: bool = False
 
@@ -80,13 +83,17 @@ def melt(t: Table, id_vars: list[str],
         if dt != common_type:
             if (common_type == TYPE_INT and dt == TYPE_FLOAT) or (common_type == TYPE_FLOAT and dt == TYPE_INT):
                 has_mixed_numeric = True
+            elif (common_type == TYPE_INT and dt == TYPE_DECIMAL) or (common_type == TYPE_DECIMAL and dt == TYPE_INT):
+                has_decimal_mix = True
             else:
                 has_other_mixed = True
         k = k + 1
 
     final_val_type: int = common_type
-    if has_other_mixed:
+    if has_other_mixed or (has_mixed_numeric and has_decimal_mix):
         final_val_type = TYPE_STR
+    elif has_decimal_mix:
+        final_val_type = TYPE_DECIMAL
     elif has_mixed_numeric:
         final_val_type = TYPE_FLOAT
 
@@ -124,6 +131,8 @@ def melt(t: Table, id_vars: list[str],
             if not raw_val.is_missing():
                 if final_val_type == TYPE_FLOAT and raw_val.kind == TYPE_INT:
                     promoted_val = cell_float(float(raw_val.as_int()))
+                elif final_val_type == TYPE_DECIMAL and raw_val.kind == TYPE_INT:
+                    promoted_val = cell_decimal(raw_val.as_decimal())
                 elif final_val_type == TYPE_STR and raw_val.kind != TYPE_STR:
                     promoted_val = cell_str(raw_val.to_string())
 
@@ -415,7 +424,10 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
     raw_val_type: int = t.schema.columns[values_idx].data_type
     out_val_type: int = raw_val_type
     if agg_func == "mean":
-        out_val_type = TYPE_FLOAT
+        if raw_val_type == TYPE_DECIMAL:
+            out_val_type = TYPE_DECIMAL
+        else:
+            out_val_type = TYPE_FLOAT
     elif agg_func == "count":
         out_val_type = TYPE_INT
 
@@ -441,20 +453,33 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
                     agg_result = cell_int(non_missing_cnt)
 
                 elif agg_func == "mean":
-                    sum_f: float = 0.0
-                    cnt_f: int = 0
-                    bi = 0
-                    while bi < n_b:
-                        c: Cell = bucket[bi]
-                        if not c.is_missing():
-                            if c.kind == TYPE_INT:
-                                sum_f = sum_f + float(c.as_int())
-                            else:
-                                sum_f = sum_f + c.as_float()
-                            cnt_f = cnt_f + 1
-                        bi = bi + 1
-                    if cnt_f > 0:
-                        agg_result = cell_float(sum_f / float(cnt_f))
+                    if raw_val_type == TYPE_DECIMAL:
+                        sum_d: Decimal = decimal_from_int(0)
+                        cnt_d: int = 0
+                        bi = 0
+                        while bi < n_b:
+                            c: Cell = bucket[bi]
+                            if not c.is_missing():
+                                sum_d = sum_d + c.as_decimal()
+                                cnt_d = cnt_d + 1
+                            bi = bi + 1
+                        if cnt_d > 0:
+                            agg_result = cell_decimal(sum_d.div(decimal_from_int(cnt_d), 8, "half_even").normalize())
+                    else:
+                        sum_f: float = 0.0
+                        cnt_f: int = 0
+                        bi = 0
+                        while bi < n_b:
+                            c: Cell = bucket[bi]
+                            if not c.is_missing():
+                                if c.kind == TYPE_INT:
+                                    sum_f = sum_f + float(c.as_int())
+                                else:
+                                    sum_f = sum_f + c.as_float()
+                                cnt_f = cnt_f + 1
+                            bi = bi + 1
+                        if cnt_f > 0:
+                            agg_result = cell_float(sum_f / float(cnt_f))
 
                 elif agg_func == "sum":
                     if raw_val_type == TYPE_INT:
@@ -462,22 +487,34 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
                         has_any: bool = False
                         bi = 0
                         while bi < n_b:
-                            c = bucket[bi]
-                            if not c.is_missing():
-                                v_i: int = c.as_int()
+                            c_i_cell: Cell = bucket[bi]
+                            if not c_i_cell.is_missing():
+                                v_i: int = c_i_cell.as_int()
                                 sum_i = checked_add_int64(sum_i, v_i, "pivot_table(sum)")
                                 has_any = True
                             bi = bi + 1
                         if has_any:
                             agg_result = cell_int(sum_i)
+                    elif raw_val_type == TYPE_DECIMAL:
+                        sum_dec: Decimal = decimal_from_int(0)
+                        has_any_d: bool = False
+                        bi = 0
+                        while bi < n_b:
+                            c_d_cell: Cell = bucket[bi]
+                            if not c_d_cell.is_missing():
+                                sum_dec = sum_dec + c_d_cell.as_decimal()
+                                has_any_d = True
+                            bi = bi + 1
+                        if has_any_d:
+                            agg_result = cell_decimal(sum_dec)
                     else:
                         sum_fl: float = 0.0
                         has_any_fl: bool = False
                         bi = 0
                         while bi < n_b:
-                            c = bucket[bi]
-                            if not c.is_missing():
-                                sum_fl = sum_fl + c.as_float()
+                            c_f_cell: Cell = bucket[bi]
+                            if not c_f_cell.is_missing():
+                                sum_fl = sum_fl + c_f_cell.as_float()
                                 has_any_fl = True
                             bi = bi + 1
                         if has_any_fl:
@@ -493,10 +530,10 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
                     min_c: Cell = cell_null()
                     bi = 0
                     while bi < n_b:
-                        c = bucket[bi]
-                        if not c.is_missing():
-                            if min_c.is_missing() or c.compare(min_c, False) < 0:
-                                min_c = c
+                        c_min: Cell = bucket[bi]
+                        if not c_min.is_missing():
+                            if min_c.is_missing() or c_min.compare(min_c, False) < 0:
+                                min_c = c_min
                         bi = bi + 1
                     agg_result = min_c
 
@@ -504,10 +541,10 @@ def pivot_table(t: Table, index_col: str, columns_col: str, values_col: str,
                     max_c: Cell = cell_null()
                     bi = 0
                     while bi < n_b:
-                        c = bucket[bi]
-                        if not c.is_missing():
-                            if max_c.is_missing() or c.compare(max_c, False) > 0:
-                                max_c = c
+                        c_max: Cell = bucket[bi]
+                        if not c_max.is_missing():
+                            if max_c.is_missing() or c_max.compare(max_c, False) > 0:
+                                max_c = c_max
                         bi = bi + 1
                     agg_result = max_c
 

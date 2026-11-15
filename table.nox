@@ -1,17 +1,21 @@
 # table.nox — In-memory 2D tabular data structure for Atlas.
 
+import nox.decimal
+from nox.decimal import Decimal
 import errors
 from errors import ShapeError, ColumnNotFoundError, MissingValueError, SchemaError
 import values
-from values import Cell, cell_null, TYPE_INT
+from values import Cell, cell_null, TYPE_INT, TYPE_DECIMAL
 import schema
 from schema import Schema, ColumnDef
 import expr
 from expr import Expr
 import sort
 from sort import sort_rows
+import parallel_exec
+from parallel_exec import parallel_filter_rows
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_sum_decimal, stat_mean_decimal, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
 import join
 import window
 import reshape
@@ -131,7 +135,10 @@ class Table:
         # Rows remain identical
         return Table(new_schema, self.rows)
 
-    def filter(self: Table, predicate: Expr) -> Table:
+    def filter(self: Table, predicate: Expr, parallel: bool = False) -> Table:
+
+        if parallel:
+            return Table(self.schema.copy(), parallel_filter_rows(self.schema, self.rows, predicate))
 
         matched_rows: list[list[Cell]] = []
         i: int = 0
@@ -301,6 +308,9 @@ class Table:
     def mean(self: Table, col_name: str) -> float:
 
         # Summary statistics
+        c_def: ColumnDef | None = self.schema.get_column_by_name(col_name)
+        if c_def is not None and c_def.data_type == TYPE_DECIMAL:
+            return stat_mean_decimal(self.column_cells(col_name)).to_float()
         return stat_mean(self.column_cells(col_name))
 
     def median(self: Table, col_name: str) -> float:
@@ -319,7 +329,15 @@ class Table:
         c_def: ColumnDef | None = self.schema.get_column_by_name(col_name)
         if c_def is not None and c_def.data_type == TYPE_INT:
             return float(stat_sum_int(self.column_cells(col_name), "table.sum_val"))
+        if c_def is not None and c_def.data_type == TYPE_DECIMAL:
+            return stat_sum_decimal(self.column_cells(col_name)).to_float()
         return stat_sum(self.column_cells(col_name))
+
+    def sum_decimal(self: Table, col_name: str) -> Decimal:
+        return stat_sum_decimal(self.column_cells(col_name))
+
+    def mean_decimal(self: Table, col_name: str, places: int = 8) -> Decimal:
+        return stat_mean_decimal(self.column_cells(col_name), places)
 
     def min_val(self: Table, col_name: str) -> Cell:
 
@@ -513,8 +531,9 @@ class Table:
     # Window functions
     def window(self: Table, partition_by: list[str] | None = None,
                order_by: list[str] | None = None,
-               ascending: bool = True) -> window.WindowContext:
-        return window.WindowContext(self, partition_by, order_by, ascending)
+               ascending: bool = True,
+               parallel: bool = False) -> window.WindowContext:
+        return window.WindowContext(self, partition_by, order_by, ascending, parallel)
 
     def with_row_number(self: Table, output_col: str = "row_nr",
                         partition_by: list[str] | None = None,

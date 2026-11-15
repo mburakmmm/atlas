@@ -3,7 +3,7 @@
 import errors
 from errors import AtlasError, SchemaError, ColumnNotFoundError, ShapeError
 import values
-from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_decimal_str, cell_datetime_str, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -27,6 +27,14 @@ def type_to_sql_type(data_type: int, dialect: str = "sqlite") -> str:
         if dialect == "sqlite":
             return "INTEGER"
         return "BOOLEAN"
+    if data_type == TYPE_DECIMAL:
+        if dialect == "mysql":
+            return "DECIMAL(38, 10)"
+        return "NUMERIC"
+    if data_type == TYPE_DATETIME:
+        if dialect == "sqlite":
+            return "TEXT"
+        return "TIMESTAMP"
     return "TEXT"
 
 def quote_identifier(name: str, dialect: str = "sqlite") -> str:

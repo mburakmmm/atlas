@@ -1,0 +1,119 @@
+# tests/archive_test.nox — Tests for portable .gz, .zst (decompress), .zip, and .tar.gz dataset adapters.
+
+import nox.test
+import nox.fs
+import nox.bytes
+import errors
+from errors import CsvImportError, AtlasError
+import values
+from values import cell_int, cell_str, TYPE_INT, TYPE_STR
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import archive
+from archive import read_csv_gz, write_csv_gz, read_json_gz, write_json_gz, read_csv_gz_safe, write_csv_gz_safe, read_csv_zst, decompress_zst_text, pack_zip_tables, unpack_zip_tables, write_zip_tables, read_zip_tables, pack_tar_tables, unpack_tar_tables, write_tar_gz_tables, read_tar_gz_tables
+
+s: Schema = Schema([
+    ColumnDef("id", TYPE_INT, False),
+    ColumnDef("name", TYPE_STR, False)
+])
+t1: Table = Table(s, [
+    [cell_int(1), cell_str("Çağrı, A")],
+    [cell_int(2), cell_str("İpek")]
+])
+t2: Table = Table(s, [
+    [cell_int(10), cell_str("Kerem")]
+])
+
+# 1. Gzip CSV & JSON round-trip (atomic + UTF-8 + embedded comma)
+gz_csv: str = "temp_archive_data.csv.gz"
+gz_json: str = "temp_archive_data.json.gz"
+try:
+    write_csv_gz(t1, gz_csv)
+    t_gz_csv: Table = read_csv_gz(gz_csv)
+    nox.test.assert_eq_int(t_gz_csv.row_count(), 2, "gz csv row_count")
+    nox.test.assert_eq_str(t_gz_csv.row(0)[1].as_str(), "Çağrı, A", "gz csv row 0 utf8")
+    nox.test.assert_eq_str(t_gz_csv.row(1)[1].as_str(), "İpek", "gz csv row 1 utf8")
+
+    write_json_gz(t1, gz_json)
+    t_gz_json: Table = read_json_gz(gz_json)
+    nox.test.assert_eq_int(t_gz_json.row_count(), 2, "gz json row_count")
+    nox.test.assert_eq_int(t_gz_json.row(0)[0].as_int(), 1, "gz json row 0 id")
+
+    # safe_join variant
+    t_safe: Table = read_csv_gz_safe(".", gz_csv)
+    nox.test.assert_eq_int(t_safe.row_count(), 2, "gz csv safe row_count")
+finally:
+    if nox.fs.exists(gz_csv):
+        nox.fs.remove_file(gz_csv)
+    if nox.fs.exists(gz_json):
+        nox.fs.remove_file(gz_json)
+
+# 2. Portable Zstd decompression test (.zst payload: "id,name\n1,Alice\n2,Bob\n")
+zst_bytes: list[int] = [40, 181, 47, 253, 36, 22, 177, 0, 0, 105, 100, 44, 110, 97, 109, 101, 10, 49, 44, 65, 108, 105, 99, 101, 10, 50, 44, 66, 111, 98, 10, 58, 190, 79, 66]
+zst_raw: str = nox.bytes.str_from_list(zst_bytes)
+zst_file: str = "temp_archive_data.csv.zst"
+try:
+    nox.fs.write_string(zst_file, zst_raw)
+    t_zst: Table = read_csv_zst(zst_file)
+    nox.test.assert_eq_int(t_zst.row_count(), 2, "zst csv row_count")
+    nox.test.assert_eq_str(t_zst.row(0)[1].as_str(), "Alice", "zst csv row 0")
+    nox.test.assert_eq_str(t_zst.row(1)[1].as_str(), "Bob", "zst csv row 1")
+finally:
+    if nox.fs.exists(zst_file):
+        nox.fs.remove_file(zst_file)
+
+bad_zst: bool = False
+try:
+    _bz: str = decompress_zst_text("not_zstd")
+except CsvImportError:
+    bad_zst = True
+nox.test.assert_true(bad_zst, "corrupt zst raises CsvImportError")
+
+# 3. ZIP multi-table round-trip (CSV + TSV + JSON)
+zip_file: str = "temp_archive_bundle.zip"
+try:
+    write_zip_tables(zip_file, ["users.csv", "extra/users.json"], [t1, t2])
+    m_zip: dict[str, Table] = read_zip_tables(zip_file)
+    nox.test.assert_true("users.csv" in m_zip, "zip contains users.csv")
+    nox.test.assert_true("extra/users.json" in m_zip, "zip contains extra/users.json")
+    nox.test.assert_eq_str(m_zip["users.csv"].row(0)[1].as_str(), "Çağrı, A", "zip users.csv content")
+    nox.test.assert_eq_str(m_zip["extra/users.json"].row(0)[1].as_str(), "Kerem", "zip extra/users.json content")
+finally:
+    if nox.fs.exists(zip_file):
+        nox.fs.remove_file(zip_file)
+
+# 4. TAR.GZ multi-table round-trip
+tgz_file: str = "temp_archive_bundle.tar.gz"
+try:
+    write_tar_gz_tables(tgz_file, ["t1.csv", "t2.tsv"], [t1, t2])
+    m_tgz: dict[str, Table] = read_tar_gz_tables(tgz_file)
+    nox.test.assert_true("t1.csv" in m_tgz, "tgz contains t1.csv")
+    nox.test.assert_true("t2.tsv" in m_tgz, "tgz contains t2.tsv")
+    nox.test.assert_eq_int(m_tgz["t1.csv"].row_count(), 2, "tgz t1.csv row_count")
+    nox.test.assert_eq_int(m_tgz["t2.tsv"].row(0)[0].as_int(), 10, "tgz t2.tsv row 0 id")
+finally:
+    if nox.fs.exists(tgz_file):
+        nox.fs.remove_file(tgz_file)
+
+# 5. Path traversal guard on archive entries
+traversal_names: list[str] = ["../escape.csv", "sub/../../evil.csv", "/abs/path.csv", "C:evil.csv", ""]
+ti: int = 0
+while ti < len(traversal_names):
+    blocked_zip: bool = False
+    try:
+        _pz: str = pack_zip_tables([traversal_names[ti]], [t1])
+    except CsvImportError:
+        blocked_zip = True
+    nox.test.assert_true(blocked_zip, "zip rejects traversal entry: " + traversal_names[ti])
+
+    blocked_tar: bool = False
+    try:
+        _pt: str = pack_tar_tables([traversal_names[ti]], [t1])
+    except CsvImportError:
+        blocked_tar = True
+    nox.test.assert_true(blocked_tar, "tar rejects traversal entry: " + traversal_names[ti])
+    ti = ti + 1
+
+print("archive_test passed")

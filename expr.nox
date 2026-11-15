@@ -1,10 +1,11 @@
 # expr.nox — Declarative filter expressions and row predicates for Atlas.
 
 import nox.strings
+import nox.regex
 import errors
 from errors import ColumnNotFoundError
 import values
-from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_decimal_str, cell_datetime_str
 import schema
 from schema import Schema
 
@@ -22,6 +23,141 @@ OP_IN: int = 11
 OP_AND: int = 12
 OP_OR: int = 13
 OP_NOT: int = 14
+OP_ENDS_WITH: int = 15
+OP_REGEX_MATCH: int = 16
+OP_EQ_CI: int = 17
+
+enum ExprOp:
+    Eq
+    Neq
+    Gt
+    Gte
+    Lt
+    Lte
+    IsMissing
+    NotMissing
+    Contains
+    StartsWith
+    In
+    And
+    Or
+    Not
+    EndsWith
+    RegexMatch
+    EqCi
+
+def expr_op_from_int(op: int) -> ExprOp:
+    if op == OP_NEQ:
+        return ExprOp.Neq
+    if op == OP_GT:
+        return ExprOp.Gt
+    if op == OP_GTE:
+        return ExprOp.Gte
+    if op == OP_LT:
+        return ExprOp.Lt
+    if op == OP_LTE:
+        return ExprOp.Lte
+    if op == OP_IS_MISSING:
+        return ExprOp.IsMissing
+    if op == OP_NOT_MISSING:
+        return ExprOp.NotMissing
+    if op == OP_CONTAINS:
+        return ExprOp.Contains
+    if op == OP_STARTS_WITH:
+        return ExprOp.StartsWith
+    if op == OP_IN:
+        return ExprOp.In
+    if op == OP_AND:
+        return ExprOp.And
+    if op == OP_OR:
+        return ExprOp.Or
+    if op == OP_NOT:
+        return ExprOp.Not
+    if op == OP_ENDS_WITH:
+        return ExprOp.EndsWith
+    if op == OP_REGEX_MATCH:
+        return ExprOp.RegexMatch
+    if op == OP_EQ_CI:
+        return ExprOp.EqCi
+    return ExprOp.Eq
+
+def expr_op_to_int(eo: ExprOp) -> int:
+    code: int = OP_EQ
+    match eo:
+        case ExprOp.Eq:
+            code = OP_EQ
+        case ExprOp.Neq:
+            code = OP_NEQ
+        case ExprOp.Gt:
+            code = OP_GT
+        case ExprOp.Gte:
+            code = OP_GTE
+        case ExprOp.Lt:
+            code = OP_LT
+        case ExprOp.Lte:
+            code = OP_LTE
+        case ExprOp.IsMissing:
+            code = OP_IS_MISSING
+        case ExprOp.NotMissing:
+            code = OP_NOT_MISSING
+        case ExprOp.Contains:
+            code = OP_CONTAINS
+        case ExprOp.StartsWith:
+            code = OP_STARTS_WITH
+        case ExprOp.In:
+            code = OP_IN
+        case ExprOp.And:
+            code = OP_AND
+        case ExprOp.Or:
+            code = OP_OR
+        case ExprOp.Not:
+            code = OP_NOT
+        case ExprOp.EndsWith:
+            code = OP_ENDS_WITH
+        case ExprOp.RegexMatch:
+            code = OP_REGEX_MATCH
+        case ExprOp.EqCi:
+            code = OP_EQ_CI
+    return code
+
+def expr_op_name(eo: ExprOp) -> str:
+    name: str = "EQ"
+    match eo:
+        case ExprOp.Eq:
+            name = "EQ"
+        case ExprOp.Neq:
+            name = "NEQ"
+        case ExprOp.Gt:
+            name = "GT"
+        case ExprOp.Gte:
+            name = "GTE"
+        case ExprOp.Lt:
+            name = "LT"
+        case ExprOp.Lte:
+            name = "LTE"
+        case ExprOp.IsMissing:
+            name = "IS_MISSING"
+        case ExprOp.NotMissing:
+            name = "NOT_MISSING"
+        case ExprOp.Contains:
+            name = "CONTAINS"
+        case ExprOp.StartsWith:
+            name = "STARTS_WITH"
+        case ExprOp.In:
+            name = "IN"
+        case ExprOp.And:
+            name = "AND"
+        case ExprOp.Or:
+            name = "OR"
+        case ExprOp.Not:
+            name = "NOT"
+        case ExprOp.EndsWith:
+            name = "ENDS_WITH"
+        case ExprOp.RegexMatch:
+            name = "REGEX_MATCH"
+        case ExprOp.EqCi:
+            name = "EQ_CI"
+    return name
 
 class Expr:
     op: int
@@ -40,6 +176,12 @@ class Expr:
         self.str_arg = str_arg
         self.left = left
         self.right = right
+
+    def expr_op(self: Expr) -> ExprOp:
+        return expr_op_from_int(self.op)
+
+    def op_name(self: Expr) -> str:
+        return expr_op_name(self.expr_op())
 
     def evaluate(self: Expr, s: Schema, row: list[Cell]) -> bool:
 
@@ -102,6 +244,15 @@ class Expr:
 
         if self.op == OP_STARTS_WITH:
             return nox.strings.starts_with(cell.to_string(), self.str_arg)
+
+        if self.op == OP_ENDS_WITH:
+            return nox.strings.ends_with(cell.to_string(), self.str_arg)
+
+        if self.op == OP_REGEX_MATCH:
+            return nox.regex.search(self.str_arg, cell.to_string()) != None
+
+        if self.op == OP_EQ_CI:
+            return nox.strings.eq_ignore_case(cell.to_string(), self.str_arg)
 
         if self.op == OP_IN:
             i: int = 0
@@ -187,6 +338,17 @@ def col_contains(col: str, sub: str) -> Expr:
 def col_starts_with(col: str, prefix: str) -> Expr:
     return Expr(OP_STARTS_WITH, col, cell_null(), _empty_cells(), prefix, None, None)
 
+def col_ends_with(col: str, suffix: str) -> Expr:
+    return Expr(OP_ENDS_WITH, col, cell_null(), _empty_cells(), suffix, None, None)
+
+def col_regex_match(col: str, pattern: str) -> Expr:
+    # Validate regex syntax eagerly on expression construction
+    _chk: nox.regex.Match | None = nox.regex.search(pattern, "")
+    return Expr(OP_REGEX_MATCH, col, cell_null(), _empty_cells(), pattern, None, None)
+
+def col_eq_ignore_case(col: str, target: str) -> Expr:
+    return Expr(OP_EQ_CI, col, cell_null(), _empty_cells(), target, None, None)
+
 def col_in(col: str, values_list: list[Cell]) -> Expr:
     return Expr(OP_IN, col, cell_null(), values_list, "", None, None)
 
@@ -198,3 +360,36 @@ def expr_or(left: Expr, right: Expr) -> Expr:
 
 def expr_not(inner: Expr) -> Expr:
     return Expr(OP_NOT, "", cell_null(), _empty_cells(), "", inner, None)
+
+def col_eq_decimal(col: str, val_str: str) -> Expr:
+    return col_eq(col, cell_decimal_str(val_str))
+
+def col_gt_decimal(col: str, val_str: str) -> Expr:
+    return col_gt(col, cell_decimal_str(val_str))
+
+def col_gte_decimal(col: str, val_str: str) -> Expr:
+    return col_gte(col, cell_decimal_str(val_str))
+
+def col_lt_decimal(col: str, val_str: str) -> Expr:
+    return col_lt(col, cell_decimal_str(val_str))
+
+def col_lte_decimal(col: str, val_str: str) -> Expr:
+    return col_lte(col, cell_decimal_str(val_str))
+
+def col_eq_datetime(col: str, iso_str: str) -> Expr:
+    return col_eq(col, cell_datetime_str(iso_str))
+
+def col_gt_datetime(col: str, iso_str: str) -> Expr:
+    return col_gt(col, cell_datetime_str(iso_str))
+
+def col_gte_datetime(col: str, iso_str: str) -> Expr:
+    return col_gte(col, cell_datetime_str(iso_str))
+
+def col_lt_datetime(col: str, iso_str: str) -> Expr:
+    return col_lt(col, cell_datetime_str(iso_str))
+
+def col_lte_datetime(col: str, iso_str: str) -> Expr:
+    return col_lte(col, cell_datetime_str(iso_str))
+
+def col_between_datetime(col: str, start_iso: str, end_iso: str) -> Expr:
+    return expr_and(col_gte_datetime(col, start_iso), col_lte_datetime(col, end_iso))

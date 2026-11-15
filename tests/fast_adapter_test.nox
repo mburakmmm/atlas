@@ -1,0 +1,189 @@
+# fast_adapter_test.nox — Tests for v0.11.0 opt-in desktop turbo module (atlas_fast.nox):
+# yyjson (strict/relaxed/JSON5), xxhash (XXH3-64/128 + dedup), PCRE2 JIT regex,
+# LZ4 (.csv.lz4 / .json.lz4), Zstd compress (.csv.zst / .json.zst), and Brotli (.csv.br).
+
+import nox.test
+from nox.test import assert_true, assert_eq_int, assert_eq_str, assert_eq_float
+import nox.fs
+import nox.bytes
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_float, cell_str, cell_bool, cell_decimal_str, cell_datetime_str, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME, CsvImportError, JsonImportError, read_csv_zst
+import atlas_fast
+from atlas_fast import yyjson_is_supported, xxhash_is_supported, pcre2_is_supported, pcre2_jit_supported, lz4_is_supported, brotli_is_supported, table_from_json_fast, table_from_json_relaxed, table_from_json5, read_json_file_fast, cell_xxh3_64, row_xxh3_64, row_xxh3_128_hex, dedup_table_fast, dedup_all_fast, compile_pcre2, filter_pcre2, filter_pcre2_compiled, replace_pcre2, Pcre2, PCRE2_IGNORECASE, write_csv_lz4, read_csv_lz4, write_json_lz4, read_json_lz4, write_csv_zst_fast, read_csv_zst_fast, write_json_zst_fast, read_json_zst_fast, decompress_brotli_text, read_csv_br
+
+def test_yyjson_strict_relaxed_and_json5() -> None:
+    if not yyjson_is_supported():
+        return
+
+    # 1. Strict JSON with exact 64-bit integer (> 2^53), Decimal, and DateTime
+    s: Schema = Schema([
+        ColumnDef("id", TYPE_INT, False),
+        ColumnDef("amount", TYPE_DECIMAL, False),
+        ColumnDef("ts", TYPE_DATETIME, False),
+        ColumnDef("active", TYPE_BOOL, False)
+    ])
+    strict_json: str = "[{\"id\":9007199254740993,\"amount\":\"12345.6789\",\"ts\":\"2026-04-19T10:30:00Z\",\"active\":true}]"
+    t1: Table = table_from_json_fast(strict_json, s)
+    assert_eq_int(t1.row_count(), 1, "strict row count")
+    assert_eq_int(t1.cell_by_name(0, "id").as_int(), 9007199254740993, "exact int64 > 2^53 preserved")
+    assert_eq_str(t1.cell_by_name(0, "amount").to_string(), "12345.6789", "exact decimal preserved")
+    assert_true(t1.cell_by_name(0, "active").as_bool(), "bool preserved")
+
+    # 2. Relaxed JSON (comments + trailing commas)
+    relaxed_json: str = "[\n  // First record\n  {\"city\": \"Istanbul\", \"pop\": 16,},\n  /* Second record */\n  {\"city\": \"Ankara\", \"pop\": 6,},\n]"
+    t2: Table = table_from_json_relaxed(relaxed_json)
+    assert_eq_int(t2.row_count(), 2, "relaxed row count")
+    assert_eq_str(t2.cell_by_name(0, "city").as_str(), "Istanbul", "relaxed city 0")
+    assert_eq_int(t2.cell_by_name(1, "pop").as_int(), 6, "relaxed pop 1")
+
+    # 3. JSON5 (unquoted keys, single-quoted strings, trailing commas)
+    json5_txt: str = "[{code: 'TR-34', score: 98.5,}, {code: 'TR-06', score: 91.0,}]"
+    t3: Table = table_from_json5(json5_txt)
+    assert_eq_int(t3.row_count(), 2, "json5 row count")
+    assert_eq_str(t3.cell_by_name(0, "code").as_str(), "TR-34", "json5 code 0")
+    assert_eq_float(t3.cell_by_name(0, "score").as_float(), 98.5, "json5 score 0")
+
+def test_xxhash_and_dedup_table_fast() -> None:
+    if not xxhash_is_supported():
+        return
+
+    # Type-prefixed canonical hashing distinguishes int 1, float 1.0, str "1"
+    h_int: int = cell_xxh3_64(cell_int(1))
+    h_flt: int = cell_xxh3_64(cell_float(1.0))
+    h_str: int = cell_xxh3_64(cell_str("1"))
+    assert_true(h_int != h_str, "int 1 and str '1' have distinct hashes")
+    assert_true(h_flt != h_str, "float 1.0 and str '1' have distinct hashes")
+
+    # Decimal canonical normalization hashes "10.50" and "10.5" identically
+    h_d1: int = cell_xxh3_64(cell_decimal_str("10.50"))
+    h_d2: int = cell_xxh3_64(cell_decimal_str("10.5"))
+    assert_eq_int(h_d1, h_d2, "normalized decimals have identical xxh3_64")
+
+    row_a: list[Cell] = [cell_int(1), cell_str("alpha")]
+    row_b: list[Cell] = [cell_int(1), cell_str("alpha")]
+    assert_eq_int(row_xxh3_64(row_a), row_xxh3_64(row_b), "row_xxh3_64 deterministic")
+    assert_eq_str(row_xxh3_128_hex(row_a), row_xxh3_128_hex(row_b), "row_xxh3_128_hex deterministic")
+    assert_eq_int(len(row_xxh3_128_hex(row_a)), 32, "128-bit hex is 32 chars")
+
+    s: Schema = Schema([
+        ColumnDef("k", TYPE_STR, False),
+        ColumnDef("v", TYPE_INT, False)
+    ])
+    rows: list[list[Cell]] = [
+        [cell_str("a"), cell_int(10)],
+        [cell_str("b"), cell_int(20)],
+        [cell_str("a"), cell_int(10)],
+        [cell_str("a"), cell_int(99)],
+        [cell_str("b"), cell_int(20)]
+    ]
+    t: Table = Table(s, rows)
+
+    dedup_all: Table = dedup_all_fast(t)
+    assert_eq_int(dedup_all.row_count(), 3, "dedup_all_fast keeps 3 distinct full rows")
+
+    dedup_k: Table = dedup_table_fast(t, ["k"])
+    assert_eq_int(dedup_k.row_count(), 2, "dedup_table_fast(['k']) keeps first occurrence of each key")
+    assert_eq_int(dedup_k.cell_by_name(0, "v").as_int(), 10, "first 'a' has v=10")
+    assert_eq_int(dedup_k.cell_by_name(1, "v").as_int(), 20, "first 'b' has v=20")
+
+def test_pcre2_filter_and_replace() -> None:
+    if not pcre2_is_supported():
+        return
+
+    s: Schema = Schema([
+        ColumnDef("id", TYPE_INT, False),
+        ColumnDef("code", TYPE_STR, False)
+    ])
+    rows: list[list[Cell]] = [
+        [cell_int(1), cell_str("INV-2026-001")],
+        [cell_int(2), cell_str("ord-2026-002")],
+        [cell_int(3), cell_str("INV-2025-999")]
+    ]
+    t: Table = Table(s, rows)
+
+    # Case-sensitive PCRE2 match
+    f1: Table = filter_pcre2(t, "code", "^INV-2026-\\d+$", 0, True, True)
+    assert_eq_int(f1.row_count(), 1, "strict PCRE2 full_match")
+    assert_eq_int(f1.cell_by_name(0, "id").as_int(), 1, "matched row id=1")
+
+    # Case-insensitive compiled PCRE2
+    pat: Pcre2 = compile_pcre2("^(inv|ord)-2026", PCRE2_IGNORECASE, True)
+    f2: Table = filter_pcre2_compiled(t, "code", pat, False)
+    assert_eq_int(f2.row_count(), 2, "case-insensitive PCRE2 matched 2 rows")
+
+    # Replace in new column and in-place
+    r_new: Table = replace_pcre2(t, "code", "\\d{4}", "XXXX", "masked_code")
+    assert_eq_int(r_new.column_count(), 3, "added masked_code column")
+    assert_eq_str(r_new.cell_by_name(0, "masked_code").as_str(), "INV-XXXX-001", "masked_code 0")
+
+    r_inplace: Table = replace_pcre2(t, "code", "-\\d{3}$", "")
+    assert_eq_int(r_inplace.column_count(), 2, "in-place replace keeps 2 columns")
+    assert_eq_str(r_inplace.cell_by_name(2, "code").as_str(), "INV-2025", "in-place replaced code 2")
+
+def test_lz4_zstd_fast_and_brotli_io() -> None:
+    s: Schema = Schema([
+        ColumnDef("id", TYPE_INT, False),
+        ColumnDef("name", TYPE_STR, False),
+        ColumnDef("price", TYPE_DECIMAL, False)
+    ])
+    rows: list[list[Cell]] = [
+        [cell_int(1), cell_str("Alpha"), cell_decimal_str("49.95")],
+        [cell_int(2), cell_str("Beta"), cell_decimal_str("105.00")]
+    ]
+    t: Table = Table(s, rows)
+
+    p_csv_lz4: str = "temp_fast_test.csv.lz4"
+    p_json_lz4: str = "temp_fast_test.json.lz4"
+    p_csv_zst: str = "temp_fast_test.csv.zst"
+    p_json_zst: str = "temp_fast_test.json.zst"
+    p_csv_br: str = "temp_fast_test.csv.br"
+
+    try:
+        if lz4_is_supported():
+            write_csv_lz4(t, p_csv_lz4, True, False, True, 0)
+            t_lz4_csv: Table = read_csv_lz4(p_csv_lz4, True, s)
+            assert_eq_int(t_lz4_csv.row_count(), 2, "csv.lz4 row count")
+            assert_eq_str(t_lz4_csv.cell_by_name(0, "price").to_string(), "49.95", "csv.lz4 decimal 0")
+
+            write_json_lz4(t, p_json_lz4, True, 0)
+            t_lz4_json: Table = read_json_lz4(p_json_lz4, s)
+            assert_eq_int(t_lz4_json.row_count(), 2, "json.lz4 row count")
+            assert_eq_str(t_lz4_json.cell_by_name(1, "name").as_str(), "Beta", "json.lz4 name 1")
+
+        # Zstd fast compress -> read back via BOTH atlas_fast AND portable read_csv_zst
+        write_csv_zst_fast(t, p_csv_zst, True, False, True, 3)
+        t_zst_fast: Table = read_csv_zst_fast(p_csv_zst, True, s)
+        t_zst_portable: Table = read_csv_zst(p_csv_zst, True, s)
+        assert_eq_int(t_zst_fast.row_count(), 2, "csv.zst fast row count")
+        assert_eq_int(t_zst_portable.row_count(), 2, "csv.zst portableinterop row count")
+        assert_eq_str(t_zst_portable.cell_by_name(1, "price").to_string(), "105.00", "csv.zst portable price 1")
+
+        write_json_zst_fast(t, p_json_zst, True, 3)
+        t_zst_json: Table = read_json_zst_fast(p_json_zst, s)
+        assert_eq_int(t_zst_json.row_count(), 2, "json.zst row count")
+        assert_eq_str(t_zst_json.cell_by_name(0, "name").as_str(), "Alpha", "json.zst name 0")
+
+        if brotli_is_supported():
+            # Valid RFC 7932 Brotli framing for "k,v\n1,9\n" (8 bytes uncompressed meta-block + empty final meta-block)
+            br_bytes: list[int] = [112, 0, 16, 107, 44, 118, 10, 49, 44, 57, 10, 3]
+            raw_br: str = nox.bytes.str_from_list(br_bytes)
+            nox.fs.write_string(p_csv_br, raw_br)
+            s_br: Schema = Schema([
+                ColumnDef("k", TYPE_INT, False),
+                ColumnDef("v", TYPE_INT, False)
+            ])
+            t_br: Table = read_csv_br(p_csv_br, True, s_br)
+            assert_eq_int(t_br.row_count(), 1, "csv.br row count")
+            assert_eq_int(t_br.cell_by_name(0, "k").as_int(), 1, "csv.br k=1")
+            assert_eq_int(t_br.cell_by_name(0, "v").as_int(), 9, "csv.br v=9")
+    finally:
+        if nox.fs.exists(p_csv_lz4):
+            nox.fs.remove_file(p_csv_lz4)
+        if nox.fs.exists(p_json_lz4):
+            nox.fs.remove_file(p_json_lz4)
+        if nox.fs.exists(p_csv_zst):
+            nox.fs.remove_file(p_csv_zst)
+        if nox.fs.exists(p_json_zst):
+            nox.fs.remove_file(p_json_zst)
+        if nox.fs.exists(p_csv_br):
+            nox.fs.remove_file(p_csv_br)

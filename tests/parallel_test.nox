@@ -1,0 +1,108 @@
+# tests/parallel_test.nox — Deterministic parity tests for parallel=True vs parallel=False across QBE & LLVM.
+
+import nox.test
+import nox.fs
+import nox.thread
+import values
+from values import Cell, cell_int, cell_float, cell_str, TYPE_INT, TYPE_FLOAT, TYPE_STR
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import expr
+from expr import Expr, col_gte_int, col_eq_str, expr_and
+import groupby
+from groupby import AggregateDef, group_by, agg_count, agg_sum, agg_mean, agg_min, agg_max, agg_median
+import window
+from window import WindowContext
+import csv_adapter
+from csv_adapter import to_csv
+import io
+from io import write_csv_file, read_csv_files_parallel, read_csv_files_concat_parallel
+import parallel_exec
+from parallel_exec import async_filter_rows
+
+# Build a deterministic dataset (1200 rows, 24 groups)
+s: Schema = Schema([
+    ColumnDef("grp", TYPE_STR, False),
+    ColumnDef("seq", TYPE_INT, False),
+    ColumnDef("val", TYPE_FLOAT, False)
+])
+
+rows: list[list[Cell]] = []
+i: int = 0
+while i < 1200:
+    g_name: str = "G" + str(i % 24)
+    val_f: float = float((i * 17) % 101) + 0.5
+    rows.append([cell_str(g_name), cell_int(i), cell_float(val_f)])
+    i = i + 1
+
+t: Table = Table(s, rows)
+
+# 1. Parallel Filter parity & exact row ordering
+pred: Expr = expr_and(col_gte_int("seq", 300), col_eq_str("grp", "G5"))
+f_seq: Table = t.filter(pred, False)
+f_par: Table = t.filter(pred, True)
+nox.test.assert_eq_int(f_seq.row_count(), f_par.row_count(), "parallel filter row_count")
+nox.test.assert_eq_str(to_csv(f_seq), to_csv(f_par), "parallel filter exact CSV parity")
+
+# 2. Parallel GroupBy aggregation parity across 24 groups
+aggs: list[AggregateDef] = [agg_count("n"), agg_sum("val", "s"), agg_mean("val", "m"), agg_median("val", "med"), agg_min("seq", "min_s"), agg_max("seq", "max_s")]
+g_seq: Table = group_by(t, ["grp"]).aggregate(aggs, False)
+g_par: Table = group_by(t, ["grp"]).aggregate(aggs, True)
+nox.test.assert_eq_int(g_seq.row_count(), 24, "seq groupby 24 groups")
+nox.test.assert_eq_int(g_par.row_count(), 24, "par groupby 24 groups")
+nox.test.assert_eq_str(to_csv(g_seq), to_csv(g_par), "parallel groupby exact CSV parity")
+
+# 3. Parallel WindowContext partition sorting parity
+w_seq: Table = t.window(["grp"], ["val", "seq"], False, False).with_row_number("rn").with_rank("val", "rk").with_cumulative_sum("val", "cs").to_table()
+w_par: Table = t.window(["grp"], ["val", "seq"], False, True).with_row_number("rn").with_rank("val", "rk").with_cumulative_sum("val", "cs").to_table()
+nox.test.assert_eq_str(to_csv(w_seq), to_csv(w_par), "parallel window exact CSV parity")
+
+# 4. Parallel multi-file CSV reading & concatenation
+p1: str = "temp_par_part1.csv"
+p2: str = "temp_par_part2.csv"
+p3: str = "temp_par_part3.csv"
+try:
+    t1: Table = t.slice(0, 400)
+    t2: Table = t.slice(400, 800)
+    t3: Table = t.slice(800, 1200)
+    write_csv_file(t1, p1, True, False, True)
+    write_csv_file(t2, p2, True, False, True)
+    write_csv_file(t3, p3, True, False, True)
+
+    parts: list[Table] = read_csv_files_parallel([p1, p2, p3], True, s)
+    nox.test.assert_eq_int(len(parts), 3, "parallel read parts len")
+    nox.test.assert_eq_int(parts[0].row_count(), 400, "part 0 count")
+    nox.test.assert_eq_int(parts[1].row(0)[1].as_int(), 400, "part 1 first seq")
+    nox.test.assert_eq_int(parts[2].row(0)[1].as_int(), 800, "part 2 first seq")
+
+    combined: Table = read_csv_files_concat_parallel([p1, p2, p3], True, s)
+    nox.test.assert_eq_int(combined.row_count(), 1200, "combined parallel read count")
+    nox.test.assert_eq_str(to_csv(combined), to_csv(t), "combined parallel CSV parity")
+finally:
+    if nox.fs.exists(p1):
+        nox.fs.remove_file(p1)
+    if nox.fs.exists(p2):
+        nox.fs.remove_file(p2)
+    if nox.fs.exists(p3):
+        nox.fs.remove_file(p3)
+
+# 5. Direct zero-global async API inside pool_run (using isolated schema/rows copy)
+async_ok: bool = False
+t_iso_schema: Schema = parallel_exec.clone_isolated_schema(t.schema)
+t_iso_rows: list[list[Cell]] = []
+ri: int = 0
+while ri < len(t.rows):
+    t_iso_rows.append(parallel_exec.clone_isolated_row(t.rows[ri]))
+    ri = ri + 1
+
+async def _verify_async_entry() -> None:
+    matched: list[list[Cell]] = await (spawn async_filter_rows(t_iso_schema, t_iso_rows, col_gte_int("seq", 1190), 4))
+    nox.test.assert_eq_int(len(matched), 10, "async_filter_rows matched count")
+    async_ok = True
+
+nox.thread.pool_run(2, _verify_async_entry)
+nox.test.assert_true(async_ok, "async_filter_rows pool_run completed")
+
+print("parallel_test passed")

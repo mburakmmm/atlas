@@ -1,0 +1,255 @@
+# archive.nox — Portable compressed and archived tabular dataset adapters for Atlas.
+# Supports .gz (nox.gzip), .zst decompression (nox.zstd.decompress), .zip (nox.zip), and .tar/.tar.gz (nox.tar)
+# without any external C library dependency in Atlas core.
+
+import nox.fs
+import nox.path
+from nox.path import PathError
+import nox.bytes
+import nox.gzip
+from nox.gzip import GzipError
+import nox.zstd
+from nox.zstd import ZstdError
+import nox.zip
+from nox.zip import ZipEntry, ZipError
+import nox.tar
+from nox.tar import TarEntry, TarError
+import nox.strings
+import errors
+from errors import CsvImportError, JsonImportError, SchemaError
+import schema
+from schema import Schema
+import table
+from table import Table
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+import delimited
+from delimited import read_delimited, to_delimited
+import json_adapter
+from json_adapter import table_from_json, table_to_json
+import io
+from io import resolve_safe_path
+
+def _write_raw_bytes_file(path: str, raw_bytes: str, atomic: bool = True) -> None:
+    if atomic:
+        nox.fs.write_string_atomic(path, raw_bytes)
+    else:
+        nox.fs.write_string(path, raw_bytes)
+
+def _validate_archive_entry_name(name: str) -> str:
+    if len(name) == 0:
+        raise CsvImportError("archive entry name cannot be empty")
+    if "\0" in name:
+        raise CsvImportError("archive entry name contains null byte")
+    if nox.path.is_absolute(name):
+        raise CsvImportError("unsafe absolute archive entry path: '" + name + "'")
+    if nox.strings.starts_with(name, "/") or nox.strings.starts_with(name, "\\"):
+        raise CsvImportError("unsafe leading slash in archive entry path: '" + name + "'")
+    if len(name) >= 2 and name[1] == ":":
+        raise CsvImportError("unsafe Windows drive prefix in archive entry path: '" + name + "'")
+    parts: list[str] = nox.path.components(name)
+    i: int = 0
+    while i < len(parts):
+        if parts[i] == "..":
+            raise CsvImportError("unsafe path traversal ('..') in archive entry path: '" + name + "'")
+        i = i + 1
+    return name
+
+# ---------------------------------------------------------------------------
+# Gzip (.gz) adapters — byte-safe via nox.bytes + nox.gzip
+# ---------------------------------------------------------------------------
+
+def compress_gzip_text(text: str) -> str:
+    try:
+        compressed_bytes: list[int] = nox.gzip.compress(text)
+        return nox.bytes.str_from_list(compressed_bytes)
+    except GzipError as ge:
+        raise CsvImportError("gzip compression failed: " + str(ge))
+
+def decompress_gzip_text(raw_gz: str) -> str:
+    try:
+        byte_list: list[int] = nox.bytes.list_from_str(raw_gz)
+        return nox.gzip.decompress(byte_list)
+    except GzipError as ge:
+        raise CsvImportError("gzip decompression failed: " + str(ge))
+
+def compress_gzip_bytes(raw_bytes: str) -> str:
+    try:
+        in_bytes: list[int] = nox.bytes.list_from_str(raw_bytes)
+        compressed_bytes: list[int] = nox.gzip.compress_bytes(in_bytes)
+        return nox.bytes.str_from_list(compressed_bytes)
+    except GzipError as ge:
+        raise CsvImportError("gzip binary compression failed: " + str(ge))
+
+def decompress_gzip_bytes(raw_gz: str) -> str:
+    try:
+        byte_list: list[int] = nox.bytes.list_from_str(raw_gz)
+        out_bytes: list[int] = nox.gzip.decompress_bytes(byte_list)
+        return nox.bytes.str_from_list(out_bytes)
+    except GzipError as ge:
+        raise CsvImportError("gzip binary decompression failed: " + str(ge))
+
+def read_csv_gz(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    text: str = decompress_gzip_text(raw)
+    return read_csv(text, has_header, explicit_schema, blank_is_missing)
+
+def write_csv_gz(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True) -> None:
+    text: str = to_csv(t, include_header, safe_spreadsheet)
+    _write_raw_bytes_file(path, compress_gzip_text(text), atomic)
+
+def read_delimited_gz(path: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    text: str = decompress_gzip_text(raw)
+    return read_delimited(text, delimiter, has_header, explicit_schema, blank_is_missing, strict)
+
+def write_delimited_gz(t: Table, path: str, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True) -> None:
+    text: str = to_delimited(t, delimiter, include_header, safe_spreadsheet)
+    _write_raw_bytes_file(path, compress_gzip_text(text), atomic)
+
+def read_json_gz(path: str, explicit_schema: Schema | None = None) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    text: str = decompress_gzip_text(raw)
+    return table_from_json(text, explicit_schema)
+
+def write_json_gz(t: Table, path: str, atomic: bool = True) -> None:
+    text: str = table_to_json(t)
+    _write_raw_bytes_file(path, compress_gzip_text(text), atomic)
+
+def read_csv_gz_safe(base_dir: str, rel_path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    safe_p: str = resolve_safe_path(base_dir, rel_path)
+    return read_csv_gz(safe_p, has_header, explicit_schema, blank_is_missing)
+
+def write_csv_gz_safe(t: Table, base_dir: str, rel_path: str, include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True) -> None:
+    safe_p: str = resolve_safe_path(base_dir, rel_path)
+    write_csv_gz(t, safe_p, include_header, safe_spreadsheet, atomic)
+
+def read_json_gz_safe(base_dir: str, rel_path: str, explicit_schema: Schema | None = None) -> Table:
+    safe_p: str = resolve_safe_path(base_dir, rel_path)
+    return read_json_gz(safe_p, explicit_schema)
+
+def write_json_gz_safe(t: Table, base_dir: str, rel_path: str, atomic: bool = True) -> None:
+    safe_p: str = resolve_safe_path(base_dir, rel_path)
+    write_json_gz(t, safe_p, atomic)
+
+# ---------------------------------------------------------------------------
+# Portable Zstd decompression (.zst) — uses pure-Zig nox.zstd.decompress
+# ---------------------------------------------------------------------------
+
+def decompress_zst_text(raw_zst: str) -> str:
+    try:
+        return nox.zstd.decompress(raw_zst)
+    except ZstdError as ze:
+        raise CsvImportError("zstd decompression failed: " + str(ze))
+
+def read_csv_zst(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    text: str = decompress_zst_text(raw)
+    return read_csv(text, has_header, explicit_schema, blank_is_missing)
+
+def read_json_zst(path: str, explicit_schema: Schema | None = None) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    text: str = decompress_zst_text(raw)
+    return table_from_json(text, explicit_schema)
+
+def read_csv_zst_safe(base_dir: str, rel_path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    safe_p: str = resolve_safe_path(base_dir, rel_path)
+    return read_csv_zst(safe_p, has_header, explicit_schema, blank_is_missing)
+
+# ---------------------------------------------------------------------------
+# ZIP & TAR(.gz) multi-table archives — entry path traversal guarded
+# ---------------------------------------------------------------------------
+
+def _serialize_table_for_entry(name: str, t: Table, include_header: bool, safe_spreadsheet: bool) -> str:
+    lower_name: str = nox.strings.lower(name)
+    if nox.strings.ends_with(lower_name, ".json"):
+        return table_to_json(t)
+    if nox.strings.ends_with(lower_name, ".tsv"):
+        return to_delimited(t, "\t", include_header, safe_spreadsheet)
+    return to_csv(t, include_header, safe_spreadsheet)
+
+def _parse_table_from_entry(name: str, data: str, has_header: bool, blank_is_missing: bool) -> Table:
+    lower_name: str = nox.strings.lower(name)
+    if nox.strings.ends_with(lower_name, ".json"):
+        return table_from_json(data)
+    if nox.strings.ends_with(lower_name, ".tsv"):
+        return read_delimited(data, "\t", has_header, None, blank_is_missing, False)
+    return read_csv(data, has_header, None, blank_is_missing)
+
+def pack_zip_tables(names: list[str], tables: list[Table], include_header: bool = True, safe_spreadsheet: bool = False) -> str:
+    if len(names) != len(tables):
+        raise SchemaError("pack_zip_tables requires matching names and tables lengths")
+    entries: list[ZipEntry] = []
+    i: int = 0
+    while i < len(names):
+        safe_name: str = _validate_archive_entry_name(names[i])
+        payload: str = _serialize_table_for_entry(safe_name, tables[i], include_header, safe_spreadsheet)
+        entries.append(nox.zip.file_entry(safe_name, payload))
+        i = i + 1
+    try:
+        return nox.zip.pack(entries, True)
+    except ZipError as ze:
+        raise CsvImportError("zip archive pack failed: " + str(ze))
+
+def write_zip_tables(path: str, names: list[str], tables: list[Table], include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True) -> None:
+    archive_bytes: str = pack_zip_tables(names, tables, include_header, safe_spreadsheet)
+    _write_raw_bytes_file(path, archive_bytes, atomic)
+
+def unpack_zip_tables(zip_bytes: str, has_header: bool = True, blank_is_missing: bool = True) -> dict[str, Table]:
+    try:
+        entries: list[ZipEntry] = nox.zip.unpack(zip_bytes)
+        out: dict[str, Table] = {}
+        i: int = 0
+        while i < len(entries):
+            e: ZipEntry = entries[i]
+            if not e.is_dir():
+                safe_name: str = _validate_archive_entry_name(e.name)
+                out[safe_name] = _parse_table_from_entry(safe_name, e.data, has_header, blank_is_missing)
+            i = i + 1
+        return out
+    except ZipError as ze:
+        raise CsvImportError("zip archive unpack failed: " + str(ze))
+
+def read_zip_tables(path: str, has_header: bool = True, blank_is_missing: bool = True) -> dict[str, Table]:
+    raw: str = nox.fs.read_to_string(path)
+    return unpack_zip_tables(raw, has_header, blank_is_missing)
+
+def pack_tar_tables(names: list[str], tables: list[Table], include_header: bool = True, safe_spreadsheet: bool = False) -> str:
+    if len(names) != len(tables):
+        raise SchemaError("pack_tar_tables requires matching names and tables lengths")
+    entries: list[TarEntry] = []
+    i: int = 0
+    while i < len(names):
+        safe_name: str = _validate_archive_entry_name(names[i])
+        payload: str = _serialize_table_for_entry(safe_name, tables[i], include_header, safe_spreadsheet)
+        entries.append(nox.tar.file_entry(safe_name, payload))
+        i = i + 1
+    try:
+        return nox.tar.pack(entries)
+    except TarError as te:
+        raise CsvImportError("tar archive pack failed: " + str(te))
+
+def write_tar_gz_tables(path: str, names: list[str], tables: list[Table], include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True) -> None:
+    tar_bytes: str = pack_tar_tables(names, tables, include_header, safe_spreadsheet)
+    gz_bytes: str = compress_gzip_bytes(tar_bytes)
+    _write_raw_bytes_file(path, gz_bytes, atomic)
+
+def unpack_tar_tables(tar_bytes: str, has_header: bool = True, blank_is_missing: bool = True) -> dict[str, Table]:
+    try:
+        entries: list[TarEntry] = nox.tar.unpack(tar_bytes)
+        out: dict[str, Table] = {}
+        i: int = 0
+        while i < len(entries):
+            e: TarEntry = entries[i]
+            if not e.is_dir():
+                safe_name: str = _validate_archive_entry_name(e.name)
+                out[safe_name] = _parse_table_from_entry(safe_name, e.data, has_header, blank_is_missing)
+            i = i + 1
+        return out
+    except TarError as te:
+        raise CsvImportError("tar archive unpack failed: " + str(te))
+
+def read_tar_gz_tables(path: str, has_header: bool = True, blank_is_missing: bool = True) -> dict[str, Table]:
+    raw_gz: str = nox.fs.read_to_string(path)
+    tar_bytes: str = decompress_gzip_bytes(raw_gz)
+    return unpack_tar_tables(tar_bytes, has_header, blank_is_missing)

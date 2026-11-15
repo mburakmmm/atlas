@@ -1,0 +1,178 @@
+# tests/nox_2_1_features_test.nox — Tests for Atlas v0.9.7 Nox 2.1 integrations.
+
+import nox.test
+import nox.fs
+import nox.regex
+from nox.regex import RegexError
+import errors
+from errors import AtlasError, JsonImportError, CsvImportError
+import values
+from values import Cell, cell_int, cell_str, TYPE_INT, TYPE_FLOAT
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import expr
+from expr import Expr, col_ends_with, col_regex_match, col_eq_ignore_case, expr_and
+import delimited
+from delimited import parse_delimited, dump_delimited, read_delimited, to_delimited
+import json_adapter
+from json_adapter import table_from_json, table_to_json
+import io
+from io import resolve_safe_path, read_csv_file_safe, write_csv_file_safe, read_json_file_safe, write_json_file_safe, write_csv_file, read_csv_file
+import streaming
+from streaming import open_csv_stream_safe
+import validation
+from validation import TableValidator, ValidationReport, rule_regex, rule_email, rule_allowed_values
+
+# ---------------------------------------------------------------------
+# 1. JSON Int64 precision (> 2^53) and symmetric numeric promotion
+# ---------------------------------------------------------------------
+big_json: str = "[{\"id\": 9007199254740993, \"tag\": \"hi\"}, {\"id\": 9223372036854775807, \"tag\": \"max\"}, {\"id\": -9223372036854775807, \"tag\": \"min\"}]"
+t_big: Table = table_from_json(big_json)
+nox.test.assert_eq_int(t_big.schema.columns[0].data_type, TYPE_INT, "large int64 inferred as TYPE_INT")
+nox.test.assert_eq_int(t_big.cell(0, 0).as_int(), 9007199254740993, "2^53 + 1 preserved without float truncation")
+nox.test.assert_eq_int(t_big.cell(1, 0).as_int(), 9223372036854775807, "INT64_MAX preserved")
+nox.test.assert_eq_int(t_big.cell(2, 0).as_int(), -9223372036854775807, "-INT64_MAX preserved")
+
+# Round-trip large int64 through table_to_json -> table_from_json
+big_round: Table = table_from_json(table_to_json(t_big))
+nox.test.assert_eq_int(big_round.cell(0, 0).as_int(), 9007199254740993, "round-trip 2^53 + 1 preserved")
+
+# Overflow beyond int64 max must raise JsonImportError instead of silent precision loss
+caught_overflow: bool = False
+try:
+    _bad: Table = table_from_json("[{\"id\": 9223372036854775808}]")
+except JsonImportError:
+    caught_overflow = True
+nox.test.assert_true(caught_overflow, "int64 overflow in JSON must raise JsonImportError")
+
+# Symmetric float + int inference regardless of order (float first, int second)
+mixed_num_json: str = "[{\"score\": 95.5}, {\"score\": 90}]"
+t_mixed: Table = table_from_json(mixed_num_json)
+nox.test.assert_eq_int(t_mixed.schema.columns[0].data_type, TYPE_FLOAT, "float followed by int promotes to TYPE_FLOAT")
+nox.test.assert_true(t_mixed.cell(1, 0).as_float() > 89.9 and t_mixed.cell(1, 0).as_float() < 90.1, "promoted int read cleanly as float")
+
+# Invalid JSON syntax must raise JsonImportError
+caught_syntax: bool = False
+try:
+    _bad2: Table = table_from_json("[{\"a\": ")
+except JsonImportError:
+    caught_syntax = True
+nox.test.assert_true(caught_syntax, "invalid JSON syntax raises JsonImportError")
+
+# ---------------------------------------------------------------------
+# 2. Slice-based delimited parser & join-based dump_delimited
+# ---------------------------------------------------------------------
+raw_d: str = "a||b||c\n\"hello \"\"world\"\"\"||||plain\n\"\"||\"tail\"ok||end\n"
+parsed_d: list[list[str]] = parse_delimited(raw_d, "||", False)
+nox.test.assert_eq_int(len(parsed_d), 3, "3 delimited rows parsed")
+nox.test.assert_eq_str(parsed_d[1][0], "hello \"world\"", "escaped quotes preserved in slice parser")
+nox.test.assert_eq_str(parsed_d[1][1], "", "empty middle field preserved")
+nox.test.assert_eq_str(parsed_d[1][2], "plain", "trailing plain field preserved")
+nox.test.assert_eq_str(parsed_d[2][0], "", "empty quoted field preserved")
+nox.test.assert_eq_str(parsed_d[2][1], "tailok", "non-strict trailing after quote preserved")
+
+dumped_d: str = dump_delimited(parsed_d, "||")
+re_parsed_d: list[list[str]] = parse_delimited(dumped_d, "||", False)
+nox.test.assert_eq_str(re_parsed_d[1][0], "hello \"world\"", "dump_delimited round-trip escaped quotes")
+nox.test.assert_eq_str(re_parsed_d[2][0], "", "dump_delimited round-trip empty field")
+
+# Empty rows -> empty output
+nox.test.assert_eq_str(dump_delimited([], ","), "", "empty delimited dump returns empty str")
+
+# Multi-char delimiter boundary safety: fields containing partial delimiter chars must be quoted
+boundary_rows: list[list[str]] = [["|", "|a", "ok"]]
+boundary_dumped: str = dump_delimited(boundary_rows, "||")
+boundary_back: list[list[str]] = parse_delimited(boundary_dumped, "||", True)
+nox.test.assert_eq_int(len(boundary_back), 1, "multi-char delimiter boundary 1 row")
+nox.test.assert_eq_int(len(boundary_back[0]), 3, "multi-char delimiter boundary 3 cols")
+nox.test.assert_eq_str(boundary_back[0][0], "|", "partial delimiter field 0 preserved")
+nox.test.assert_eq_str(boundary_back[0][1], "|a", "partial delimiter field 1 preserved")
+
+# Strict mode unclosed quote & trailing after quote
+caught_strict_after: bool = False
+try:
+    _s: list[list[str]] = parse_delimited("\"abc\"def,1\n", ",", True)
+except CsvImportError:
+    caught_strict_after = True
+nox.test.assert_true(caught_strict_after, "strict mode rejects char after closing quote")
+
+# ---------------------------------------------------------------------
+# 3. Safe path confinement (nox.path.safe_join) & atomic writes
+# ---------------------------------------------------------------------
+sandbox_dir: str = "temp_atlas_safe_io_test"
+if nox.fs.exists(sandbox_dir):
+    nox.fs.remove_dir_all(sandbox_dir)
+nox.fs.create_dir(sandbox_dir)
+
+try:
+    t_io: Table = table_from_json("[{\"name\": \"Alice\", \"code\": \"AB-12\"}, {\"name\": \"Bob\", \"code\": \"CD-34\"}]")
+    write_csv_file_safe(t_io, sandbox_dir, "data.csv", True, False, False, True)
+    t_back_csv: Table = read_csv_file_safe(sandbox_dir, "data.csv")
+    nox.test.assert_eq_int(t_back_csv.row_count(), 2, "safe_join + atomic csv write/read row count")
+    nox.test.assert_eq_str(t_back_csv.cell(0, 0).to_string(), "Alice", "safe csv first cell")
+
+    write_json_file_safe(t_io, sandbox_dir, "data.json", False, True)
+    t_back_json: Table = read_json_file_safe(sandbox_dir, "data.json")
+    nox.test.assert_eq_int(t_back_json.row_count(), 2, "safe_join + atomic json write/read row count")
+
+    # Atomic overwrite with explicit overwrite=True
+    t_io2: Table = table_from_json("[{\"name\": \"Carol\", \"code\": \"EF-56\"}]")
+    atomic_path: str = resolve_safe_path(sandbox_dir, "atomic.csv")
+    write_csv_file(t_io, atomic_path, True, False, False, True)
+    write_csv_file(t_io2, atomic_path, True, False, True, True)
+    t_over: Table = read_csv_file(atomic_path)
+    nox.test.assert_eq_int(t_over.row_count(), 1, "atomic overwrite updated file")
+    nox.test.assert_eq_str(t_over.cell(0, 0).to_string(), "Carol", "atomic overwrite new content")
+
+    # Streaming safe path
+    sr: streaming.StreamingCsvReader = open_csv_stream_safe(sandbox_dir, "data.csv", 1)
+    nox.test.assert_eq_int(sr.count(), 2, "open_csv_stream_safe counts 2 rows")
+
+    # Path traversal must be rejected
+    caught_traversal: bool = False
+    try:
+        _bad_p: str = resolve_safe_path(sandbox_dir, "../escape.csv")
+    except AtlasError:
+        caught_traversal = True
+    nox.test.assert_true(caught_traversal, "resolve_safe_path rejects parent traversal")
+finally:
+    if nox.fs.exists(sandbox_dir):
+        nox.fs.remove_dir_all(sandbox_dir)
+
+# ---------------------------------------------------------------------
+# 4. Expr new operators (ends_with, regex_match, eq_ignore_case) & Validation rule_regex
+# ---------------------------------------------------------------------
+t_str: Table = table_from_json("[{\"email\": \"alice@example.org\", \"tag\": \"PROD-01\", \"role\": \"Admin\"}, {\"email\": \"bob@test.com\", \"tag\": \"dev-99\", \"role\": \"user\"}, {\"email\": \"bad@@mail\", \"tag\": \"PROD-XX\", \"role\": \"ADMIN\"}]")
+
+res_ew: Table = t_str.filter(col_ends_with("email", ".org"))
+nox.test.assert_eq_int(res_ew.row_count(), 1, "col_ends_with matches .org")
+nox.test.assert_eq_str(res_ew.cell(0, 0).to_string(), "alice@example.org", "col_ends_with exact row")
+
+res_ci: Table = t_str.filter(col_eq_ignore_case("role", "admin"))
+nox.test.assert_eq_int(res_ci.row_count(), 2, "col_eq_ignore_case matches Admin and ADMIN")
+
+res_rx: Table = t_str.filter(col_regex_match("tag", "^PROD-[0-9]{2}$"))
+nox.test.assert_eq_int(res_rx.row_count(), 1, "col_regex_match matches PROD-01 only")
+nox.test.assert_eq_str(res_rx.cell(0, 1).to_string(), "PROD-01", "col_regex_match value")
+
+# Invalid regex pattern must raise on construction
+caught_bad_rx: bool = False
+try:
+    _bad_expr: Expr = col_regex_match("tag", "[unclosed")
+except RegexError:
+    caught_bad_rx = True
+nox.test.assert_true(caught_bad_rx, "invalid regex in col_regex_match raises RegexError")
+
+# Validation rule_regex & optimized filter_valid / filter_invalid
+v: TableValidator = TableValidator()
+v.add_rule(rule_regex("tag", "^PROD-[0-9]+$"))
+v.add_rule(rule_email("email"))
+v.add_rule(rule_allowed_values("role", ["Admin", "ADMIN", "user"]))
+rep: ValidationReport = v.validate(t_str)
+nox.test.assert_eq_int(rep.error_count(), 3, "row 1 fails tag regex; row 2 fails tag regex + email")
+nox.test.assert_eq_int(v.filter_valid(t_str).row_count(), 1, "filter_valid retains 1 row")
+nox.test.assert_eq_int(v.filter_invalid(t_str).row_count(), 2, "filter_invalid retains 2 rows")
+
+print("nox_2_1_features_test passed")

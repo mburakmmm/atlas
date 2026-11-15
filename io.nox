@@ -1,6 +1,9 @@
 # io.nox — Filesystem CSV and JSON convenience operations with overwrite protection for Atlas.
 
 import nox.fs
+import nox.path
+from nox.path import PathError
+import nox.thread
 import errors
 from errors import AtlasError
 import schema
@@ -13,39 +16,155 @@ import delimited
 from delimited import read_delimited, to_delimited, read_tsv, to_tsv
 import json_adapter
 from json_adapter import table_from_json, table_to_json
+import concat
+from concat import concat_rows
+import parallel_exec
+from parallel_exec import clone_isolated_str, clone_isolated_schema
+
+def resolve_safe_path(base_dir: str, relative_path: str) -> str:
+    try:
+        return nox.path.safe_join(base_dir, relative_path)
+    except PathError as pe:
+        raise AtlasError("unsafe file path rejected ('" + relative_path + "' under '" + base_dir + "'): " + str(pe))
+
+def _write_text(path: str, content: str, overwrite: bool, atomic: bool) -> None:
+    if not overwrite and nox.fs.exists(path):
+        raise AtlasError("file already exists (set overwrite=True to allow): '" + path + "'")
+    if atomic:
+        nox.fs.write_string_atomic(path, content)
+    else:
+        nox.fs.write_string(path, content)
 
 def read_csv_file(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
     content: str = nox.fs.read_to_string(path)
     return read_csv(content, has_header, explicit_schema, blank_is_missing)
 
-def write_csv_file(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None:
-    if not overwrite and nox.fs.exists(path):
-        raise AtlasError("file already exists (set overwrite=True to allow): '" + path + "'")
+def write_csv_file(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = False) -> None:
     content: str = to_csv(t, include_header, safe_spreadsheet)
-    nox.fs.write_string(path, content)
+    _write_text(path, content, overwrite, atomic)
 
 def read_json_file(path: str, explicit_schema: Schema | None = None) -> Table:
     content: str = nox.fs.read_to_string(path)
     return table_from_json(content, explicit_schema)
 
-def write_json_file(t: Table, path: str, overwrite: bool = False) -> None:
-    if not overwrite and nox.fs.exists(path):
-        raise AtlasError("file already exists (set overwrite=True to allow): '" + path + "'")
+def write_json_file(t: Table, path: str, overwrite: bool = False, atomic: bool = False) -> None:
     content: str = table_to_json(t)
-    nox.fs.write_string(path, content)
+    _write_text(path, content, overwrite, atomic)
 
 def read_delimited_file(path: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table:
     content: str = nox.fs.read_to_string(path)
     return read_delimited(content, delimiter, has_header, explicit_schema, blank_is_missing, strict)
 
-def write_delimited_file(t: Table, path: str, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None:
-    if not overwrite and nox.fs.exists(path):
-        raise AtlasError("file already exists (set overwrite=True to allow): '" + path + "'")
+def write_delimited_file(t: Table, path: str, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = False) -> None:
     content: str = to_delimited(t, delimiter, include_header, safe_spreadsheet)
-    nox.fs.write_string(path, content)
+    _write_text(path, content, overwrite, atomic)
 
 def read_tsv_file(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table:
     return read_delimited_file(path, "\t", has_header, explicit_schema, blank_is_missing, strict)
 
-def write_tsv_file(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None:
-    write_delimited_file(t, path, "\t", include_header, safe_spreadsheet, overwrite)
+def write_tsv_file(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = False) -> None:
+    write_delimited_file(t, path, "\t", include_header, safe_spreadsheet, overwrite, atomic)
+
+def read_csv_file_safe(base_dir: str, relative_path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    safe_path: str = resolve_safe_path(base_dir, relative_path)
+    return read_csv_file(safe_path, has_header, explicit_schema, blank_is_missing)
+
+def write_csv_file_safe(t: Table, base_dir: str, relative_path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = True) -> None:
+    safe_path: str = resolve_safe_path(base_dir, relative_path)
+    write_csv_file(t, safe_path, include_header, safe_spreadsheet, overwrite, atomic)
+
+def read_json_file_safe(base_dir: str, relative_path: str, explicit_schema: Schema | None = None) -> Table:
+    safe_path: str = resolve_safe_path(base_dir, relative_path)
+    return read_json_file(safe_path, explicit_schema)
+
+def write_json_file_safe(t: Table, base_dir: str, relative_path: str, overwrite: bool = False, atomic: bool = True) -> None:
+    safe_path: str = resolve_safe_path(base_dir, relative_path)
+    write_json_file(t, safe_path, overwrite, atomic)
+
+def read_delimited_file_safe(base_dir: str, relative_path: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table:
+    safe_path: str = resolve_safe_path(base_dir, relative_path)
+    return read_delimited_file(safe_path, delimiter, has_header, explicit_schema, blank_is_missing, strict)
+
+def write_delimited_file_safe(t: Table, base_dir: str, relative_path: str, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = True) -> None:
+    safe_path: str = resolve_safe_path(base_dir, relative_path)
+    write_delimited_file(t, safe_path, delimiter, include_header, safe_spreadsheet, overwrite, atomic)
+
+# ---------------------------------------------------------------------------
+# Parallel multi-file CSV reading (disjoint per-worker packets)
+# ---------------------------------------------------------------------------
+
+class _ReadCsvPacket:
+    path: str
+    has_header: bool
+    explicit_schema: Schema | None
+    blank_is_missing: bool
+
+    def __init__(self: _ReadCsvPacket, path: str, has_header: bool, explicit_schema: Schema | None, blank_is_missing: bool) -> None:
+        self.path = path
+        self.has_header = has_header
+        self.explicit_schema = explicit_schema
+        self.blank_is_missing = blank_is_missing
+
+class _TableTaskHandle:
+    t: Task[Table]
+
+    def __init__(self: _TableTaskHandle, t: Task[Table]) -> None:
+        self.t = t
+
+_active_csv_packets: list[_ReadCsvPacket] = []
+_active_csv_results: list[Table] = []
+
+async def _read_single_csv_worker(pkt: _ReadCsvPacket) -> Table:
+    content: str = nox.fs.read_to_string(pkt.path)
+    return read_delimited(content, ",", pkt.has_header, pkt.explicit_schema, pkt.blank_is_missing, False)
+
+async def _csv_batch_pool_entry() -> None:
+    handles: list[_TableTaskHandle] = []
+    i: int = 0
+    n: int = len(_active_csv_packets)
+    while i < n:
+        pkt: _ReadCsvPacket = _active_csv_packets[i]
+        handles.append(_TableTaskHandle(spawn _read_single_csv_worker(pkt)))
+        i = i + 1
+    out: list[Table] = []
+    i = 0
+    while i < n:
+        out.append(await handles[i].t)
+        i = i + 1
+    _active_csv_results = out
+
+def read_csv_files_parallel(paths: list[str], has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, workers: int = 4) -> list[Table]:
+    n: int = len(paths)
+    if n == 0:
+        return []
+    if n == 1:
+        single: list[Table] = []
+        single.append(read_csv_file(paths[0], has_header, explicit_schema, blank_is_missing))
+        return single
+
+    packets: list[_ReadCsvPacket] = []
+    i: int = 0
+    while i < n:
+        s_copy: Schema | None = None
+        if explicit_schema != None:
+            s_copy = clone_isolated_schema(explicit_schema)
+        packets.append(_ReadCsvPacket(clone_isolated_str(paths[i]), has_header, s_copy, blank_is_missing))
+        i = i + 1
+
+    _active_csv_packets = packets
+    _active_csv_results = []
+    try:
+        w_cnt: int = workers
+        if w_cnt < 1:
+            w_cnt = 1
+        if w_cnt > n:
+            w_cnt = n
+        nox.thread.pool_run(w_cnt, _csv_batch_pool_entry)
+        return _active_csv_results
+    finally:
+        _active_csv_packets = []
+        _active_csv_results = []
+
+def read_csv_files_concat_parallel(paths: list[str], has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, workers: int = 4) -> Table:
+    tables: list[Table] = read_csv_files_parallel(paths, has_header, explicit_schema, blank_is_missing, workers)
+    return concat_rows(tables)

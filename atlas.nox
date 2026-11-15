@@ -1,22 +1,24 @@
 # atlas.nox — Unified top-level facade for the Atlas data analysis library.
 
+import nox.decimal
+from nox.decimal import Decimal
 import errors
-from errors import AtlasError, SchemaError, ColumnNotFoundError, TypeConversionError, MissingValueError, CsvImportError, JsonImportError, ShapeError, AggregationError, SortError
+from errors import AtlasError, SchemaError, ColumnNotFoundError, TypeConversionError, MissingValueError, CsvImportError, JsonImportError, ShapeError, AggregationError, SortError, ResourceLimitError, UnsupportedFeatureError
 
 import values
-from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_nan, cell_inf, cell_neg_inf, float_nan, float_inf, float_neg_inf, is_nan, is_inf, is_pos_inf, is_neg_inf, parse_cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, checked_add_int64, checked_sub_int64, checked_mul_int64, checked_div_int64, INT64_MAX, INT64_MIN
+from values import Cell, CellKind, cell_kind_from_int, cell_kind_to_int, cell_kind_name, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_decimal, cell_decimal_str, cell_datetime, cell_datetime_ms, cell_date, cell_datetime_str, cell_nan, cell_inf, cell_neg_inf, float_nan, float_inf, float_neg_inf, is_nan, is_inf, is_pos_inf, is_neg_inf, parse_cell, parse_datetime_ms, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME, TYPE_DATE, checked_add_int64, checked_sub_int64, checked_mul_int64, checked_div_int64, INT64_MAX, INT64_MIN
 
 import schema
 from schema import ColumnDef, Schema, schema_from_names_and_types, schema_from_names
 
 import expr
-from expr import Expr, col_eq, col_eq_int, col_eq_str, col_eq_bool, col_neq, col_neq_int, col_neq_str, col_gt, col_gt_int, col_gt_float, col_gte, col_gte_int, col_gte_float, col_lt, col_lt_int, col_lt_float, col_lte, col_lte_int, col_lte_float, col_is_missing, col_not_missing, col_contains, col_starts_with, col_in, expr_and, expr_or, expr_not
+from expr import Expr, ExprOp, expr_op_from_int, expr_op_to_int, expr_op_name, col_eq, col_eq_int, col_eq_str, col_eq_bool, col_eq_decimal, col_eq_datetime, col_neq, col_neq_int, col_neq_str, col_gt, col_gt_int, col_gt_float, col_gt_decimal, col_gt_datetime, col_gte, col_gte_int, col_gte_float, col_gte_decimal, col_gte_datetime, col_lt, col_lt_int, col_lt_float, col_lt_decimal, col_lt_datetime, col_lte, col_lte_int, col_lte_float, col_lte_decimal, col_lte_datetime, col_between_datetime, col_is_missing, col_not_missing, col_contains, col_starts_with, col_ends_with, col_regex_match, col_eq_ignore_case, col_in, expr_and, expr_or, expr_not
 
 import sort
 from sort import sort_rows
 
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_sum_decimal, stat_mean_decimal, stat_min, stat_max, stat_count, stat_count_non_missing, stat_count_missing, stat_quantile, stat_iqr
 
 import table
 from table import Table, create_table
@@ -31,10 +33,19 @@ import delimited
 from delimited import parse_delimited, dump_delimited, read_delimited, to_delimited, read_tsv, to_tsv, CsvOptions, csv_options, read_delimited_options, to_delimited_options
 
 import json_adapter
-from json_adapter import table_from_json, table_to_json, csv_to_json, json_to_csv
+from json_adapter import table_from_json, table_to_json, csv_to_json, json_to_csv, table_to_json_rows, table_from_json_rows
 
 import io
-from io import read_csv_file, write_csv_file, read_json_file, write_json_file, read_delimited_file, write_delimited_file, read_tsv_file, write_tsv_file
+from io import resolve_safe_path, read_csv_file, write_csv_file, read_json_file, write_json_file, read_delimited_file, write_delimited_file, read_tsv_file, write_tsv_file, read_csv_file_safe, write_csv_file_safe, read_json_file_safe, write_json_file_safe, read_delimited_file_safe, write_delimited_file_safe, read_csv_files_parallel, read_csv_files_concat_parallel
+
+import temporal
+from temporal import timezone_is_supported, datetime_utc_offset, datetime_to_local, datetime_from_local, datetime_format_iso, table_parse_datetime, table_format_datetime_iso
+
+import archive
+from archive import compress_gzip_text, decompress_gzip_text, compress_gzip_bytes, decompress_gzip_bytes, read_csv_gz, write_csv_gz, read_delimited_gz, write_delimited_gz, read_json_gz, write_json_gz, read_csv_gz_safe, write_csv_gz_safe, read_json_gz_safe, write_json_gz_safe, decompress_zst_text, read_csv_zst, read_json_zst, read_csv_zst_safe, pack_zip_tables, write_zip_tables, unpack_zip_tables, read_zip_tables, pack_tar_tables, write_tar_gz_tables, unpack_tar_tables, read_tar_gz_tables
+
+import parallel_exec
+from parallel_exec import parallel_filter_rows, parallel_compute_agg_rows, parallel_sort_partitions, async_filter_rows
 
 import join
 from join import join_inner, join_inner_keys, join_left, join_left_keys, join_full, join_full_keys, join_cross
@@ -52,13 +63,13 @@ import sql_adapter
 from sql_adapter import table_to_create_table_sql, table_to_insert_sql, table_from_records, cell_from_db_value, quote_identifier
 
 import validation
-from validation import ColumnRule, ValidationError, ValidationReport, TableValidator, rule_non_empty, rule_range, rule_min, rule_max, rule_length, rule_allowed_values, rule_email, rule_type
+from validation import ColumnRule, ValidationError, ValidationReport, TableValidator, rule_non_empty, rule_range, rule_min, rule_max, rule_length, rule_allowed_values, rule_email, rule_type, rule_regex
 
 import key_encoding
 from key_encoding import cell_hash_key, composite_hash_key
 
 import streaming
-from streaming import StreamingCsvReader, StreamingGroupedTable, open_csv_stream, stream_count, stream_sum, stream_mean, stream_variance, stream_std, stream_group_by
+from streaming import StreamingCsvReader, StreamingGroupedTable, open_csv_stream, open_csv_stream_safe, stream_count, stream_sum, stream_mean, stream_variance, stream_std, stream_group_by
 
 # Convenience functional statistics API matching AGENTS.md:
 def col_mean(t: Table, col_name: str) -> float:
@@ -81,6 +92,12 @@ def col_max(t: Table, col_name: str) -> Cell:
 
 def col_sum(t: Table, col_name: str) -> float:
     return t.sum_val(col_name)
+
+def col_sum_decimal(t: Table, col_name: str) -> Decimal:
+    return t.sum_decimal(col_name)
+
+def col_mean_decimal(t: Table, col_name: str, places: int = 8) -> Decimal:
+    return t.mean_decimal(col_name, places)
 
 def col_count(t: Table, col_name: str) -> int:
     return t.count_val(col_name)

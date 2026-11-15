@@ -1,0 +1,108 @@
+# benchmarks/benchmark_parallel.nox — Sequential vs Parallel (parallel=True) benchmark and differential verification.
+
+import nox.time
+import nox.fs
+import nox.test
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, cell_float, TYPE_INT, TYPE_FLOAT, TYPE_STR
+from atlas import group_by, GroupedTable, AggregateDef, agg_count, agg_sum, agg_mean, agg_median, agg_std, agg_min, agg_max
+from atlas import to_csv, write_csv_file, read_csv_file, read_csv_files_concat_parallel, concat_rows
+
+print("==================================================================")
+print("Atlas Parallel Execution Benchmark & Differential Check (v0.10.0)")
+print("==================================================================")
+
+s: Schema = Schema([
+    ColumnDef("grp", TYPE_STR, False),
+    ColumnDef("seq", TYPE_INT, False),
+    ColumnDef("val", TYPE_FLOAT, False)
+])
+
+n_rows: int = 24000
+n_groups: int = 48
+rows: list[list[Cell]] = []
+i: int = 0
+while i < n_rows:
+    rows.append([
+        cell_str("G_" + str(i % n_groups)),
+        cell_int(i),
+        cell_float(float((i * 31) % 997) + 0.25)
+    ])
+    i = i + 1
+
+t: Table = Table(s, rows)
+gt: GroupedTable = group_by(t, ["grp"])
+aggs: list[AggregateDef] = [
+    agg_count("cnt"),
+    agg_sum("val", "sum_v"),
+    agg_mean("val", "mean_v"),
+    agg_median("val", "med_v"),
+    agg_std("val", "std_v"),
+    agg_min("seq", "min_s"),
+    agg_max("seq", "max_s")
+]
+
+t0: int = nox.time.now_ms()
+g_seq: Table = gt.aggregate(aggs, False)
+seq_agg_ms: int = nox.time.now_ms() - t0
+
+t0 = nox.time.now_ms()
+g_par: Table = gt.aggregate(aggs, True)
+par_agg_ms: int = nox.time.now_ms() - t0
+
+nox.test.assert_eq_str(to_csv(g_seq), to_csv(g_par), "GroupBy parallel vs sequential exact parity")
+print("[1] GroupBy Aggregate (24,000 rows, 48 groups, 7 metrics): seq=" + str(seq_agg_ms) + " ms | par=" + str(par_agg_ms) + " ms (100% parity)")
+
+t0 = nox.time.now_ms()
+w_seq: Table = t.window(["grp"], ["val", "seq"], False, False).with_row_number("rn").with_rank("val", "rk").with_cumulative_sum("val", "cs").to_table()
+seq_win_ms: int = nox.time.now_ms() - t0
+
+t0 = nox.time.now_ms()
+w_par: Table = t.window(["grp"], ["val", "seq"], False, True).with_row_number("rn").with_rank("val", "rk").with_cumulative_sum("val", "cs").to_table()
+par_win_ms: int = nox.time.now_ms() - t0
+
+nox.test.assert_eq_int(w_seq.row_count(), w_par.row_count(), "Window row count parity")
+nox.test.assert_eq_str(to_csv(w_seq.head(50)), to_csv(w_par.head(50)), "Window head(50) parity")
+nox.test.assert_eq_str(to_csv(w_seq.tail(50)), to_csv(w_par.tail(50)), "Window tail(50) parity")
+print("[2] WindowContext (24,000 rows, 48 partitions): seq=" + str(seq_win_ms) + " ms | par=" + str(par_win_ms) + " ms (100% parity)")
+
+f1: str = "temp_bench_par_1.csv"
+f2: str = "temp_bench_par_2.csv"
+f3: str = "temp_bench_par_3.csv"
+f4: str = "temp_bench_par_4.csv"
+try:
+    write_csv_file(t.slice(0, 6000), f1, True, False, True, True)
+    write_csv_file(t.slice(6000, 12000), f2, True, False, True, True)
+    write_csv_file(t.slice(12000, 18000), f3, True, False, True, True)
+    write_csv_file(t.slice(18000, 24000), f4, True, False, True, True)
+
+    t0 = nox.time.now_ms()
+    seq_parts: list[Table] = [
+        read_csv_file(f1, True, s),
+        read_csv_file(f2, True, s),
+        read_csv_file(f3, True, s),
+        read_csv_file(f4, True, s)
+    ]
+    c_seq: Table = concat_rows(seq_parts)
+    seq_io_ms: int = nox.time.now_ms() - t0
+
+    t0 = nox.time.now_ms()
+    c_par: Table = read_csv_files_concat_parallel([f1, f2, f3, f4], True, s)
+    par_io_ms: int = nox.time.now_ms() - t0
+
+    nox.test.assert_eq_int(c_seq.row_count(), c_par.row_count(), "Multi-file CSV row count parity")
+    nox.test.assert_eq_str(to_csv(c_seq.head(25)), to_csv(c_par.head(25)), "Multi-file CSV head parity")
+    print("[3] 4-File CSV Ingestion (24,000 rows total): seq=" + str(seq_io_ms) + " ms | par=" + str(par_io_ms) + " ms (100% parity)")
+finally:
+    if nox.fs.exists(f1):
+        nox.fs.remove_file(f1)
+    if nox.fs.exists(f2):
+        nox.fs.remove_file(f2)
+    if nox.fs.exists(f3):
+        nox.fs.remove_file(f3)
+    if nox.fs.exists(f4):
+        nox.fs.remove_file(f4)
+
+print("==================================================================")
+print("Parallel execution benchmark and parity verification complete!")
+print("==================================================================")

@@ -1,9 +1,11 @@
 # schema.nox — Table schema, column definitions, and structural invariants for Atlas.
 
+import nox.collections
+from nox.collections import Set
 import errors
 from errors import SchemaError, ColumnNotFoundError
 import values
-from values import TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+from values import TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME, TYPE_DATE
 
 class ColumnDef:
     name: str
@@ -23,21 +25,22 @@ class ColumnDef:
 
 class Schema:
     columns: list[ColumnDef]
+    col_index_map: dict[str, int]
 
     def __init__(self: Schema, columns: list[ColumnDef]) -> None:
+        idx_map: dict[str, int] = {}
         i: int = 0
         n: int = len(columns)
         while i < n:
             col_name: str = columns[i].name
             if col_name == "":
                 raise SchemaError("column name at index " + str(i) + " is empty")
-            j: int = i + 1
-            while j < n:
-                if columns[j].name == col_name:
-                    raise SchemaError("duplicate column name: '" + col_name + "'")
-                j = j + 1
+            if col_name in idx_map:
+                raise SchemaError("duplicate column name: '" + col_name + "'")
+            idx_map[col_name] = i
             i = i + 1
         self.columns = columns
+        self.col_index_map = idx_map
 
     def column_count(self: Schema) -> int:
 
@@ -65,16 +68,12 @@ class Schema:
 
     def has_column(self: Schema, name: str) -> bool:
 
-        return self.index_of(name) >= 0
+        return name in self.col_index_map
 
     def index_of(self: Schema, name: str) -> int:
 
-        i: int = 0
-        n: int = len(self.columns)
-        while i < n:
-            if self.columns[i].name == name:
-                return i
-            i = i + 1
+        if name in self.col_index_map:
+            return self.col_index_map[name]
         return -1
 
     def get_column(self: Schema, index: int) -> ColumnDef:
@@ -106,20 +105,18 @@ class Schema:
 
     def drop_columns(self: Schema, names: list[str]) -> Schema:
 
+        drop_set: Set[str] = Set[str]()
+        di: int = 0
+        while di < len(names):
+            drop_set.add(names[di])
+            di = di + 1
+
         new_cols: list[ColumnDef] = []
         i: int = 0
         n: int = len(self.columns)
         while i < n:
             col: ColumnDef = self.columns[i]
-            # Check if col.name is in names
-            to_drop: bool = False
-            j: int = 0
-            m: int = len(names)
-            while j < m:
-                if names[j] == col.name:
-                    to_drop = True
-                j = j + 1
-            if not to_drop:
+            if not drop_set.contains(col.name):
                 new_cols.append(col.copy())
             i = i + 1
         if len(new_cols) == 0:
@@ -156,6 +153,9 @@ class Schema:
             new_cols.append(self.columns[i].copy())
             i = i + 1
         return Schema(new_cols)
+
+    def clone(self: Schema) -> Schema:
+        return self.copy()
 
 def schema_from_names_and_types(names: list[str], types: list[int]) -> Schema:
     if len(names) != len(types):

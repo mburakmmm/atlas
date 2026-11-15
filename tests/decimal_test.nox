@@ -1,0 +1,173 @@
+# tests/decimal_test.nox — Tests for TYPE_DECIMAL exact precision arithmetic, grouping, windowing, and I/O.
+
+import nox.test
+import nox.fs
+import nox.decimal
+from nox.decimal import Decimal, parse as dec_parse
+import errors
+from errors import TypeConversionError
+import values
+from values import Cell, cell_null, cell_int, cell_float, cell_decimal, cell_decimal_str, TYPE_INT, TYPE_STR, TYPE_DECIMAL
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import expr
+from expr import col_gt_decimal, col_eq_decimal, col_lte_decimal
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+import json_adapter
+from json_adapter import table_from_json, table_to_json
+import groupby
+from groupby import group_by, agg_sum, agg_mean, agg_min, agg_max
+import streaming
+from streaming import StreamingCsvReader, open_csv_stream, stream_group_by
+import key_encoding
+from key_encoding import cell_hash_key
+import reshape
+from reshape import melt, pivot_table
+import sql_adapter
+from sql_adapter import table_to_create_table_sql
+
+# 1. Exact decimal arithmetic & financial sum (0.1 + 0.2 == 0.3)
+s_fin: Schema = Schema([
+    ColumnDef("acct", TYPE_STR, False),
+    ColumnDef("amount", TYPE_DECIMAL, True)
+])
+t_fin: Table = Table(s_fin, [
+    [values.cell_str("A"), cell_decimal_str("0.10")],
+    [values.cell_str("A"), cell_decimal_str("0.20")],
+    [values.cell_str("A"), cell_null()],
+    [values.cell_str("B"), cell_decimal_str("10000000000000000.05")],
+    [values.cell_str("B"), cell_decimal_str("0.95")]
+])
+
+exact_sum: Decimal = t_fin.sum_decimal("amount")
+nox.test.assert_eq_str(str(exact_sum), "10000000000000001.30", "exact sum str")
+nox.test.assert_eq_int(exact_sum.normalize().compare(dec_parse("10000000000000001.3")), 0, "exact sum value")
+
+exact_mean: Decimal = t_fin.mean_decimal("amount")
+nox.test.assert_eq_int(exact_mean.compare(dec_parse("2500000000000000.325")), 0, "exact mean value")
+
+# 2. Numeric equality, comparison, and canonical hash key invariance
+d_ten: Cell = cell_decimal_str("10.00")
+i_ten: Cell = cell_int(10)
+f_ten: Cell = cell_float(10.0)
+nox.test.assert_true(d_ten.equals(i_ten), "decimal 10.00 equals int 10")
+nox.test.assert_true(i_ten.equals(d_ten), "int 10 equals decimal 10.00")
+nox.test.assert_true(d_ten.equals(f_ten), "decimal 10.00 equals float 10.0")
+nox.test.assert_eq_int(d_ten.compare(i_ten), 0, "decimal compare int")
+nox.test.assert_eq_str(cell_hash_key(d_ten), cell_hash_key(i_ten), "hash parity decimal/int")
+nox.test.assert_eq_str(cell_hash_key(d_ten), cell_hash_key(f_ten), "hash parity decimal/float")
+
+d_two_half: Cell = cell_decimal_str("2.50")
+nox.test.assert_eq_str(cell_hash_key(d_two_half), cell_hash_key(cell_float(2.5)), "hash parity 2.50")
+
+d_hi1: Cell = cell_decimal_str("0.123456789012345678901")
+d_hi2: Cell = cell_decimal_str("0.123456789012345678902")
+nox.test.assert_true(not d_hi1.equals(d_hi2), "high precision decimals differ")
+nox.test.assert_true(d_hi1.compare(d_hi2) < 0, "high precision ordering")
+nox.test.assert_true(cell_hash_key(d_hi1) != cell_hash_key(d_hi2), "high precision hash keys differ")
+
+# 3. Filtering & Sorting
+t_filt: Table = t_fin.filter(col_gt_decimal("amount", "0.15"))
+nox.test.assert_eq_int(t_filt.row_count(), 3, "gt decimal filter count")
+t_eq: Table = t_fin.filter(col_eq_decimal("amount", "0.1"))
+nox.test.assert_eq_int(t_eq.row_count(), 1, "eq decimal filter count")
+t_sorted: Table = t_fin.sort_by(["amount"], True, False)
+nox.test.assert_eq_str(t_sorted.row(0)[1].to_string(), "0.10", "sorted first decimal")
+nox.test.assert_true(t_sorted.row(4)[1].is_missing(), "sorted last missing")
+
+# 4. GroupBy exact Decimal aggregations
+g_res: Table = group_by(t_fin, ["acct"]).aggregate([
+    agg_sum("amount", "total"),
+    agg_mean("amount", "avg"),
+    agg_min("amount", "min_a"),
+    agg_max("amount", "max_a")
+])
+nox.test.assert_eq_int(g_res.row_count(), 2, "groupby row count")
+c_total: ColumnDef | None = g_res.schema.get_column_by_name("total")
+nox.test.assert_true(c_total != None, "total col exists")
+if c_total != None:
+    nox.test.assert_eq_int(c_total.data_type, TYPE_DECIMAL, "total col TYPE_DECIMAL")
+c_avg: ColumnDef | None = g_res.schema.get_column_by_name("avg")
+nox.test.assert_true(c_avg != None, "avg col exists")
+if c_avg != None:
+    nox.test.assert_eq_int(c_avg.data_type, TYPE_DECIMAL, "avg col TYPE_DECIMAL")
+nox.test.assert_eq_int(g_res.row(0)[1].as_decimal().compare(dec_parse("0.3")), 0, "group A sum")
+nox.test.assert_eq_int(g_res.row(0)[2].as_decimal().compare(dec_parse("0.15")), 0, "group A mean")
+nox.test.assert_eq_int(g_res.row(1)[1].as_decimal().compare(dec_parse("10000000000000001.00")), 0, "group B sum")
+
+# 5. CSV & JSON round-trip with explicit TYPE_DECIMAL schema (preserving > 2^53)
+csv_out: str = to_csv(t_fin)
+t_csv_rt: Table = read_csv(csv_out, True, s_fin)
+nox.test.assert_eq_int(t_csv_rt.sum_decimal("amount").compare(exact_sum), 0, "CSV decimal roundtrip sum")
+
+json_out: str = table_to_json(t_fin)
+t_json_rt: Table = table_from_json(json_out, s_fin)
+nox.test.assert_eq_int(t_json_rt.sum_decimal("amount").compare(exact_sum), 0, "JSON decimal roundtrip sum")
+
+# JSON number literal directly into TYPE_DECIMAL (without float precision truncation)
+t_json_num: Table = table_from_json("[{\"acct\":\"X\",\"amount\":9007199254740993},{\"acct\":\"X\",\"amount\":0.10},{\"acct\":\"X\",\"amount\":0.20}]", s_fin)
+nox.test.assert_eq_int(t_json_num.sum_decimal("amount").compare(dec_parse("9007199254740993.3")), 0, "JSON number literal > 2^53 preserved")
+
+# 6. Window cumulative_sum on TYPE_DECIMAL across all null policies
+t_win: Table = t_fin.window(["acct"], ["amount"], True).with_cumulative_sum("amount", "cs_skip", True, "skip").with_cumulative_sum("amount", "cs_null", False, "null_row").with_cumulative_sum("amount", "cs_prop", True, "propagate").with_moving_average("amount", 2, "ma").to_table()
+c_cs: ColumnDef | None = t_win.schema.get_column_by_name("cs_skip")
+nox.test.assert_true(c_cs != None, "cs_skip exists")
+if c_cs != None:
+    nox.test.assert_eq_int(c_cs.data_type, TYPE_DECIMAL, "window cs_skip TYPE_DECIMAL")
+nox.test.assert_eq_int(t_win.row(1)[2].as_decimal().compare(dec_parse("0.30")), 0, "window cs_skip row 1")
+nox.test.assert_eq_int(t_win.row(2)[2].as_decimal().compare(dec_parse("0.30")), 0, "window cs_skip row 2")
+nox.test.assert_true(t_win.row(2)[3].is_missing(), "window cs_null missing")
+nox.test.assert_true(t_win.row(2)[4].is_missing(), "window cs_prop missing")
+
+# 7. Streaming GroupBy on TYPE_DECIMAL CSV
+tmp_csv: str = "temp_decimal_stream_test.csv"
+try:
+    nox.fs.write_string(tmp_csv, csv_out)
+    st_g: Table = open_csv_stream(tmp_csv, 2, None, s_fin).group_by(["acct"]).aggregate([agg_sum("amount", "total"), agg_mean("amount", "avg")])
+    nox.test.assert_eq_int(st_g.row(0)[1].as_decimal().compare(dec_parse("0.3")), 0, "stream group A sum")
+    nox.test.assert_eq_int(st_g.row(0)[2].as_decimal().compare(dec_parse("0.15")), 0, "stream group A mean")
+    rd: StreamingCsvReader = open_csv_stream(tmp_csv, 2, None, s_fin)
+    nox.test.assert_eq_int(rd.sum_decimal("amount").compare(exact_sum), 0, "stream sum_decimal")
+finally:
+    if nox.fs.exists(tmp_csv):
+        nox.fs.remove_file(tmp_csv)
+
+# 8. Pivot table & Melt & SQL schema
+t_piv: Table = pivot_table(Table(Schema([ColumnDef("k", TYPE_STR, False), ColumnDef("c", TYPE_STR, False), ColumnDef("v", TYPE_DECIMAL, True)]), [
+    [values.cell_str("r1"), values.cell_str("x"), cell_decimal_str("0.10")],
+    [values.cell_str("r1"), values.cell_str("x"), cell_decimal_str("0.20")]
+]), "k", "c", "v", "sum")
+nox.test.assert_eq_int(t_piv.row(0)[1].as_decimal().compare(dec_parse("0.3")), 0, "pivot decimal sum")
+
+t_mix: Table = Table(Schema([ColumnDef("id", TYPE_STR, False), ColumnDef("a", TYPE_INT, False), ColumnDef("b", TYPE_DECIMAL, False)]), [
+    [values.cell_str("r1"), cell_int(5), cell_decimal_str("2.50")]
+])
+t_melted: Table = melt(t_mix, ["id"], ["a", "b"])
+c_mval: ColumnDef | None = t_melted.schema.get_column_by_name("value")
+nox.test.assert_true(c_mval != None, "melt value col exists")
+if c_mval != None:
+    nox.test.assert_eq_int(c_mval.data_type, TYPE_DECIMAL, "melt value TYPE_DECIMAL")
+nox.test.assert_eq_int(t_melted.row(0)[2].as_decimal().compare(dec_parse("5")), 0, "melt promoted decimal value")
+
+sql_ddl: str = table_to_create_table_sql(t_fin, "ledger", "postgres")
+nox.test.assert_true("NUMERIC" in sql_ddl, "postgres NUMERIC in DDL")
+
+# 9. Invalid Decimal raises TypeConversionError
+bad_dec: bool = False
+try:
+    _bad: Cell = cell_decimal_str("1.2.3")
+except TypeConversionError:
+    bad_dec = True
+nox.test.assert_true(bad_dec, "invalid decimal 1.2.3 raises TypeConversionError")
+
+bad_dec2: bool = False
+try:
+    _bad2: Cell = cell_decimal_str("")
+except TypeConversionError:
+    bad_dec2 = True
+nox.test.assert_true(bad_dec2, "empty decimal raises TypeConversionError")
+
+print("decimal_test passed")

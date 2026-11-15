@@ -15,11 +15,20 @@ table_to_json(table: Table) -> str
 csv_to_json(csv_text: str, has_header: bool = True) -> str
 json_to_csv(json_text: str, include_header: bool = True, safe_spreadsheet: bool = False) -> str
 
-# Filesystem operations (with overwrite protection)
+# Filesystem operations (with overwrite protection & optional atomic write)
 read_csv_file(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table
-write_csv_file(table: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False) -> None
+write_csv_file(table: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = False) -> None
 read_json_file(path: str, explicit_schema: Schema | None = None) -> Table
-write_json_file(table: Table, path: str, overwrite: bool = False) -> None
+write_json_file(table: Table, path: str, overwrite: bool = False, atomic: bool = False) -> None
+
+# Path-confined filesystem operations (via nox.path.safe_join, atomic=True by default)
+resolve_safe_path(base_dir: str, relative_path: str) -> str
+read_csv_file_safe(base_dir: str, relative_path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table
+write_csv_file_safe(table: Table, base_dir: str, relative_path: str, include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = True) -> None
+read_json_file_safe(base_dir: str, relative_path: str, explicit_schema: Schema | None = None) -> Table
+write_json_file_safe(table: Table, base_dir: str, relative_path: str, overwrite: bool = False, atomic: bool = True) -> None
+read_delimited_file_safe(base_dir: str, relative_path: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table
+write_delimited_file_safe(table: Table, base_dir: str, relative_path: str, delimiter: str = ",", include_header: bool = True, safe_spreadsheet: bool = False, overwrite: bool = False, atomic: bool = True) -> None
 ```
 
 ## 2. Table Methods
@@ -104,6 +113,9 @@ col_not_missing(col: str) -> Expr
 
 col_contains(col: str, sub: str) -> Expr
 col_starts_with(col: str, prefix: str) -> Expr
+col_ends_with(col: str, suffix: str) -> Expr
+col_regex_match(col: str, pattern: str) -> Expr
+col_eq_ignore_case(col: str, target: str) -> Expr
 col_in(col: str, values: list[Cell]) -> Expr
 
 expr_and(left: Expr, right: Expr) -> Expr
@@ -195,6 +207,7 @@ rule_max(col_name: str, max_val: float) -> ColumnRule
 rule_length(col_name: str, min_len: int, max_len: int) -> ColumnRule
 rule_allowed_values(col_name: str, allowed: list[str]) -> ColumnRule
 rule_email(col_name: str) -> ColumnRule
+rule_regex(col_name: str, pattern: str) -> ColumnRule
 
 # Execution & Filtering
 report: ValidationReport = validator.validate(table: Table)
@@ -389,4 +402,107 @@ d: int = checked_div_int64(-7, 2, "division") # -4 (floor division \floor{a / b}
 # [+Inf, 1.0] -> +Inf, [-Inf, 1.0] -> -Inf, [+Inf, -Inf] -> NaN
 total: float = stat_sum(nums)
 avg: float = stat_mean(nums)
+```
+
+## 15. Exact Decimal & DateTime / Timezone Columns (`values.nox`, `temporal.nox`)
+
+```nox
+import atlas
+from atlas import TYPE_DECIMAL, TYPE_DATETIME, TYPE_DATE
+from atlas import cell_decimal, cell_decimal_str, cell_datetime, cell_datetime_ms, cell_date, cell_datetime_str, parse_datetime_ms
+from atlas import col_eq_decimal, col_gt_decimal, col_gte_decimal, col_lt_decimal, col_lte_decimal
+from atlas import col_eq_datetime, col_gt_datetime, col_gte_datetime, col_lt_datetime, col_lte_datetime, col_between_datetime
+from atlas import timezone_is_supported, datetime_utc_offset, datetime_to_local, datetime_from_local, datetime_format_iso
+from atlas import table_parse_datetime, table_format_datetime_iso
+
+# Exact base-10 Decimal (backed by nox.decimal.Decimal)
+c_dec: Cell = cell_decimal_str("10000000000000000.05")
+d_sum: Decimal = table.sum_decimal("amount")
+d_avg: Decimal = table.mean_decimal("amount", places=8)
+
+# DateTime / Date (epoch milliseconds UTC backed by nox.time.DateTime & nox.timezone)
+c_dt: Cell = cell_datetime_str("2026-03-15T14:30:45.250+03:00")
+c_day: Cell = cell_date(2026, 3, 15)
+t_parsed: Table = table_parse_datetime(raw_table, "timestamp_str", out_col="ts")
+t_iso: Table = table_format_datetime_iso(t_parsed, "ts", zone="UTC", out_col="ts_iso")
+```
+
+## 16. Portable Compressed & Archived Datasets (`archive.nox`)
+
+```nox
+import atlas
+from atlas import compress_gzip_text, decompress_gzip_text, compress_gzip_bytes, decompress_gzip_bytes
+from atlas import read_csv_gz, write_csv_gz, read_delimited_gz, write_delimited_gz, read_json_gz, write_json_gz
+from atlas import read_csv_gz_safe, write_csv_gz_safe, read_json_gz_safe, write_json_gz_safe
+from atlas import decompress_zst_text, read_csv_zst, read_json_zst, read_csv_zst_safe
+from atlas import pack_zip_tables, write_zip_tables, unpack_zip_tables, read_zip_tables
+from atlas import pack_tar_tables, write_tar_gz_tables, unpack_tar_tables, read_tar_gz_tables
+
+# Single-table Gzip (.csv.gz, .json.gz) and portable Zstd (.csv.zst, .json.zst)
+write_csv_gz(table, "data.csv.gz", atomic=True)
+t_gz: Table = read_csv_gz("data.csv.gz")
+t_zst: Table = read_csv_zst("data.csv.zst")
+
+# Multi-table ZIP & TAR.GZ bundles with path-traversal guards
+write_zip_tables("bundle.zip", ["users.csv", "metrics.json"], [t_users, t_metrics])
+bundle_map: dict[str, Table] = read_zip_tables("bundle.zip")
+write_tar_gz_tables("bundle.tar.gz", ["users.csv", "metrics.tsv"], [t_users, t_metrics])
+tar_map: dict[str, Table] = read_tar_gz_tables("bundle.tar.gz")
+```
+
+## 17. Deterministic Parallel Execution (`parallel_exec.nox`, `io.nox`)
+
+```nox
+import atlas
+from atlas import read_csv_files_parallel, read_csv_files_concat_parallel
+from atlas import parallel_filter_rows, parallel_compute_agg_rows, parallel_sort_partitions, async_filter_rows
+
+# Opt-in parallel=True on Table.filter, GroupedTable.aggregate, and WindowContext
+t_filtered: Table = table.filter(predicate, parallel=True)
+t_grouped: Table = group_by(table, ["dept"]).aggregate(aggs, parallel=True)
+t_windowed: Table = table.window(["dept"], ["salary"], ascending=False, parallel=True).with_rank("salary", "rk").to_table()
+
+# Parallel multi-file CSV ingestion
+parts: list[Table] = read_csv_files_parallel(["part1.csv", "part2.csv", "part3.csv"], has_header=True, explicit_schema=s)
+combined: Table = read_csv_files_concat_parallel(["part1.csv", "part2.csv", "part3.csv"], has_header=True, explicit_schema=s)
+```
+
+## 18. Typed Enums (`CellKind`, `ExprOp`) & `@dataclass` JSON Row Interop (`values.nox`, `expr.nox`, `json_adapter.nox`)
+
+```nox
+import nox.json
+import atlas
+from atlas import CellKind, ExprOp, cell_kind_from_int, cell_kind_to_int, cell_kind_name
+from atlas import expr_op_from_int, expr_op_to_int, expr_op_name
+from atlas import table_to_json_rows, table_from_json_rows
+
+@dataclass
+@derive("json", "order", "copy")
+class EmployeeRow:
+    id: int
+    name: str
+    dept: str
+    salary: float
+    level: int
+
+# Convert @dataclass rows -> Table -> transform -> back to @dataclass instances
+e1: EmployeeRow = EmployeeRow(1, "Alice", "Eng", 125000.0, 4)
+t: Table = table_from_json_rows([e1.to_json()], explicit_schema)
+rows_json: list[str] = table_to_json_rows(t)
+restored: EmployeeRow = EmployeeRow.from_json(rows_json[0])
+```
+
+## 19. Opt-in Desktop Turbo Module (`atlas_fast.nox` — `noxclibs`)
+
+`atlas_fast.nox` is an optional desktop module backed by `noxclibs` (`nox.yyjson`, `nox.xxhash`, `nox.pcre2`, `nox.lz4`, `nox.zstd.compress`, `nox.brotli`). Core `atlas.nox` remains 100% pure-Zig portable without linking `noxclibs`.
+
+```nox
+import atlas_fast
+from atlas_fast import yyjson_is_supported, xxhash_is_supported, pcre2_is_supported, pcre2_jit_supported, lz4_is_supported, brotli_is_supported
+from atlas_fast import table_from_json_fast, table_from_json_relaxed, table_from_json5, read_json_file_fast, read_json_file_fast_safe
+from atlas_fast import cell_xxh3_64, row_xxh3_64, row_xxh3_128_hex, dedup_table_fast, dedup_all_fast
+from atlas_fast import compile_pcre2, filter_pcre2, filter_pcre2_compiled, replace_pcre2, PCRE2_IGNORECASE
+from atlas_fast import write_csv_lz4, read_csv_lz4, write_json_lz4, read_json_lz4
+from atlas_fast import write_csv_zst_fast, read_csv_zst_fast, write_json_zst_fast, read_json_zst_fast
+from atlas_fast import decompress_brotli_text, read_csv_br, read_json_br
 ```

@@ -1,0 +1,584 @@
+# atlas_fast.nox — Opt-in desktop turbo adapters for Atlas backed by noxclibs
+# (yyjson, xxhash, pcre2, lz4, zstd.compress, brotli).
+# Core `atlas.nox` remains 100% free of `noxclibs` for freestanding/minimal targets.
+
+import nox.yyjson
+from nox.yyjson import YyjsonError, YyValue
+import nox.xxhash
+import nox.pcre2
+from nox.pcre2 import Pcre2Error, Pcre2
+import nox.lz4
+from nox.lz4 import Lz4Error
+import nox.brotli
+from nox.brotli import BrotliError
+import nox.zstd
+from nox.zstd import ZstdError
+import nox.fs
+import nox.strings
+import nox.decimal
+import errors
+from errors import AtlasError, JsonImportError, CsvImportError, TypeConversionError, MissingValueError, SchemaError, UnsupportedFeatureError
+import values
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_decimal, cell_decimal_str, cell_datetime_ms, cell_datetime_str, is_nan, is_inf, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+import json_adapter
+from json_adapter import table_to_json
+import archive
+from archive import read_csv_zst, decompress_zst_text
+import io
+from io import resolve_safe_path
+
+YYJSON_MODE_STRICT: int = 0
+YYJSON_MODE_RELAXED: int = 1
+YYJSON_MODE_JSON5: int = 2
+
+PCRE2_IGNORECASE: int = 1
+PCRE2_MULTILINE: int = 2
+PCRE2_DOTALL: int = 4
+PCRE2_EXTENDED: int = 32
+
+# --- Capability Probes ---
+
+def yyjson_is_supported() -> bool:
+    return nox.yyjson.is_supported()
+
+def xxhash_is_supported() -> bool:
+    return nox.xxhash.is_supported()
+
+def pcre2_is_supported() -> bool:
+    return nox.pcre2.is_supported()
+
+def pcre2_jit_supported() -> bool:
+    return nox.pcre2.jit_supported()
+
+def lz4_is_supported() -> bool:
+    return nox.lz4.is_supported()
+
+def brotli_is_supported() -> bool:
+    return nox.brotli.is_supported()
+
+def _write_raw_file(path: str, raw_bytes: str, atomic: bool = True) -> None:
+    if atomic:
+        nox.fs.write_string_atomic(path, raw_bytes)
+    else:
+        nox.fs.write_string(path, raw_bytes)
+
+# --- 1. yyjson High-Speed JSON / Relaxed JSON / JSON5 Ingestion ---
+
+def _yyjson_val_to_cell(val: YyValue, target_type: int) -> Cell:
+    if nox.yyjson.is_null(val):
+        return cell_null()
+
+    if target_type == TYPE_NULL:
+        if nox.yyjson.is_bool(val):
+            return cell_bool(nox.yyjson.as_bool(val))
+        if nox.yyjson.is_integer(val):
+            return cell_int(nox.yyjson.as_int(val))
+        if nox.yyjson.is_number(val):
+            return cell_float(nox.yyjson.as_number(val))
+        if nox.yyjson.is_string(val):
+            return cell_str(nox.yyjson.as_string(val))
+        raise JsonImportError("unsupported nested JSON value without flatten policy")
+
+    if target_type == TYPE_BOOL:
+        if nox.yyjson.is_bool(val):
+            return cell_bool(nox.yyjson.as_bool(val))
+        raise TypeConversionError("expected JSON boolean")
+
+    if target_type == TYPE_INT:
+        if nox.yyjson.is_integer(val):
+            return cell_int(nox.yyjson.as_int(val))
+        if nox.yyjson.is_number(val):
+            f: float = nox.yyjson.as_number(val)
+            if is_nan(f) or is_inf(f):
+                raise TypeConversionError("cannot convert NaN or Inf to integer")
+            if f > 9007199254740991.0 or f < -9007199254740991.0:
+                raise TypeConversionError("JSON integer exceeds safe 53-bit float precision")
+            iv: int = int(f)
+            if float(iv) != f:
+                raise TypeConversionError("cannot convert fractional float to integer in strict JSON import")
+            return cell_int(iv)
+        raise TypeConversionError("expected JSON number for integer column")
+
+    if target_type == TYPE_FLOAT:
+        if nox.yyjson.is_integer(val):
+            return cell_float(float(nox.yyjson.as_int(val)))
+        if nox.yyjson.is_number(val):
+            return cell_float(nox.yyjson.as_number(val))
+        raise TypeConversionError("expected JSON number for float column")
+
+    if target_type == TYPE_STR:
+        if nox.yyjson.is_string(val):
+            return cell_str(nox.yyjson.as_string(val))
+        raise TypeConversionError("expected JSON string for string column")
+
+    if target_type == TYPE_DECIMAL:
+        if nox.yyjson.is_string(val):
+            return cell_decimal_str(nox.yyjson.as_string(val))
+        if nox.yyjson.is_integer(val):
+            return cell_decimal(nox.decimal.from_int(nox.yyjson.as_int(val)))
+        if nox.yyjson.is_number(val):
+            num_txt: str = nox.yyjson.number_text(val)
+            if nox.strings.byte_len(num_txt) > 0:
+                return cell_decimal_str(num_txt)
+            return cell_decimal_str(str(nox.yyjson.as_number(val)))
+        raise TypeConversionError("expected JSON string or number for decimal column")
+
+    if target_type == TYPE_DATETIME:
+        if nox.yyjson.is_string(val):
+            return cell_datetime_str(nox.yyjson.as_string(val))
+        if nox.yyjson.is_integer(val):
+            return cell_datetime_ms(nox.yyjson.as_int(val))
+        raise TypeConversionError("expected ISO-8601 string or epoch ms integer for datetime column")
+
+    raise TypeConversionError("unknown target type in yyjson conversion")
+
+def _infer_schema_from_yyjson(arr: YyValue) -> Schema:
+    n: int = nox.yyjson.array_len(arr)
+    if n == 0:
+        empty_cols: list[ColumnDef] = []
+        return Schema(empty_cols)
+
+    col_names: list[str] = []
+    col_types: list[int] = []
+    col_nullable: list[bool] = []
+    seen_cols: dict[str, int] = {}
+
+    i: int = 0
+    while i < n:
+        item: YyValue = nox.yyjson.array_get(arr, i)
+        if not nox.yyjson.is_object(item):
+            raise JsonImportError("expected JSON object at array index " + str(i))
+        obj_len: int = nox.yyjson.object_len(item)
+        k_idx: int = 0
+        while k_idx < obj_len:
+            k: str = nox.yyjson.object_key(item, k_idx)
+            if k not in seen_cols:
+                seen_cols[k] = len(col_names)
+                col_names.append(k)
+                col_types.append(TYPE_NULL)
+                if i > 0:
+                    col_nullable.append(True)
+                else:
+                    col_nullable.append(False)
+            k_idx = k_idx + 1
+        i = i + 1
+
+    num_cols: int = len(col_names)
+    r: int = 0
+    while r < n:
+        obj: YyValue = nox.yyjson.array_get(arr, r)
+        c: int = 0
+        while c < num_cols:
+            key: str = col_names[c]
+            maybe_val: YyValue | None = nox.yyjson.get_or_none(obj, key)
+            if maybe_val == None:
+                col_nullable[c] = True
+            else:
+                if nox.yyjson.is_null(maybe_val):
+                    col_nullable[c] = True
+                else:
+                    val_type: int = TYPE_NULL
+                    if nox.yyjson.is_bool(maybe_val):
+                        val_type = TYPE_BOOL
+                    elif nox.yyjson.is_integer(maybe_val):
+                        val_type = TYPE_INT
+                    elif nox.yyjson.is_number(maybe_val):
+                        val_type = TYPE_FLOAT
+                    elif nox.yyjson.is_string(maybe_val):
+                        val_type = TYPE_STR
+                    else:
+                        raise JsonImportError("nested array or object not supported in column '" + key + "' at row " + str(r))
+
+                    if col_types[c] == TYPE_NULL:
+                        col_types[c] = val_type
+                    elif col_types[c] != val_type:
+                        if (col_types[c] == TYPE_INT and val_type == TYPE_FLOAT) or (col_types[c] == TYPE_FLOAT and val_type == TYPE_INT):
+                            col_types[c] = TYPE_FLOAT
+                        else:
+                            raise TypeConversionError("inconsistent types in JSON column '" + key + "' at row " + str(r))
+            c = c + 1
+        r = r + 1
+
+    cols: list[ColumnDef] = []
+    idx: int = 0
+    while idx < num_cols:
+        final_t: int = col_types[idx]
+        if final_t == TYPE_NULL:
+            final_t = TYPE_STR
+        cols.append(ColumnDef(col_names[idx], final_t, col_nullable[idx]))
+        idx = idx + 1
+    return Schema(cols)
+
+def table_from_json_fast(json_text: str, explicit_schema: Schema | None = None, mode: int = 0) -> Table:
+    if not nox.yyjson.is_supported():
+        raise UnsupportedFeatureError("nox.yyjson is not supported on this platform")
+
+    root: YyValue = nox.yyjson.open_doc("[]", 0)
+    try:
+        root = nox.yyjson.open_doc(json_text, mode)
+    except YyjsonError as e:
+        raise JsonImportError("yyjson parse failed: " + str(e))
+
+    if not nox.yyjson.is_array(root):
+        raise JsonImportError("JSON root must be an array of objects")
+
+    n: int = nox.yyjson.array_len(root)
+    if n == 0:
+        if explicit_schema != None:
+            empty_rows: list[list[Cell]] = []
+            return Table(explicit_schema, empty_rows)
+        empty_cols: list[ColumnDef] = []
+        empty_s: Schema = Schema(empty_cols)
+        empty_table_rows: list[list[Cell]] = []
+        return Table(empty_s, empty_table_rows)
+
+    target_schema: Schema = Schema([])
+    if explicit_schema != None:
+        target_schema = explicit_schema
+    else:
+        target_schema = _infer_schema_from_yyjson(root)
+
+    num_cols: int = target_schema.column_count()
+    rows: list[list[Cell]] = []
+    r: int = 0
+    while r < n:
+        item: YyValue = nox.yyjson.array_get(root, r)
+        if not nox.yyjson.is_object(item):
+            raise JsonImportError("expected JSON object at index " + str(r))
+        row_cells: list[Cell] = []
+        c: int = 0
+        while c < num_cols:
+            col_def: ColumnDef = target_schema.columns[c]
+            maybe_val: YyValue | None = nox.yyjson.get_or_none(item, col_def.name)
+            if maybe_val == None:
+                if not col_def.nullable:
+                    raise MissingValueError("missing required key '" + col_def.name + "' at JSON row " + str(r))
+                row_cells.append(cell_null())
+            else:
+                cell: Cell = _yyjson_val_to_cell(maybe_val, col_def.data_type)
+                if cell.is_missing() and not col_def.nullable:
+                    raise MissingValueError("null value in non-nullable column '" + col_def.name + "' at JSON row " + str(r))
+                row_cells.append(cell)
+            c = c + 1
+        rows.append(row_cells)
+        r = r + 1
+
+    return Table(target_schema, rows)
+
+def table_from_json_relaxed(json_text: str, explicit_schema: Schema | None = None) -> Table:
+    return table_from_json_fast(json_text, explicit_schema, YYJSON_MODE_RELAXED)
+
+def table_from_json5(json_text: str, explicit_schema: Schema | None = None) -> Table:
+    return table_from_json_fast(json_text, explicit_schema, YYJSON_MODE_JSON5)
+
+def read_json_file_fast(path: str, explicit_schema: Schema | None = None, mode: int = 0) -> Table:
+    text: str = nox.fs.read_to_string(path)
+    return table_from_json_fast(text, explicit_schema, mode)
+
+def read_json_file_fast_safe(base_dir: str, rel_path: str, explicit_schema: Schema | None = None, mode: int = 0) -> Table:
+    safe_p: str = resolve_safe_path(base_dir, rel_path)
+    return read_json_file_fast(safe_p, explicit_schema, mode)
+
+# --- 2. xxhash Fast 64-bit / 128-bit Hashing & Deduplication ---
+
+def _cell_canonical_hash_input(c: Cell) -> str:
+    if c.kind == TYPE_NULL:
+        return "N:"
+    if c.kind == TYPE_INT:
+        return "I:" + str(c.i)
+    if c.kind == TYPE_FLOAT:
+        if not (c.f == c.f):
+            return "F:NaN"
+        if c.f == 0.0:
+            return "F:0.0"
+        return "F:" + str(c.f)
+    if c.kind == TYPE_STR:
+        return "S:" + str(nox.strings.byte_len(c.s)) + ":" + c.s
+    if c.kind == TYPE_BOOL:
+        if c.b:
+            return "B:1"
+        return "B:0"
+    if c.kind == TYPE_DECIMAL:
+        return "D:" + str(c.as_decimal().normalize())
+    if c.kind == TYPE_DATETIME:
+        return "T:" + str(c.i)
+    return "U:" + c.to_string()
+
+def _row_canonical_hash_input(cells: list[Cell]) -> str:
+    parts: list[str] = []
+    i: int = 0
+    while i < len(cells):
+        parts.append(_cell_canonical_hash_input(cells[i]))
+        i = i + 1
+    return nox.strings.join(parts, "|")
+
+def cell_xxh3_64(c: Cell, seed: int = 0) -> int:
+    if not nox.xxhash.is_supported():
+        raise UnsupportedFeatureError("nox.xxhash is not supported on this platform")
+    return nox.xxhash.xxh3_64(_cell_canonical_hash_input(c), seed)
+
+def row_xxh3_64(cells: list[Cell], seed: int = 0) -> int:
+    if not nox.xxhash.is_supported():
+        raise UnsupportedFeatureError("nox.xxhash is not supported on this platform")
+    return nox.xxhash.xxh3_64(_row_canonical_hash_input(cells), seed)
+
+def row_xxh3_128_hex(cells: list[Cell], seed: int = 0) -> str:
+    if not nox.xxhash.is_supported():
+        raise UnsupportedFeatureError("nox.xxhash is not supported on this platform")
+    return nox.xxhash.xxh3_128_hex(_row_canonical_hash_input(cells), seed)
+
+def _rows_equal_on_indices(a: list[Cell], b: list[Cell], indices: list[int]) -> bool:
+    k: int = 0
+    n: int = len(indices)
+    while k < n:
+        idx: int = indices[k]
+        if not a[idx].equals(b[idx]):
+            return False
+        k = k + 1
+    return True
+
+def _clone_cell_list(row: list[Cell]) -> list[Cell]:
+    out: list[Cell] = []
+    i: int = 0
+    while i < len(row):
+        c: Cell = row[i]
+        out.append(Cell(c.kind, c.i, c.f, c.s, c.b, c.d))
+        i = i + 1
+    return out
+
+def dedup_table_fast(t: Table, key_cols: list[str]) -> Table:
+    if not nox.xxhash.is_supported():
+        raise UnsupportedFeatureError("nox.xxhash is not supported on this platform")
+
+    indices: list[int] = []
+    if len(key_cols) == 0:
+        c: int = 0
+        ncols: int = t.column_count()
+        while c < ncols:
+            indices.append(c)
+            c = c + 1
+    else:
+        k: int = 0
+        while k < len(key_cols):
+            indices.append(t.schema.index_of(key_cols[k]))
+            k = k + 1
+
+    # Hash bucket -> list of kept row indices in `out_rows` for collision-safe verification
+    buckets: dict[int, list[int]] = {}
+    out_rows: list[list[Cell]] = []
+
+    r: int = 0
+    nrows: int = t.row_count()
+    nkeys: int = len(indices)
+    while r < nrows:
+        row: list[Cell] = t.rows[r]
+        key_cells: list[Cell] = []
+        j: int = 0
+        while j < nkeys:
+            key_cells.append(row[indices[j]])
+            j = j + 1
+        h: int = nox.xxhash.xxh3_64(_row_canonical_hash_input(key_cells), 0)
+        if h not in buckets:
+            new_bucket: list[int] = [len(out_rows)]
+            buckets[h] = new_bucket
+            out_rows.append(_clone_cell_list(row))
+        else:
+            candidates: list[int] = buckets[h]
+            is_dup: bool = False
+            ci: int = 0
+            while ci < len(candidates):
+                existing_row: list[Cell] = out_rows[candidates[ci]]
+                if _rows_equal_on_indices(row, existing_row, indices):
+                    is_dup = True
+                ci = ci + 1
+            if not is_dup:
+                candidates.append(len(out_rows))
+                buckets[h] = candidates
+                out_rows.append(_clone_cell_list(row))
+        r = r + 1
+
+    return Table(t.schema.clone(), out_rows)
+
+def dedup_all_fast(t: Table) -> Table:
+    empty_keys: list[str] = []
+    return dedup_table_fast(t, empty_keys)
+
+# --- 3. PCRE2 JIT Regex Filtering & Substitution ---
+
+def compile_pcre2(pattern: str, flags: int = 0, jit: bool = True) -> Pcre2:
+    if not nox.pcre2.is_supported():
+        raise UnsupportedFeatureError("nox.pcre2 is not supported on this platform")
+    use_jit: bool = jit and nox.pcre2.jit_supported()
+    try:
+        return nox.pcre2.compile(pattern, flags, use_jit)
+    except Pcre2Error as e:
+        raise AtlasError("PCRE2 compile failed for pattern '" + pattern + "': " + str(e))
+
+def filter_pcre2_compiled(t: Table, col_name: str, compiled: Pcre2, full_match: bool = False) -> Table:
+    col_idx: int = t.schema.index_of(col_name)
+    col_def: ColumnDef = t.schema.columns[col_idx]
+    if col_def.data_type != TYPE_STR:
+        raise TypeConversionError("filter_pcre2 requires a string column, got '" + col_name + "'")
+
+    out_rows: list[list[Cell]] = []
+    r: int = 0
+    nrows: int = t.row_count()
+    while r < nrows:
+        row: list[Cell] = t.rows[r]
+        cell: Cell = row[col_idx]
+        if not cell.is_missing():
+            matched: bool = False
+            try:
+                if full_match:
+                    matched = compiled.is_full_match(cell.s)
+                else:
+                    matched = compiled.is_match(cell.s)
+            except Pcre2Error as e:
+                raise AtlasError("PCRE2 match failed at row " + str(r) + ": " + str(e))
+            if matched:
+                out_rows.append(_clone_cell_list(row))
+        r = r + 1
+
+    return Table(t.schema.clone(), out_rows)
+
+def filter_pcre2(t: Table, col_name: str, pattern: str, flags: int = 0, full_match: bool = False, jit: bool = True) -> Table:
+    compiled: Pcre2 = compile_pcre2(pattern, flags, jit)
+    return filter_pcre2_compiled(t, col_name, compiled, full_match)
+
+def replace_pcre2(t: Table, col_name: str, pattern: str, repl: str, out_col: str = "", flags: int = 0, jit: bool = True) -> Table:
+    col_idx: int = t.schema.index_of(col_name)
+    col_def: ColumnDef = t.schema.columns[col_idx]
+    if col_def.data_type != TYPE_STR:
+        raise TypeConversionError("replace_pcre2 requires a string column, got '" + col_name + "'")
+
+    compiled: Pcre2 = compile_pcre2(pattern, flags, jit)
+    target_name: str = out_col
+    if nox.strings.byte_len(target_name) == 0:
+        target_name = col_name
+
+    replace_in_place: bool = (target_name == col_name)
+    if not replace_in_place and t.schema.has_column(target_name):
+        raise SchemaError("output column '" + target_name + "' already exists in table")
+
+    new_cols: list[ColumnDef] = []
+    c: int = 0
+    while c < t.column_count():
+        cd: ColumnDef = t.schema.columns[c]
+        new_cols.append(ColumnDef(cd.name, cd.data_type, cd.nullable))
+        c = c + 1
+    if not replace_in_place:
+        new_cols.append(ColumnDef(target_name, TYPE_STR, col_def.nullable))
+    out_schema: Schema = Schema(new_cols)
+
+    out_rows: list[list[Cell]] = []
+    r: int = 0
+    while r < t.row_count():
+        row: list[Cell] = t.rows[r]
+        cell: Cell = row[col_idx]
+        new_cell: Cell = cell_null()
+        if not cell.is_missing():
+            try:
+                new_cell = cell_str(compiled.replace(repl, cell.s, 0))
+            except Pcre2Error as e:
+                raise AtlasError("PCRE2 replace failed at row " + str(r) + ": " + str(e))
+        row_cells: list[Cell] = []
+        ci: int = 0
+        while ci < t.column_count():
+            if replace_in_place and ci == col_idx:
+                row_cells.append(new_cell)
+            else:
+                orig_c: Cell = row[ci]
+                row_cells.append(Cell(orig_c.kind, orig_c.i, orig_c.f, orig_c.s, orig_c.b, orig_c.d))
+            ci = ci + 1
+        if not replace_in_place:
+            row_cells.append(new_cell)
+        out_rows.append(row_cells)
+        r = r + 1
+
+    return Table(out_schema, out_rows)
+
+# --- 4. LZ4, Zstandard Compress, and Brotli Compressed File I/O ---
+
+def compress_lz4_text(text: str, level: int = 0) -> str:
+    if not nox.lz4.is_supported():
+        raise UnsupportedFeatureError("nox.lz4 is not supported on this platform")
+    try:
+        return nox.lz4.compress(text, level)
+    except Lz4Error as e:
+        raise CsvImportError("LZ4 compression failed: " + str(e))
+
+def decompress_lz4_text(raw_lz4: str) -> str:
+    if not nox.lz4.is_supported():
+        raise UnsupportedFeatureError("nox.lz4 is not supported on this platform")
+    try:
+        return nox.lz4.decompress(raw_lz4)
+    except Lz4Error as e:
+        raise CsvImportError("LZ4 decompression failed: " + str(e))
+
+def write_csv_lz4(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True, level: int = 0) -> None:
+    csv_txt: str = to_csv(t, include_header, safe_spreadsheet)
+    compressed: str = compress_lz4_text(csv_txt, level)
+    _write_raw_file(path, compressed, atomic)
+
+def read_csv_lz4(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    csv_txt: str = decompress_lz4_text(raw)
+    return read_csv(csv_txt, has_header, explicit_schema, blank_is_missing)
+
+def write_json_lz4(t: Table, path: str, atomic: bool = True, level: int = 0) -> None:
+    json_txt: str = table_to_json(t)
+    compressed: str = compress_lz4_text(json_txt, level)
+    _write_raw_file(path, compressed, atomic)
+
+def read_json_lz4(path: str, explicit_schema: Schema | None = None, mode: int = 0) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    json_txt: str = decompress_lz4_text(raw)
+    return table_from_json_fast(json_txt, explicit_schema, mode)
+
+def compress_zst_fast(text: str, level: int = 3) -> str:
+    try:
+        return nox.zstd.compress(text, level)
+    except ZstdError as e:
+        raise CsvImportError("Zstandard compression failed: " + str(e))
+
+def write_csv_zst_fast(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True, level: int = 3) -> None:
+    csv_txt: str = to_csv(t, include_header, safe_spreadsheet)
+    compressed: str = compress_zst_fast(csv_txt, level)
+    _write_raw_file(path, compressed, atomic)
+
+def read_csv_zst_fast(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
+    return read_csv_zst(path, has_header, explicit_schema, blank_is_missing)
+
+def write_json_zst_fast(t: Table, path: str, atomic: bool = True, level: int = 3) -> None:
+    json_txt: str = table_to_json(t)
+    compressed: str = compress_zst_fast(json_txt, level)
+    _write_raw_file(path, compressed, atomic)
+
+def read_json_zst_fast(path: str, explicit_schema: Schema | None = None, mode: int = 0) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    json_txt: str = decompress_zst_text(raw)
+    return table_from_json_fast(json_txt, explicit_schema, mode)
+
+def decompress_brotli_text(raw_br: str, max_output: int = 0) -> str:
+    if not nox.brotli.is_supported():
+        raise UnsupportedFeatureError("nox.brotli is not supported on this platform")
+    try:
+        return nox.brotli.decompress(raw_br, max_output)
+    except BrotliError as e:
+        raise CsvImportError("Brotli decompression failed: " + str(e))
+
+def read_csv_br(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, max_output: int = 0) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    csv_txt: str = decompress_brotli_text(raw, max_output)
+    return read_csv(csv_txt, has_header, explicit_schema, blank_is_missing)
+
+def read_json_br(path: str, explicit_schema: Schema | None = None, mode: int = 0, max_output: int = 0) -> Table:
+    raw: str = nox.fs.read_to_string(path)
+    json_txt: str = decompress_brotli_text(raw, max_output)
+    return table_from_json_fast(json_txt, explicit_schema, mode)

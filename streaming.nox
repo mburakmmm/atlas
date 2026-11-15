@@ -1,12 +1,16 @@
 # streaming.nox — Low-memory Streaming CSV reader and chunk-based processing for Atlas.
 
 import nox.fs
+import nox.path
+from nox.path import PathError
+import nox.decimal
+from nox.decimal import Decimal, from_int as decimal_from_int
 import nox.mathx
 import nox.strings
 import errors
 from errors import AtlasError, CsvImportError, ShapeError, MissingValueError, ColumnNotFoundError, AggregationError
 import values
-from values import Cell, cell_null, cell_int, cell_float, parse_cell, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, checked_add_int64
+from values import Cell, cell_null, cell_int, cell_float, cell_decimal, parse_cell, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, checked_add_int64
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -32,6 +36,7 @@ class SingleAggState:
     count_non_missing: int
     sum_val: float
     sum_val_i: int
+    sum_val_d: Decimal
     mean_val: float
     m2_val: float
     min_cell: Cell
@@ -47,6 +52,7 @@ class SingleAggState:
         self.count_non_missing = 0
         self.sum_val = 0.0
         self.sum_val_i = 0
+        self.sum_val_d = decimal_from_int(0)
         self.mean_val = 0.0
         self.m2_val = 0.0
         self.min_cell = cell_null()
@@ -71,9 +77,13 @@ class SingleAggState:
         if self.agg_type == AGG_SUM:
             if self.target_type == TYPE_INT:
                 self.sum_val_i = checked_add_int64(self.sum_val_i, c.as_int(), "streaming groupby sum")
+            elif self.target_type == TYPE_DECIMAL:
+                self.sum_val_d = self.sum_val_d + c.as_decimal()
             else:
                 self.sum_val = self.sum_val + c.as_float()
         elif self.agg_type == AGG_MEAN or self.agg_type == AGG_VARIANCE or self.agg_type == AGG_STD:
+            if self.target_type == TYPE_DECIMAL and self.agg_type == AGG_MEAN:
+                self.sum_val_d = self.sum_val_d + c.as_decimal()
             x: float = c.as_float()
             delta: float = x - self.mean_val
             self.mean_val = self.mean_val + delta / float(self.count_non_missing)
@@ -104,11 +114,15 @@ class SingleAggState:
         if self.agg_type == AGG_SUM:
             if self.target_type == TYPE_INT:
                 return cell_int(self.sum_val_i)
+            if self.target_type == TYPE_DECIMAL:
+                return cell_decimal(self.sum_val_d)
             return cell_float(self.sum_val)
         if self.count_non_missing == 0:
             return cell_null()
 
         if self.agg_type == AGG_MEAN:
+            if self.target_type == TYPE_DECIMAL:
+                return cell_decimal(self.sum_val_d.div(decimal_from_int(self.count_non_missing), 8, "half_even").normalize())
             return cell_float(self.mean_val)
         if self.agg_type == AGG_VARIANCE:
             if self.is_sample:
@@ -296,8 +310,15 @@ class StreamingGroupedTable:
                 if initialized_schema and target_indices[ai] >= 0:
                     out_type = source_schema.columns[target_indices[ai]].data_type
             elif ad.agg_type == AGG_SUM:
-                if initialized_schema and target_indices[ai] >= 0 and source_schema.columns[target_indices[ai]].data_type == TYPE_INT:
-                    out_type = TYPE_INT
+                if initialized_schema and target_indices[ai] >= 0:
+                    st_t: int = source_schema.columns[target_indices[ai]].data_type
+                    if st_t == TYPE_INT:
+                        out_type = TYPE_INT
+                    elif st_t == TYPE_DECIMAL:
+                        out_type = TYPE_DECIMAL
+            elif ad.agg_type == AGG_MEAN:
+                if initialized_schema and target_indices[ai] >= 0 and source_schema.columns[target_indices[ai]].data_type == TYPE_DECIMAL:
+                    out_type = TYPE_DECIMAL
             out_cols.append(ColumnDef(ad.output_col, out_type, True))
             ai = ai + 1
 
@@ -825,7 +846,8 @@ class StreamingCsvReader:
     def sum(self: StreamingCsvReader, col_name: str) -> float:
         running_sum_f: float = 0.0
         running_sum_i: int = 0
-        is_int_target: bool = False
+        running_sum_d: Decimal = decimal_from_int(0)
+        col_mode: int = 0 # 0=float, 1=int, 2=decimal
         inited_type: bool = False
         try:
             while self.has_next():
@@ -834,10 +856,12 @@ class StreamingCsvReader:
                     if not inited_type:
                         c_def: ColumnDef | None = chunk_tbl.schema.get_column_by_name(col_name)
                         if c_def is not None and c_def.data_type == TYPE_INT:
-                            is_int_target = True
+                            col_mode = 1
+                        elif c_def is not None and c_def.data_type == TYPE_DECIMAL:
+                            col_mode = 2
                         inited_type = True
 
-                    if is_int_target:
+                    if col_mode == 1:
                         cells: list[Cell] = chunk_tbl.column_cells(col_name)
                         ci: int = 0
                         nc: int = len(cells)
@@ -846,14 +870,43 @@ class StreamingCsvReader:
                             if not c_item.is_missing():
                                 running_sum_i = checked_add_int64(running_sum_i, c_item.as_int(), "stream_sum")
                             ci = ci + 1
+                    elif col_mode == 2:
+                        cells_d: list[Cell] = chunk_tbl.column_cells(col_name)
+                        ci_d: int = 0
+                        nc_d: int = len(cells_d)
+                        while ci_d < nc_d:
+                            c_item_d: Cell = cells_d[ci_d]
+                            if not c_item_d.is_missing():
+                                running_sum_d = running_sum_d + c_item_d.as_decimal()
+                            ci_d = ci_d + 1
                     else:
                         running_sum_f = running_sum_f + chunk_tbl.sum_val(col_name)
         finally:
             self.close()
 
-        if is_int_target:
+        if col_mode == 1:
             return float(running_sum_i)
+        if col_mode == 2:
+            return running_sum_d.to_float()
         return running_sum_f
+
+    def sum_decimal(self: StreamingCsvReader, col_name: str) -> Decimal:
+        running_sum_d: Decimal = decimal_from_int(0)
+        try:
+            while self.has_next():
+                chunk_tbl: Table = self.next_chunk()
+                if chunk_tbl.row_count() > 0:
+                    cells_d: list[Cell] = chunk_tbl.column_cells(col_name)
+                    ci: int = 0
+                    nc: int = len(cells_d)
+                    while ci < nc:
+                        c_item: Cell = cells_d[ci]
+                        if not c_item.is_missing():
+                            running_sum_d = running_sum_d + c_item.as_decimal()
+                        ci = ci + 1
+        finally:
+            self.close()
+        return running_sum_d
 
     def mean(self: StreamingCsvReader, col_name: str) -> float:
         running_n: int = 0
@@ -949,6 +1002,14 @@ class StreamingCsvReader:
 
 def open_csv_stream(path: str, chunk_rows: int = 1000, options: CsvOptions | None = None, explicit_schema: Schema | None = None) -> StreamingCsvReader:
     return StreamingCsvReader(path, options, explicit_schema, chunk_rows)
+
+def open_csv_stream_safe(base_dir: str, relative_path: str, chunk_rows: int = 1000, options: CsvOptions | None = None, explicit_schema: Schema | None = None) -> StreamingCsvReader:
+    safe_path: str = ""
+    try:
+        safe_path = nox.path.safe_join(base_dir, relative_path)
+    except PathError as pe:
+        raise AtlasError("unsafe stream file path rejected ('" + relative_path + "' under '" + base_dir + "'): " + str(pe))
+    return StreamingCsvReader(safe_path, options, explicit_schema, chunk_rows)
 
 def stream_count(path: str, options: CsvOptions | None = None) -> int:
     reader: StreamingCsvReader = open_csv_stream(path, 2000, options)

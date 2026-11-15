@@ -1,0 +1,154 @@
+# temporal.nox — Portable DateTime and IANA Timezone utilities for Atlas.
+
+import nox.time
+from nox.time import DateTime, from_epoch_ms
+import nox.timezone
+from nox.timezone import TimezoneError
+import errors
+from errors import ColumnNotFoundError, TypeConversionError, SchemaError
+import values
+from values import Cell, cell_null, cell_str, cell_datetime_ms, cell_datetime_str, TYPE_DATETIME, TYPE_STR, TYPE_INT, parse_datetime_ms
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+
+def timezone_is_supported() -> bool:
+    return nox.timezone.is_supported()
+
+def datetime_utc_offset(zone: str, epoch_ms: int) -> int:
+    try:
+        return nox.timezone.utc_offset(zone, epoch_ms // 1000)
+    except TimezoneError as te:
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+
+def datetime_to_local(zone: str, c: Cell) -> DateTime:
+    if c.is_missing():
+        raise TypeConversionError("cannot convert missing Cell to local DateTime")
+    ms: int = c.as_epoch_ms()
+    try:
+        return nox.timezone.to_local(zone, ms)
+    except TimezoneError as te:
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+
+def datetime_from_local(zone: str, dt: DateTime) -> Cell:
+    try:
+        return cell_datetime_ms(nox.timezone.from_local(zone, dt))
+    except TimezoneError as te:
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+
+def datetime_format_iso(zone: str, c: Cell) -> str:
+    if c.is_missing():
+        return ""
+    ms: int = c.as_epoch_ms()
+    try:
+        return nox.timezone.format_iso(zone, ms)
+    except TimezoneError as te:
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+
+def table_parse_datetime(t: Table, col_name: str, out_col: str = "") -> Table:
+    col_idx: int = t.schema.index_of(col_name)
+    if col_idx < 0:
+        raise ColumnNotFoundError("datetime column not found: '" + col_name + "'")
+
+    target_name: str = out_col
+    replace_existing: bool = False
+    if target_name == "" or target_name == col_name:
+        target_name = col_name
+        replace_existing = True
+    elif t.schema.has_column(target_name):
+        raise SchemaError("output datetime column '" + target_name + "' already exists")
+
+    new_cols: list[ColumnDef] = []
+    c_i: int = 0
+    num_cols: int = t.schema.column_count()
+    while c_i < num_cols:
+        cdef: ColumnDef = t.schema.columns[c_i]
+        if replace_existing and c_i == col_idx:
+            new_cols.append(ColumnDef(cdef.name, TYPE_DATETIME, cdef.nullable))
+        else:
+            new_cols.append(cdef.copy())
+        c_i = c_i + 1
+    if not replace_existing:
+        new_cols.append(ColumnDef(target_name, TYPE_DATETIME, True))
+
+    new_rows: list[list[Cell]] = []
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+    while r_idx < num_rows:
+        old_r: list[Cell] = t.rows[r_idx]
+        src_cell: Cell = old_r[col_idx]
+        parsed_cell: Cell = cell_null()
+        if not src_cell.is_missing():
+            if src_cell.kind == TYPE_DATETIME or src_cell.kind == TYPE_INT:
+                parsed_cell = cell_datetime_ms(src_cell.i)
+            elif src_cell.kind == TYPE_STR:
+                parsed_cell = cell_datetime_str(src_cell.s)
+            else:
+                raise TypeConversionError("cannot convert column '" + col_name + "' value '" + src_cell.to_string() + "' to DateTime")
+
+        new_r: list[Cell] = []
+        j: int = 0
+        while j < num_cols:
+            if replace_existing and j == col_idx:
+                new_r.append(parsed_cell)
+            else:
+                new_r.append(old_r[j])
+            j = j + 1
+        if not replace_existing:
+            new_r.append(parsed_cell)
+        new_rows.append(new_r)
+        r_idx = r_idx + 1
+
+    return Table(Schema(new_cols), new_rows)
+
+def table_format_datetime_iso(t: Table, col_name: str, zone: str = "UTC", out_col: str = "") -> Table:
+    col_idx: int = t.schema.index_of(col_name)
+    if col_idx < 0:
+        raise ColumnNotFoundError("datetime column not found: '" + col_name + "'")
+
+    target_name: str = out_col
+    replace_existing: bool = False
+    if target_name == "" or target_name == col_name:
+        target_name = col_name
+        replace_existing = True
+    elif t.schema.has_column(target_name):
+        raise SchemaError("output formatted datetime column '" + target_name + "' already exists")
+
+    new_cols: list[ColumnDef] = []
+    c_i: int = 0
+    num_cols: int = t.schema.column_count()
+    while c_i < num_cols:
+        cdef: ColumnDef = t.schema.columns[c_i]
+        if replace_existing and c_i == col_idx:
+            new_cols.append(ColumnDef(cdef.name, TYPE_STR, cdef.nullable))
+        else:
+            new_cols.append(cdef.copy())
+        c_i = c_i + 1
+    if not replace_existing:
+        new_cols.append(ColumnDef(target_name, TYPE_STR, True))
+
+    new_rows: list[list[Cell]] = []
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+    while r_idx < num_rows:
+        old_r: list[Cell] = t.rows[r_idx]
+        src_cell: Cell = old_r[col_idx]
+        fmt_cell: Cell = cell_null()
+        if not src_cell.is_missing():
+            fmt_cell = cell_str(datetime_format_iso(zone, src_cell))
+
+        new_r: list[Cell] = []
+        j: int = 0
+        while j < num_cols:
+            if replace_existing and j == col_idx:
+                new_r.append(fmt_cell)
+            else:
+                new_r.append(old_r[j])
+            j = j + 1
+        if not replace_existing:
+            new_r.append(fmt_cell)
+        new_rows.append(new_r)
+        r_idx = r_idx + 1
+
+    return Table(Schema(new_cols), new_rows)

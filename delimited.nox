@@ -1,5 +1,6 @@
 # delimited.nox — RFC 4180 compliant custom delimiter parser and serializer for Atlas.
 
+import nox.strings
 import errors
 from errors import CsvImportError, ShapeError, MissingValueError
 import values
@@ -30,20 +31,32 @@ class CsvOptions:
 def csv_options(delimiter: str = ",", has_header: bool = True, blank_is_missing: bool = True, strict: bool = False, safe_spreadsheet: bool = False, max_record_bytes: int = 10485760) -> CsvOptions:
     return CsvOptions(delimiter, has_header, blank_is_missing, strict, safe_spreadsheet, max_record_bytes)
 
+def _finalize_delimited_field(parts: list[str], text: str, seg_start: int, seg_end: int) -> str:
+    if len(parts) == 0:
+        if seg_start >= 0 and seg_end > seg_start:
+            return text[seg_start:seg_end]
+        return ""
+    if seg_start >= 0 and seg_end > seg_start:
+        parts.append(text[seg_start:seg_end])
+    return nox.strings.join(parts, "")
+
 def parse_delimited(text: str, delimiter: str = ",", strict: bool = False) -> list[list[str]]:
     rows: list[list[str]] = []
     if len(text) == 0:
         return rows
 
+    delim_len: int = len(delimiter)
+    if delim_len == 0:
+        raise CsvImportError("delimiter cannot be empty")
+
     cur_row: list[str] = []
-    cur_field: str = ""
+    parts: list[str] = []
+    seg_start: int = -1
     in_quotes: bool = False
     after_quote: bool = False
     i: int = 0
     n: int = len(text)
-    delim_len: int = len(delimiter)
-    if delim_len == 0:
-        raise CsvImportError("delimiter cannot be empty")
+    delim_first: str = delimiter[0]
 
     while i < n:
         ch: str = text[i]
@@ -51,38 +64,50 @@ def parse_delimited(text: str, delimiter: str = ",", strict: bool = False) -> li
         if in_quotes:
             if ch == "\"":
                 if i + 1 < n and text[i + 1] == "\"":
-                    cur_field = cur_field + "\""
+                    if seg_start >= 0 and i > seg_start:
+                        parts.append(text[seg_start:i])
+                    parts.append("\"")
                     i = i + 2
+                    seg_start = i
                 else:
+                    if seg_start >= 0 and i > seg_start:
+                        parts.append(text[seg_start:i])
+                    seg_start = -1
                     in_quotes = False
                     after_quote = True
                     i = i + 1
             else:
-                cur_field = cur_field + ch
+                if seg_start < 0:
+                    seg_start = i
                 i = i + 1
         elif after_quote:
             if delim_len == 1 and ch == delimiter:
-                cur_row.append(cur_field)
-                cur_field = ""
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 after_quote = False
                 i = i + 1
-            elif delim_len > 1 and i + delim_len <= n and text[i:i + delim_len] == delimiter:
-                cur_row.append(cur_field)
-                cur_field = ""
+            elif delim_len > 1 and ch == delim_first and i + delim_len <= n and text[i:i + delim_len] == delimiter:
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 after_quote = False
                 i = i + delim_len
             elif ch == "\r":
-                if i + 1 < n and text[i + 1] == "\n":
-                    i = i + 1
-                cur_row.append(cur_field)
-                cur_field = ""
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 rows.append(cur_row)
                 cur_row = []
                 after_quote = False
-                i = i + 1
+                if i + 1 < n and text[i + 1] == "\n":
+                    i = i + 2
+                else:
+                    i = i + 1
             elif ch == "\n":
-                cur_row.append(cur_field)
-                cur_field = ""
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 rows.append(cur_row)
                 cur_row = []
                 after_quote = False
@@ -90,111 +115,94 @@ def parse_delimited(text: str, delimiter: str = ",", strict: bool = False) -> li
             else:
                 if strict:
                     raise CsvImportError("unexpected character after closing quote in strict mode: '" + ch + "'")
-                cur_field = cur_field + ch
+                seg_start = i
                 after_quote = False
                 i = i + 1
         else:
             if ch == "\"":
-                if len(cur_field) == 0:
+                has_content: bool = len(parts) > 0 or (seg_start >= 0 and i > seg_start)
+                if not has_content:
                     in_quotes = True
                     i = i + 1
+                    seg_start = i
                 else:
                     if strict:
                         raise CsvImportError("unescaped quote in unquoted field in strict mode")
-                    cur_field = cur_field + "\""
+                    if seg_start >= 0 and i > seg_start:
+                        parts.append(text[seg_start:i])
+                    parts.append("\"")
+                    seg_start = -1
                     i = i + 1
             elif delim_len == 1 and ch == delimiter:
-                cur_row.append(cur_field)
-                cur_field = ""
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 i = i + 1
-            elif delim_len > 1 and i + delim_len <= n and text[i:i + delim_len] == delimiter:
-                cur_row.append(cur_field)
-                cur_field = ""
+            elif delim_len > 1 and ch == delim_first and i + delim_len <= n and text[i:i + delim_len] == delimiter:
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 i = i + delim_len
             elif ch == "\r":
-                if i + 1 < n and text[i + 1] == "\n":
-                    i = i + 1
-                cur_row.append(cur_field)
-                cur_field = ""
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 rows.append(cur_row)
                 cur_row = []
-                i = i + 1
+                if i + 1 < n and text[i + 1] == "\n":
+                    i = i + 2
+                else:
+                    i = i + 1
             elif ch == "\n":
-                cur_row.append(cur_field)
-                cur_field = ""
+                cur_row.append(_finalize_delimited_field(parts, text, seg_start, i))
+                parts = []
+                seg_start = -1
                 rows.append(cur_row)
                 cur_row = []
                 i = i + 1
             else:
-                cur_field = cur_field + ch
+                if seg_start < 0:
+                    seg_start = i
                 i = i + 1
 
     if in_quotes:
         raise CsvImportError("unclosed quoted field in delimited text")
 
-    if len(cur_field) > 0 or len(cur_row) > 0 or after_quote:
-        cur_row.append(cur_field)
+    has_trailing: bool = len(parts) > 0 or (seg_start >= 0 and n > seg_start)
+    if has_trailing or len(cur_row) > 0 or after_quote:
+        cur_row.append(_finalize_delimited_field(parts, text, seg_start, n))
         rows.append(cur_row)
 
     return rows
 
 def dump_delimited(rows: list[list[str]], delimiter: str = ",") -> str:
-    res: str = ""
-    r_idx: int = 0
     num_rows: int = len(rows)
+    if num_rows == 0:
+        return ""
     delim_len: int = len(delimiter)
+    if delim_len == 0:
+        raise CsvImportError("delimiter cannot be empty")
+    delim_first: str = delimiter[0]
+    lines: list[str] = []
+    r_idx: int = 0
     while r_idx < num_rows:
         row: list[str] = rows[r_idx]
-        line: str = ""
-        c_idx: int = 0
         num_cols: int = len(row)
+        escaped_row: list[str] = []
+        c_idx: int = 0
         while c_idx < num_cols:
             field: str = row[c_idx]
-            needs_quotes: bool = False
-            k: int = 0
-            flen: int = len(field)
-            while k < flen:
-                c: str = field[k]
-                if c == "\"" or c == "\n" or c == "\r":
-                    needs_quotes = True
-                k = k + 1
-
-            if delim_len == 1:
-                k = 0
-                while k < flen:
-                    if field[k] == delimiter:
-                        needs_quotes = True
-                    k = k + 1
-            else:
-                if flen >= delim_len:
-                    pos: int = 0
-                    while pos + delim_len <= flen and not needs_quotes:
-                        if field[pos:pos + delim_len] == delimiter:
-                            needs_quotes = True
-                        pos = pos + 1
-
+            needs_quotes: bool = nox.strings.contains(field, "\"") or nox.strings.contains(field, "\n") or nox.strings.contains(field, "\r") or nox.strings.contains(field, delimiter)
+            if not needs_quotes and delim_len > 1:
+                needs_quotes = nox.strings.contains(field, delim_first)
             if needs_quotes:
-                escaped: str = "\""
-                k = 0
-                while k < flen:
-                    c = field[k]
-                    if c == "\"":
-                        escaped = escaped + "\"\""
-                    else:
-                        escaped = escaped + c
-                    k = k + 1
-                escaped = escaped + "\""
-                line = line + escaped
+                escaped_row.append("\"" + nox.strings.replace(field, "\"", "\"\"") + "\"")
             else:
-                line = line + field
-
-            if c_idx < num_cols - 1:
-                line = line + delimiter
+                escaped_row.append(field)
             c_idx = c_idx + 1
-
-        res = res + line + "\n"
+        lines.append(nox.strings.join(escaped_row, delimiter))
         r_idx = r_idx + 1
-    return res
+    return nox.strings.join(lines, "\n") + "\n"
 
 def read_delimited(text: str, delimiter: str = ",", has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, strict: bool = False) -> Table:
     raw_rows: list[list[str]] = parse_delimited(text, delimiter, strict)

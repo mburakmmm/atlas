@@ -3,15 +3,17 @@
 import errors
 from errors import ColumnNotFoundError, AggregationError
 import values
-from values import Cell, cell_int, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+from values import Cell, cell_int, cell_float, cell_null, cell_decimal, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL
 import schema
 from schema import Schema, ColumnDef
 import table
 from table import Table
 import stats
-from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_min, stat_max, stat_count, stat_count_non_missing
+from stats import stat_mean, stat_median, stat_variance, stat_std, stat_sum, stat_sum_int, stat_sum_decimal, stat_mean_decimal, stat_min, stat_max, stat_count, stat_count_non_missing
 import key_encoding
 from key_encoding import cell_hash_key, composite_hash_key
+import parallel_exec
+from parallel_exec import compute_agg_slice, parallel_compute_agg_rows
 
 AGG_COUNT: int = 1
 AGG_SUM: int = 2
@@ -103,12 +105,12 @@ class GroupedTable:
     def group_count(self: GroupedTable) -> int:
         return len(self.group_keys)
 
-    def agg(self: GroupedTable, aggregate_def: AggregateDef) -> Table:
+    def agg(self: GroupedTable, aggregate_def: AggregateDef, parallel: bool = False) -> Table:
         aggs: list[AggregateDef] = []
         aggs.append(aggregate_def)
-        return self.aggregate(aggs)
+        return self.aggregate(aggs, parallel)
 
-    def aggregate(self: GroupedTable, aggs: list[AggregateDef]) -> Table:
+    def aggregate(self: GroupedTable, aggs: list[AggregateDef], parallel: bool = False) -> Table:
 
         out_cols: list[ColumnDef] = []
         # 1. Add key columns from source schema
@@ -119,89 +121,74 @@ class GroupedTable:
             out_cols.append(source_col.copy())
             k_idx = k_idx + 1
 
-        # 2. Add aggregation output columns
+        # 2. Add aggregation output columns and pre-resolve metadata
+        agg_types: list[int] = []
+        target_indices: list[int] = []
+        target_types: list[int] = []
+        is_samples: list[bool] = []
         agg_idx: int = 0
         num_aggs: int = len(aggs)
         while agg_idx < num_aggs:
             ad: AggregateDef = aggs[agg_idx]
             out_type: int = TYPE_FLOAT
-            if ad.agg_type == AGG_COUNT or ad.agg_type == AGG_COUNT_NON_MISSING:
+            t_idx: int = -1
+            t_type: int = TYPE_FLOAT
+            if ad.agg_type == AGG_COUNT:
+                out_type = TYPE_INT
+            elif ad.agg_type == AGG_COUNT_NON_MISSING:
+                t_idx = self.source.schema.index_of(ad.target_col)
+                if t_idx < 0:
+                    raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                t_type = self.source.schema.columns[t_idx].data_type
                 out_type = TYPE_INT
             elif ad.agg_type == AGG_MIN or ad.agg_type == AGG_MAX:
                 target_col_def: ColumnDef | None = self.source.schema.get_column_by_name(ad.target_col)
                 if target_col_def is None:
                     raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                t_idx = self.source.schema.index_of(ad.target_col)
+                t_type = target_col_def.data_type
                 out_type = target_col_def.data_type
             elif ad.agg_type == AGG_SUM:
                 target_col_def_s: ColumnDef | None = self.source.schema.get_column_by_name(ad.target_col)
                 if target_col_def_s is None:
                     raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                t_idx = self.source.schema.index_of(ad.target_col)
+                t_type = target_col_def_s.data_type
                 if target_col_def_s.data_type == TYPE_INT:
                     out_type = TYPE_INT
+                elif target_col_def_s.data_type == TYPE_DECIMAL:
+                    out_type = TYPE_DECIMAL
+            elif ad.agg_type == AGG_MEAN:
+                target_col_def_m: ColumnDef | None = self.source.schema.get_column_by_name(ad.target_col)
+                if target_col_def_m is None:
+                    raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                t_idx = self.source.schema.index_of(ad.target_col)
+                t_type = target_col_def_m.data_type
+                if target_col_def_m.data_type == TYPE_DECIMAL:
+                    out_type = TYPE_DECIMAL
+            else:
+                target_col_def_o: ColumnDef | None = self.source.schema.get_column_by_name(ad.target_col)
+                if target_col_def_o is None:
+                    raise ColumnNotFoundError("aggregate target column not found: '" + ad.target_col + "'")
+                t_idx = self.source.schema.index_of(ad.target_col)
+                t_type = target_col_def_o.data_type
+
+            agg_types.append(ad.agg_type)
+            target_indices.append(t_idx)
+            target_types.append(t_type)
+            is_samples.append(ad.is_sample)
             out_cols.append(ColumnDef(ad.output_col, out_type, True))
             agg_idx = agg_idx + 1
 
         out_schema: Schema = Schema(out_cols)
-
-        # 3. Compute rows for each group
-        out_rows: list[list[Cell]] = []
-        g_idx: int = 0
         num_groups: int = len(self.group_keys)
-        while g_idx < num_groups:
-            k_cells: list[Cell] = self.group_keys[g_idx]
-            g_row_list: list[list[Cell]] = self.group_rows[g_idx]
-            new_r: list[Cell] = []
 
-            # Append key cells
-            ki: int = 0
-            while ki < num_keys:
-                new_r.append(k_cells[ki])
-                ki = ki + 1
-
-            # Compute each aggregation
-            ai: int = 0
-            while ai < num_aggs:
-                ad_cur: AggregateDef = aggs[ai]
-                if ad_cur.agg_type == AGG_COUNT:
-                    new_r.append(cell_int(len(g_row_list)))
-                else:
-                    target_idx: int = self.source.schema.index_of(ad_cur.target_col)
-                    if target_idx < 0:
-                        raise ColumnNotFoundError("aggregate target column not found: '" + ad_cur.target_col + "'")
-                    # Gather cells for target column
-                    target_cells: list[Cell] = []
-                    ri: int = 0
-                    num_g_rows: int = len(g_row_list)
-                    while ri < num_g_rows:
-                        target_cells.append(g_row_list[ri][target_idx])
-                        ri = ri + 1
-
-                    if ad_cur.agg_type == AGG_COUNT_NON_MISSING:
-                        new_r.append(cell_int(stat_count_non_missing(target_cells)))
-                    elif ad_cur.agg_type == AGG_SUM:
-                        t_def_s: ColumnDef | None = self.source.schema.get_column_by_name(ad_cur.target_col)
-                        if t_def_s is not None and t_def_s.data_type == TYPE_INT:
-                            new_r.append(cell_int(stat_sum_int(target_cells, "groupby.agg_sum")))
-                        else:
-                            new_r.append(cell_float(stat_sum(target_cells)))
-                    elif ad_cur.agg_type == AGG_MEAN:
-                        new_r.append(cell_float(stat_mean(target_cells)))
-                    elif ad_cur.agg_type == AGG_MEDIAN:
-                        new_r.append(cell_float(stat_median(target_cells)))
-                    elif ad_cur.agg_type == AGG_STD:
-                        new_r.append(cell_float(stat_std(target_cells, ad_cur.is_sample)))
-                    elif ad_cur.agg_type == AGG_VARIANCE:
-                        new_r.append(cell_float(stat_variance(target_cells, ad_cur.is_sample)))
-                    elif ad_cur.agg_type == AGG_MIN:
-                        new_r.append(stat_min(target_cells))
-                    elif ad_cur.agg_type == AGG_MAX:
-                        new_r.append(stat_max(target_cells))
-                    else:
-                        raise AggregationError("unknown aggregation type: " + str(ad_cur.agg_type))
-                ai = ai + 1
-
-            out_rows.append(new_r)
-            g_idx = g_idx + 1
+        # 3. Compute rows for each group (parallel or sequential)
+        out_rows: list[list[Cell]] = []
+        if parallel:
+            out_rows = parallel_compute_agg_rows(self.group_keys, self.group_rows, agg_types, target_indices, target_types, is_samples)
+        else:
+            out_rows = compute_agg_slice(self.group_keys, self.group_rows, agg_types, target_indices, target_types, is_samples, 0, num_groups)
 
         return Table(out_schema, out_rows)
 

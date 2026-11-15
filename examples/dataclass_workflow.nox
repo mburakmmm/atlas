@@ -1,0 +1,50 @@
+# examples/dataclass_workflow.nox — Demonstrates @dataclass @derive("json", "order", "copy")
+# row-level interop with Atlas Table and opt-in atlas_fast desktop accelerators.
+
+import nox.json
+import atlas
+from atlas import Table, Schema, ColumnDef, TYPE_INT, TYPE_STR, TYPE_FLOAT, col_eq_str, table_from_json_rows, table_to_json_rows
+import atlas_fast
+from atlas_fast import table_from_json5, dedup_table_fast, filter_pcre2, PCRE2_IGNORECASE
+
+@dataclass
+@derive("json", "order", "copy")
+class OrderRecord:
+    order_id: int
+    sku: str
+    region: str
+    total: float
+
+def run_demo() -> None:
+    o1: OrderRecord = OrderRecord(101, "SKU-PRO-01", "EMEA", 450.0)
+    o2: OrderRecord = OrderRecord(102, "SKU-STD-02", "AMER", 190.0)
+    o3: OrderRecord = OrderRecord(103, "SKU-PRO-09", "EMEA", 820.0)
+
+    s: Schema = Schema([
+        ColumnDef("order_id", TYPE_INT, False),
+        ColumnDef("sku", TYPE_STR, False),
+        ColumnDef("region", TYPE_STR, False),
+        ColumnDef("total", TYPE_FLOAT, False)
+    ])
+
+    raw_rows: list[str] = [o1.to_json(), o2.to_json(), o3.to_json(), o1.copy().to_json()]
+    t: Table = table_from_json_rows(raw_rows, s)
+    deduped: Table = dedup_table_fast(t, ["order_id"])
+    emea_pro: Table = filter_pcre2(
+        deduped.filter(col_eq_str("region", "EMEA")),
+        "sku",
+        "^sku-pro-\\d+$",
+        PCRE2_IGNORECASE,
+        True,
+        True
+    ).sort_by(["total"], False)
+
+    out_rows: list[str] = table_to_json_rows(emea_pro)
+    top_order: OrderRecord = OrderRecord.from_json(out_rows[0])
+    print("Top EMEA PRO order: id=" + str(top_order.order_id) + " sku=" + top_order.sku + " total=" + str(top_order.total))
+
+    json5_cfg: str = "[{region: 'EMEA', quota: 1000.0,}, {region: 'AMER', quota: 800.0,}]"
+    quota_t: Table = table_from_json5(json5_cfg)
+    print("Loaded JSON5 quota rows: " + str(quota_t.row_count()))
+
+run_demo()

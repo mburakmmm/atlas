@@ -1,30 +1,41 @@
 # Nox Standard Library Capabilities & Verification Audit
 
-Audit performed against `noxc 2.0.86` on macOS (darwin).
+Audit performed against `noxc 2.1.186` on macOS (darwin) (previously audited against `noxc 2.0.86`).
 
 ## 1. Verified Stdlib Primitives
 
 ### `nox.csv`
-- `parse(text: str) -> list[list[str]]`: RFC 4180 parsing supporting commas, quotes, escaped quotes (`""`), and CRLF/LF line endings. Operates strictly in-memory on strings.
+- `parse(text: str) -> list[list[str]]`: Zig-backed RFC 4180 parsing (`runtime/stdlib_shims/csv.zig`, ~4x speedup over early Nox implementation) supporting commas, quotes, escaped quotes (`""`), and CRLF/LF line endings. Operates strictly in-memory on strings.
 - `dump(rows: list[list[str]]) -> str`: Generates standard CSV text with quotes applied where required.
-- **Limitation**: Custom delimiters (semicolon, tab) and streaming file reads are out of scope for stdlib. Atlas respects this by providing UTF-8 in-memory text parsing.
+- **Limitation**: Custom delimiters (semicolon, tab) and streaming file reads remain out of scope for stdlib. Atlas provides `delimited.nox` (slice-based `parse_delimited` and `nox.strings.join`-accelerated `dump_delimited`, including multi-char delimiter boundary quoting) and `streaming.nox` (`StreamingCsvReader`).
 
 ### `nox.json`
-- `parse(text: str) -> JsonValue`: Full recursive JSON parsing.
+- `parse(text: str) -> JsonValue`: Single-pass lazy tape-backed JSON parser (Zig runtime).
+- Precision & Key Lookup (`2.1.7+`): `as_int`, `number_text`, `get`, `get_or_null` preserve full 64-bit signed integer precision above $2^{53}$ and perform native tape key searches without materializing all sibling keys.
 - Accessors: `is_null`, `is_bool`, `is_number`, `is_string`, `is_array`, `is_object`, `as_bool`, `as_number`, `as_string`, `array_len`, `array_get`, `object_len`, `object_key`, `object_value`.
-- `JsonWriter`: Incremental memory-buffered JSON construction with $O(N)$ concatenation via `nox.strings.join`.
+- `JsonWriter`: Incremental memory-buffered JSON construction with $O(N)$ concatenation and `write_int` for lossless 64-bit integer serialization.
 
 ### `nox.mathx`
 - Pure math functions: `sqrt`, `pow`, `floor`, `ceil`, `min`, `max`, `abs`. Fully qualified calls (`nox.mathx.sqrt`).
 
-### `nox.fs`
-- `read_to_string(path: str) -> str`: Reads entire file into memory.
-- `write_string(path: str, content: str) -> None`: Overwrites destination.
-- `exists(path: str) -> bool`: Checks path existence.
-- **Limitation**: `nox.fs` does not perform path sandboxing. Atlas checks `exists` before writing unless `overwrite=True` is explicitly passed.
+### `nox.fs` & `nox.path`
+- `read_to_string(path: str) -> str`: Single-copy file read into memory.
+- `open_read(path)` + `read_chunk(bytes)`: Chunked OS file streaming (`StreamingCsvReader`).
+- `write_string(path: str, content: str) -> None`: Direct overwrite destination.
+- `write_string_atomic(path: str, content: str) -> None`: Writes to temporary sibling `.nox-tmp` file and atomically renames over destination.
+- `nox.path.safe_join(root: str, requested: str) -> str`: Path-component confinement rejecting `..`, symlinks, and absolute escapes outside `root` (`PathError`). Atlas exposes `resolve_safe_path`, `*_file_safe`, and `open_csv_stream_safe`.
 
-### `nox.test`
-- Assertion framework: `assert_eq_int`, `assert_eq_str`, `assert_eq_float`, `assert_true`.
+### `nox.strings` & `nox.regex`
+- `nox.strings`: Zig-accelerated `split`, `trim`, `upper`, `lower`, `replace`, `join` ($O(N)$), `index_of`, `starts_with`, `ends_with`, `eq_ignore_case`, and allocation-free `byte_at` / `byte_len`.
+- `nox.regex`: Portable Zig backtracking regex VM supporting `search`, `match`, `full_match`, `find_all`, `replace`, named groups, lookahead (`col_regex_match`, `rule_regex`).
+
+### `nox.test` & `nox.property`
+- `nox.test`: Assertion framework (`assert_eq_int`, `assert_eq_str`, `assert_eq_float`, `assert_true`).
+- `nox.property`: Seeded Park–Miller PRNG (`Rng`) with automatic size shrinking and reproducible `replay(...)` diagnostics (`tests/property_test.nox`).
+
+### Target Portability Note (`noxclibs` Separation)
+- Nox `2.1.172+` ships optional desktop-only C-backed modules (`nox.yyjson`, `nox.xxhash`, `nox.pcre2`, `nox.lz4`, `nox.brotli`, `nox.zstd.compress`) which are rejected at compile time on mobile, WASM, and freestanding targets.
+- Atlas keeps its core `atlas.nox` facade 100% pure/portable (all 41 core test suites compile on QBE and LLVM). Desktop-only turbo bindings are planned separately under an opt-in `atlas_fast` adapter (v0.11.0).
 
 ## 2. Language Primitives Verified
 
@@ -189,3 +200,46 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
   - Low Cardinality: 10 groups on 100,000 rows (10,000 rows/group).
   - High Cardinality: 50,000 unique groups across 100,000 rows in ~36 ms.
   - Heavily Skewed Zipfian Distribution: 80,000-row dominant group with 1,000 tail groups on 100,000 rows in ~25 ms without hash collision degradation.
+
+---
+
+## 14. Exact Decimal (`TYPE_DECIMAL`) & DateTime/Timezone (`TYPE_DATETIME`) Columns (v0.10.0)
+
+- **`TYPE_DECIMAL = 5` (`nox.decimal.Decimal`)**:
+  - Arbitrary-precision base-10 decimal cells preventing binary floating-point rounding drift (`0.10 + 0.20 == 0.30`) and preserving integers and decimals beyond $2^{53}$ across CSV and JSON (`nox.json.number_text`) round-trips under explicit `TYPE_DECIMAL` schemas.
+  - Canonical hash-key normalization (`key_encoding.nox`): integer-valued (`10.00`) and dyadic float-valued (`2.50`) decimals produce identical composite hash keys to `cell_int(10)` and `cell_float(2.5)`, while high-precision decimals use exact normalized `D:<str>` keys.
+  - Full support across `Table.sum_decimal`, `Table.mean_decimal`, `GroupBy` (`agg_sum`/`agg_mean` returning `TYPE_DECIMAL`), `StreamingGroupedTable`, `StreamingCsvReader.sum_decimal`, `WindowContext.with_cumulative_sum` / `with_moving_average`, `pivot_table`, `melt`, and `sql_adapter` (`NUMERIC` / `DECIMAL(38, 10)`).
+- **`TYPE_DATETIME = 6` / `TYPE_DATE = 6` (`nox.time.DateTime`, `nox.timezone`)**:
+  - Stores UTC epoch milliseconds (`int64`) with strict ISO-8601 date (`YYYY-MM-DD`) and timestamp (`YYYY-MM-DD[T ]HH:MM:SS[.mmm][Z|±HH:MM]`) parsing and Hinnant calendar round-trip validation (rejecting invalid calendar dates like `2025-02-29` or `2025-04-31` with `TypeConversionError`).
+  - `temporal.nox`: Universal `"UTC"` formatting and offset support across all platforms, plus IANA timezone conversions (`Europe/Istanbul`, `America/New_York`, etc.) gated cleanly via `nox.timezone.is_supported()`.
+
+---
+
+## 15. Portable Compressed Archives (`archive.nox`) & Shared-Nothing Parallel Execution (`parallel_exec.nox`) (v0.10.0)
+
+- **Portable Compressed & Archive Formats (`archive.nox`)**:
+  - Uses only portable Zig/Nox stdlib modules (`nox.gzip`, `nox.zstd.decompress`, `nox.zip`, `nox.tar`, `nox.bytes`) without linking desktop-only `noxclibs`.
+  - Supports `.csv.gz`, `.json.gz`, `.delim.gz` read/write (including `safe_join` + atomic write variants), `.csv.zst` and `.json.zst` decompression, and multi-table `.zip` and `.tar.gz` bundles (using binary-safe `compress_gzip_bytes`/`decompress_gzip_bytes` for NUL-padded tar blocks and strict entry path-traversal guards).
+- **Shared-Nothing Parallel Execution (`parallel_exec.nox`, `io.nox`)**:
+  - Empirical audit on `noxc 2.1.186` showed that sharing ARC-managed heap objects (`Schema`, `list`, `Cell`, `Expr`) across concurrent `nox.thread.pool_run` worker threads causes non-atomic reference-count races, and `nox.csv.parse` shares a non-reentrant global row-length buffer (`nox_csv_row_lens_raw`).
+  - Atlas solves both by constructing disjoint, per-worker deep-cloned packets (`_FilterSlicePacket`, `_AggSlicePacket`, `_SortPartSlicePacket`, `_ReadCsvPacket`) prior to spawning tasks and using Atlas's pure re-entrant `read_delimited` inside `read_csv_files_parallel`, guaranteeing bit-identical output and zero data races across both `--backend llvm` and `--backend qbe`.
+
+---
+
+## 16. Typed Enums, $O(1)$ Schema Lookup, `@dataclass` Interop, & `atlas_fast.nox` (v0.11.0 & v1.0.0)
+
+- **`enum CellKind` & `enum ExprOp` with Exhaustive `match / case`**:
+  - `values.nox` defines `enum CellKind` (`Null`, `Int`, `Float`, `Str`, `Bool`, `Decimal`, `DateTime`) and exhaustive `match/case` helpers (`cell_kind_from_int`, `cell_kind_to_int`, `cell_kind_name`, `Cell.cell_kind()`, `Cell.type_name()`).
+  - `expr.nox` defines `enum ExprOp` (`Eq` .. `EqCi`) and exhaustive `match/case` helpers (`expr_op_from_int`, `expr_op_to_int`, `expr_op_name`, `Expr.expr_op()`, `Expr.op_name()`), while keeping integer `TYPE_*` and `OP_*` constants 100% backward-compatible.
+- **$O(1)$ Schema Column Resolution & `Set[str]` Column Drop (`schema.nox`)**:
+  - `Schema` maintains `col_index_map: dict[str, int]` populated during construction, upgrading duplicate column checks, `has_column`, and `index_of` from $O(C)$ linear scans to $O(1)$ hash lookups.
+  - `Schema.drop_columns` uses `nox.collections.Set[str]` for $O(1)$ membership checks on wide tables.
+- **`@dataclass` + `@derive("json", "order", "copy")` Row Interop (`json_adapter.nox`)**:
+  - `table_to_json_rows(t)` and `table_from_json_rows(json_objects, explicit_schema)` allow zero-boilerplate conversion between `@dataclass @derive("json", "order", "copy")` records and `Table` rows.
+  - Note: `@derive("order")` in `noxc 2.1.186` requires fields to be numeric (`int`, `float`) or `str` (boolean fields are not order-comparable in `<`).
+- **Opt-In Desktop Turbo Module (`atlas_fast.nox`)**:
+  - Kept strictly separate from portable `atlas.nox` so core `atlas.nox` never links `noxclibs.a`.
+  - Wraps `nox.yyjson` (strict, relaxed with comments/trailing commas, and JSON5 with unquoted keys/single quotes, preserving 64-bit integers and `TYPE_DECIMAL`/`TYPE_DATETIME`), `nox.xxhash` (`cell_xxh3_64`, `row_xxh3_64`, `row_xxh3_128_hex`, collision-safe `dedup_table_fast` / `dedup_all_fast`), `nox.pcre2` (`compile_pcre2`, `filter_pcre2`, `filter_pcre2_compiled`, `replace_pcre2` with JIT support), `nox.lz4` (`.csv.lz4`, `.json.lz4`), `nox.zstd.compress` (`.csv.zst`, `.json.zst` interoperable with portable `atlas.read_csv_zst`), and `nox.brotli` (`.csv.br`, `.json.br` decompression).
+- **Verified `noxc 2.1.186` CLI Subcommands**:
+  - Verified subcommands: `build`, `run`, `test`, `check`, `expand`, `bindgen`, `explain`, `fmt`, `init`, `fetch`, `update`, `search`, `add`, `delete`, `publish`, `login`, `logout`, `whoami`, `upgrade`, `install`, `uninstall`, `list`, `refresh`, `cache prune`, `version`.
+  - Note: `noxc sbom` and `noxc sign` are not subcommands in `noxc 2.1.186` (`unknown command or file`); per `AGENTS.md` Principle 9 ("Honest compatibility"), release automation uses verified `noxc check`, `noxc test`, and tag-version validation in `.github/workflows/release.yml`.

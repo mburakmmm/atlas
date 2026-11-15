@@ -1,0 +1,113 @@
+# tests/datetime_timezone_test.nox — Tests for TYPE_DATETIME / TYPE_DATE and cross-platform Timezone support.
+
+import nox.test
+import nox.time
+from nox.time import DateTime
+import errors
+from errors import TypeConversionError
+import values
+from values import Cell, cell_null, cell_str, cell_date, cell_datetime, cell_datetime_ms, cell_datetime_str, TYPE_INT, TYPE_STR, TYPE_DATETIME
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import expr
+from expr import col_between_datetime, col_gt_datetime, col_eq_datetime
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+import json_adapter
+from json_adapter import table_from_json, table_to_json
+import groupby
+from groupby import group_by, agg_count
+import temporal
+from temporal import timezone_is_supported, datetime_utc_offset, datetime_to_local, datetime_from_local, datetime_format_iso, table_parse_datetime, table_format_datetime_iso
+import sql_adapter
+from sql_adapter import table_to_create_table_sql
+
+# 1. Parsing ISO dates, datetimes, fractional milliseconds, and timezone offsets
+c_date: Cell = cell_date(2026, 3, 15)
+nox.test.assert_eq_int(c_date.kind, TYPE_DATETIME, "cell_date kind")
+nox.test.assert_eq_str(c_date.to_string(), "2026-03-15 00:00:00", "cell_date to_string")
+
+c_iso_z: Cell = cell_datetime_str("2026-03-15T14:30:45Z")
+nox.test.assert_eq_str(c_iso_z.to_string(), "2026-03-15 14:30:45", "ISO Z to_string")
+
+# +03:00 converts back to 11:30:45 UTC + 250ms!
+c_iso_off: Cell = cell_datetime_str("2026-03-15T14:30:45.250+03:00")
+nox.test.assert_eq_str(c_iso_off.to_string(), "2026-03-15 11:30:45.250", "ISO +03:00 offset")
+
+# 2. Invalid calendar date/time components raise TypeConversionError
+inv_dates: list[str] = ["2025-02-29", "2025-04-31", "2025-13-01", "2025-01-01 24:00:00", "2025/01/01", "bad"]
+di: int = 0
+while di < len(inv_dates):
+    caught: bool = False
+    try:
+        _inv: Cell = cell_datetime_str(inv_dates[di])
+    except TypeConversionError:
+        caught = True
+    nox.test.assert_true(caught, "invalid date rejected: " + inv_dates[di])
+    di = di + 1
+
+# 3. Table operations: sort, min/max, filter between, GroupBy
+s_ev: Schema = Schema([
+    ColumnDef("event", TYPE_STR, False),
+    ColumnDef("ts", TYPE_DATETIME, True)
+])
+t_ev: Table = Table(s_ev, [
+    [cell_str("deploy"), cell_datetime_str("2026-03-15 12:00:00")],
+    [cell_str("build"), cell_datetime_str("2026-03-15 10:00:00")],
+    [cell_str("alert"), cell_null()],
+    [cell_str("boot"), cell_datetime_str("2026-03-15 10:00:00")]
+])
+
+t_sorted: Table = t_ev.sort_by(["ts"], True, False)
+nox.test.assert_eq_str(t_sorted.row(0)[0].as_str(), "build", "stable datetime sort first")
+nox.test.assert_eq_str(t_sorted.row(2)[0].as_str(), "deploy", "datetime sort last non-null")
+nox.test.assert_true(t_sorted.row(3)[1].is_missing(), "datetime sort missing last")
+
+nox.test.assert_eq_str(t_ev.min_val("ts").to_string(), "2026-03-15 10:00:00", "min_val ts")
+nox.test.assert_eq_str(t_ev.max_val("ts").to_string(), "2026-03-15 12:00:00", "max_val ts")
+
+t_win: Table = t_ev.filter(col_between_datetime("ts", "2026-03-15 09:00:00", "2026-03-15 11:00:00"))
+nox.test.assert_eq_int(t_win.row_count(), 2, "between datetime count")
+nox.test.assert_eq_int(t_ev.filter(col_eq_datetime("ts", "2026-03-15T12:00:00Z")).row_count(), 1, "eq datetime count")
+nox.test.assert_eq_int(t_ev.filter(col_gt_datetime("ts", "2026-03-15 10:00:00")).row_count(), 1, "gt datetime count")
+
+t_grp: Table = group_by(t_ev, ["ts"]).count("n")
+nox.test.assert_eq_int(t_grp.row_count(), 3, "groupby datetime count") # 10:00 (2), 12:00 (1), NULL (1)
+
+# 4. CSV & JSON round-trip with explicit TYPE_DATETIME schema
+csv_str: str = to_csv(t_ev)
+t_csv_rt: Table = read_csv(csv_str, True, s_ev)
+nox.test.assert_eq_int(t_csv_rt.row(0)[1].as_epoch_ms(), t_ev.row(0)[1].as_epoch_ms(), "CSV datetime roundtrip")
+
+json_str: str = table_to_json(t_ev)
+t_json_rt: Table = table_from_json(json_str, s_ev)
+nox.test.assert_eq_int(t_json_rt.row(1)[1].as_epoch_ms(), t_ev.row(1)[1].as_epoch_ms(), "JSON datetime roundtrip")
+
+# 5. Table string <-> DateTime conversions & UTC timezone formatting (universal)
+t_raw: Table = read_csv("id,dt\n1,2026-01-01 00:00:00\n2,2026-06-01 12:00:00\n")
+t_parsed: Table = table_parse_datetime(t_raw, "dt")
+c_dt: ColumnDef | None = t_parsed.schema.get_column_by_name("dt")
+nox.test.assert_true(c_dt != None, "parsed dt col exists")
+if c_dt != None:
+    nox.test.assert_eq_int(c_dt.data_type, TYPE_DATETIME, "table_parse_datetime TYPE_DATETIME")
+nox.test.assert_eq_str(datetime_format_iso("UTC", t_parsed.row(0)[1]), "2026-01-01T00:00:00+00:00", "datetime_format_iso UTC")
+nox.test.assert_eq_int(datetime_utc_offset("UTC", t_parsed.row(0)[1].as_epoch_ms()), 0, "UTC offset 0")
+
+t_fmt_utc: Table = table_format_datetime_iso(t_parsed, "dt", "UTC", "dt_iso")
+nox.test.assert_eq_str(t_fmt_utc.row(0)[2].as_str(), "2026-01-01T00:00:00+00:00", "table_format_datetime_iso UTC")
+
+# 6. Platform-gated IANA timezone checks (Unix/macOS/Linux; skipped on Windows/WASM if unsupported)
+if timezone_is_supported():
+    ist_iso: str = datetime_format_iso("Europe/Istanbul", t_parsed.row(0)[1])
+    nox.test.assert_eq_str(ist_iso, "2026-01-01T03:00:00+03:00", "Istanbul UTC+3 ISO")
+    local_dt: DateTime = datetime_to_local("Europe/Istanbul", t_parsed.row(0)[1])
+    nox.test.assert_eq_int(local_dt.hour, 3, "Istanbul local hour 3")
+    round_c: Cell = datetime_from_local("Europe/Istanbul", local_dt)
+    nox.test.assert_eq_int(round_c.as_epoch_ms(), t_parsed.row(0)[1].as_epoch_ms(), "Istanbul local->UTC roundtrip")
+
+sql_ddl: str = table_to_create_table_sql(t_ev, "events", "postgres")
+nox.test.assert_true("TIMESTAMP" in sql_ddl, "postgres TIMESTAMP in DDL")
+
+print("datetime_timezone_test passed")

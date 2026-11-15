@@ -29,3 +29,9 @@ class AggregationError(AtlasError):
 
 class SortError(AtlasError):
     pass
+
+class ResourceLimitError(AtlasError):
+    pass
+
+class UnsupportedFeatureError(AtlasError):
+    pass

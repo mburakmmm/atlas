@@ -1,0 +1,302 @@
+# tests/property_test.nox — Property-based tests using nox.property (with shrinking).
+
+import nox.property
+from nox.property import Rng, PropertyFailed
+import values
+from values import Cell, cell_int, cell_str, cell_null, cell_decimal_str, cell_datetime_ms, TYPE_INT, TYPE_STR, TYPE_DECIMAL, TYPE_DATETIME
+import csv_adapter
+from csv_adapter import read_csv, to_csv
+import archive
+from archive import compress_gzip_text, decompress_gzip_text
+import nox.decimal
+from nox.decimal import Decimal
+import schema
+from schema import Schema, ColumnDef
+import table
+from table import Table
+import delimited
+from delimited import parse_delimited, dump_delimited
+import json_adapter
+from json_adapter import table_from_json, table_to_json, table_from_json_rows, table_to_json_rows
+import groupby
+from groupby import group_by, agg_count, agg_sum
+import reshape
+from reshape import melt
+import window
+from window import WindowContext
+
+def _gen_tricky_cell(r: Rng) -> str:
+    n: int = r.int_range(0, 8)
+    tokens: list[str] = ["a", "b", " ", ",", "\"", "\n", "|", "x"]
+    out: str = ""
+    i: int = 0
+    while i < n:
+        out = out + r.choice_str(tokens)
+        i = i + 1
+    return out
+
+def prop_delimited_roundtrip(r: Rng) -> bool:
+    num_rows: int = r.int_range(1, 8)
+    num_cols: int = r.int_range(1, 5)
+    rows: list[list[str]] = []
+    ri: int = 0
+    while ri < num_rows:
+        row: list[str] = []
+        ci: int = 0
+        while ci < num_cols:
+            row.append(_gen_tricky_cell(r))
+            ci = ci + 1
+        rows.append(row)
+        ri = ri + 1
+
+    delim: str = r.choice_str([",", "\t", "||", ";"])
+    dumped: str = dump_delimited(rows, delim)
+    recovered: list[list[str]] = parse_delimited(dumped, delim, True)
+    if len(recovered) != len(rows):
+        return False
+    ri = 0
+    while ri < num_rows:
+        if len(recovered[ri]) != num_cols:
+            return False
+        ci = 0
+        while ci < num_cols:
+            if recovered[ri][ci] != rows[ri][ci]:
+                return False
+            ci = ci + 1
+        ri = ri + 1
+    return True
+
+def prop_json_int64_roundtrip(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("k", TYPE_STR, False), ColumnDef("v", TYPE_INT, True)])
+    num_rows: int = r.int_range(0, 12)
+    rows: list[list[Cell]] = []
+    # Shift some values past 2^53 (9007199254740992) to verify no float precision loss
+    offset: int = 9007199254740992
+    ri: int = 0
+    while ri < num_rows:
+        key: str = r.ascii_str(6)
+        vcell: Cell = cell_null()
+        if r.boolean():
+            vcell = cell_int(offset + r.int_range(-1000, 1000))
+        else:
+            if r.boolean():
+                vcell = cell_int(r.int_range(-500, 500))
+        rows.append([cell_str(key), vcell])
+        ri = ri + 1
+
+    t: Table = Table(s, rows)
+    json_s: str = table_to_json(t)
+    t2: Table = table_from_json(json_s, s)
+    if t2.row_count() != t.row_count():
+        return False
+    ri = 0
+    while ri < num_rows:
+        c1: Cell = t.cell(ri, 1)
+        c2: Cell = t2.cell(ri, 1)
+        if not c1.equals(c2):
+            return False
+        if t.cell(ri, 0).to_string() != t2.cell(ri, 0).to_string():
+            return False
+        ri = ri + 1
+    return True
+
+def prop_sort_stability_and_order(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("k", TYPE_INT, False), ColumnDef("seq", TYPE_INT, False)])
+    n: int = r.int_range(0, 20)
+    rows: list[list[Cell]] = []
+    i: int = 0
+    while i < n:
+        rows.append([cell_int(r.int_range(0, 4)), cell_int(i)])
+        i = i + 1
+    t: Table = Table(s, rows)
+    st: Table = t.sort_by(["k"], True)
+    if st.row_count() != n:
+        return False
+    i = 1
+    while i < n:
+        prev_k: int = st.cell(i - 1, 0).as_int()
+        cur_k: int = st.cell(i, 0).as_int()
+        if prev_k > cur_k:
+            return False
+        if prev_k == cur_k:
+            # Stable sort preserves original seq order
+            if st.cell(i - 1, 1).as_int() >= st.cell(i, 1).as_int():
+                return False
+        i = i + 1
+    return True
+
+def prop_groupby_conservation(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("grp", TYPE_STR, False), ColumnDef("val", TYPE_INT, False)])
+    n: int = r.int_range(1, 20)
+    rows: list[list[Cell]] = []
+    total_sum: int = 0
+    i: int = 0
+    while i < n:
+        g: str = r.choice_str(["A", "B", "C", "D"])
+        v: int = r.int_range(-50, 50)
+        total_sum = total_sum + v
+        rows.append([cell_str(g), cell_int(v)])
+        i = i + 1
+    t: Table = Table(s, rows)
+    res: Table = group_by(t, ["grp"]).aggregate([agg_count("cnt"), agg_sum("val", "s")])
+    sum_cnt: int = 0
+    sum_val: int = 0
+    gi: int = 0
+    while gi < res.row_count():
+        sum_cnt = sum_cnt + res.cell(gi, 1).as_int()
+        sum_val = sum_val + res.cell(gi, 2).as_int()
+        gi = gi + 1
+    return sum_cnt == n and sum_val == total_sum
+
+def prop_melt_and_window_invariants(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("id", TYPE_INT, False), ColumnDef("m1", TYPE_INT, False), ColumnDef("m2", TYPE_INT, False)])
+    n: int = r.int_range(1, 15)
+    rows: list[list[Cell]] = []
+    i: int = 0
+    while i < n:
+        rows.append([cell_int(i % 3), cell_int(r.int_range(1, 20)), cell_int(r.int_range(1, 20))])
+        i = i + 1
+    t: Table = Table(s, rows)
+    melted: Table = melt(t, ["id"], ["m1", "m2"])
+    if melted.row_count() != n * 2:
+        return False
+
+    win_res: Table = WindowContext(t, ["id"], ["m1"], True).with_row_number("rn").with_cumulative_sum("m1", "csum").to_table()
+    if win_res.row_count() != n:
+        return False
+    # Cumulative sum must be non-negative since all m1 >= 1
+    i = 0
+    while i < n:
+        if win_res.cell(i, 3).as_int() < 1:
+            return False
+        if win_res.cell(i, 4).as_int() < 1:
+            return False
+        i = i + 1
+    return True
+
+def prop_decimal_sum_order_invariance(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("idx", TYPE_INT, False), ColumnDef("amt", TYPE_DECIMAL, False)])
+    n: int = r.int_range(1, 16)
+    rows: list[list[Cell]] = []
+    expected_sum: Decimal = nox.decimal.from_int(0)
+    i: int = 0
+    while i < n:
+        whole: int = r.int_range(-5000, 5000)
+        frac: int = r.int_range(0, 99)
+        frac_str: str = str(frac)
+        if frac < 10:
+            frac_str = "0" + frac_str
+        num_str: str = str(whole) + "." + frac_str
+        if whole < 0 and whole > -1:
+            num_str = "-0." + frac_str
+        d_cell: Cell = cell_decimal_str(num_str)
+        expected_sum = expected_sum + d_cell.as_decimal()
+        rows.append([cell_int(i), d_cell])
+        i = i + 1
+    t: Table = Table(s, rows)
+    t_rev: Table = t.sort_by(["idx"], False, False)
+    s1: Decimal = t.sum_decimal("amt")
+    s2: Decimal = t_rev.sum_decimal("amt")
+    return s1.compare(expected_sum) == 0 and s2.compare(expected_sum) == 0
+
+def prop_datetime_monotonic_sort(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("ts", TYPE_DATETIME, True)])
+    n: int = r.int_range(0, 20)
+    rows: list[list[Cell]] = []
+    i: int = 0
+    while i < n:
+        if r.int_range(0, 4) == 0:
+            rows.append([cell_null()])
+        else:
+            ms: int = 1700000000000 + r.int_range(-500000000, 500000000)
+            rows.append([cell_datetime_ms(ms)])
+        i = i + 1
+    t: Table = Table(s, rows)
+    t_sorted: Table = t.sort_by(["ts"], True, False)
+    seen_missing: bool = False
+    prev_ms: int = -9223372036854775807 - 1
+    has_prev: bool = False
+    i = 0
+    while i < t_sorted.row_count():
+        c: Cell = t_sorted.cell(i, 0)
+        if c.is_missing():
+            seen_missing = True
+        else:
+            if seen_missing:
+                return False
+            cur_ms: int = c.as_epoch_ms()
+            if has_prev and cur_ms < prev_ms:
+                return False
+            prev_ms = cur_ms
+            has_prev = True
+        i = i + 1
+    return True
+
+def prop_gzip_csv_roundtrip(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("k", TYPE_STR, False), ColumnDef("v", TYPE_INT, False)])
+    n: int = r.int_range(0, 12)
+    rows: list[list[Cell]] = []
+    i: int = 0
+    while i < n:
+        rows.append([cell_str(_gen_tricky_cell(r)), cell_int(r.int_range(-10000, 10000))])
+        i = i + 1
+    t: Table = Table(s, rows)
+    csv_txt: str = to_csv(t)
+    gz_raw: str = compress_gzip_text(csv_txt)
+    restored_txt: str = decompress_gzip_text(gz_raw)
+    if restored_txt != csv_txt:
+        return False
+    t2: Table = read_csv(restored_txt, True, s, False)
+    if t2.row_count() != t.row_count():
+        return False
+    ri: int = 0
+    while ri < n:
+        if t2.cell(ri, 0).as_str() != t.cell(ri, 0).as_str():
+            return False
+        if t2.cell(ri, 1).as_int() != t.cell(ri, 1).as_int():
+            return False
+        ri = ri + 1
+    return True
+
+def prop_json_rows_roundtrip(r: Rng) -> bool:
+    s: Schema = Schema([ColumnDef("id", TYPE_INT, False), ColumnDef("label", TYPE_STR, False)])
+    n: int = r.int_range(0, 12)
+    rows: list[list[Cell]] = []
+    i: int = 0
+    while i < n:
+        rows.append([cell_int(r.int_range(-99999, 99999)), cell_str(_gen_tricky_cell(r))])
+        i = i + 1
+    t: Table = Table(s, rows)
+    json_rows: list[str] = table_to_json_rows(t)
+    if len(json_rows) != n:
+        return False
+    t2: Table = table_from_json_rows(json_rows, s)
+    if t2.row_count() != n:
+        return False
+    ri: int = 0
+    while ri < n:
+        if t2.cell(ri, 0).as_int() != t.cell(ri, 0).as_int():
+            return False
+        if t2.cell(ri, 1).as_str() != t.cell(ri, 1).as_str():
+            return False
+        ri = ri + 1
+    return True
+
+def _run_prop(name: str, prop: (Rng) -> bool, runs: int, seed: int, max_size: int) -> None:
+    try:
+        nox.property.check(name, prop, runs, seed, max_size)
+    except PropertyFailed as pf:
+        print("PROPERTY FAILED: " + str(pf))
+        raise pf
+
+_run_prop("delimited_roundtrip", prop_delimited_roundtrip, 50, 1001, 20)
+_run_prop("json_int64_roundtrip", prop_json_int64_roundtrip, 50, 2002, 20)
+_run_prop("sort_stability_and_order", prop_sort_stability_and_order, 50, 3003, 20)
+_run_prop("groupby_conservation", prop_groupby_conservation, 50, 4004, 20)
+_run_prop("melt_and_window_invariants", prop_melt_and_window_invariants, 40, 5005, 15)
+_run_prop("decimal_sum_order_invariance", prop_decimal_sum_order_invariance, 50, 6006, 20)
+_run_prop("datetime_monotonic_sort", prop_datetime_monotonic_sort, 50, 7007, 20)
+_run_prop("gzip_csv_roundtrip", prop_gzip_csv_roundtrip, 40, 8008, 15)
+_run_prop("json_rows_roundtrip", prop_json_rows_roundtrip, 40, 9009, 15)
+
+print("property_test passed")

@@ -8,10 +8,10 @@ Atlas is a lightweight, zero-dependency, statically typed tabular processing lib
 
 [![CI Matrix](https://github.com/mburakmmm/atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/atlas/actions/workflows/ci.yml)
 [![Release Gate](https://github.com/mburakmmm/atlas/actions/workflows/release.yml/badge.svg)](https://github.com/mburakmmm/atlas/actions/workflows/release.yml)
-[![Version](https://img.shields.io/badge/version-v0.9.6-orange.svg)](nox.json)
+[![Version](https://img.shields.io/badge/version-v1.0.0-orange.svg)](nox.json)
 [![Platform Support](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#-cross-platform--compatibility-matrix)
-[![Tests](https://img.shields.io/badge/tests-39%20passed%20%28100%25%29-brightgreen.svg)](tests/)
-[![Compiler](https://img.shields.io/badge/noxc-2.0.86-purple.svg)](https://github.com/mburakmmm/nox-lang)
+[![Tests](https://img.shields.io/badge/tests-47%20passed%20%28100%25%29-brightgreen.svg)](tests/)
+[![Compiler](https://img.shields.io/badge/noxc-2.1.186-purple.svg)](https://github.com/mburakmmm/nox-lang)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
@@ -94,8 +94,12 @@ Atlas is a lightweight, zero-dependency, statically typed tabular processing lib
 | **Relational Joins** | [`join.nox`](join.nox) | High-speed hash joins (`join_inner`, `join_left`), SQL-compliant Full Outer Join (`join_full`), and Cartesian Product Cross Join (`join_cross`). |
 | **Streaming Reader** | [`streaming.nox`](streaming.nox) | State machine streaming parser (`StreamingCsvReader`) supporting chunked reads, online filtering, projections, and online GroupBy in bounded RAM. |
 | **Delimiters & TSV** | [`delimited.nox`](delimited.nox) | RFC 4180 parsing for commas, tabs (`\t`), semicolons (`;`), and arbitrary multi-character delimiters (`\|\|`, `::`). |
-| **Declarative Filtering** | [`expr.nox`](expr.nox) | Type-safe AST expressions (`col_eq`, `col_gt`, `col_in`, `expr_and`, `expr_or`, `expr_not`). |
-| **SQL & Validation** | [`sql_adapter.nox`](sql_adapter.nox) | SQLite/PostgreSQL DDL schema generation, identifier escaping, parameterized INSERT generation, and `TableValidator`. |
+| **Declarative Filtering** | [`expr.nox`](expr.nox) | Type-safe AST expressions (`col_eq`, `col_gt`, `col_in`, `col_ends_with`, `col_regex_match`, `col_eq_ignore_case`, `expr_and`, `expr_or`, `expr_not`). |
+| **Exact Decimal & DateTime** | [`values.nox`](values.nox), [`temporal.nox`](temporal.nox) | Arbitrary-precision base-10 `TYPE_DECIMAL` (`nox.decimal`) and UTC/IANA timezone-aware `TYPE_DATETIME` / `TYPE_DATE` (`nox.time`, `nox.timezone`). |
+| **Compressed & Archive I/O** | [`archive.nox`](archive.nox) | Portable `.gz`, `.zst` decompression, `.zip`, and `.tar.gz` multi-table bundles with path-traversal guards and crash-safe atomic writes. |
+| **Parallel Execution** | [`parallel_exec.nox`](parallel_exec.nox) | Deterministic shared-nothing `parallel=True` execution across `Table.filter`, `GroupedTable.aggregate`, `WindowContext`, and `read_csv_files_parallel`. |
+| **Desktop Turbo (`noxclibs`)** | [`atlas_fast.nox`](atlas_fast.nox) | Opt-in accelerators for `nox.yyjson` (strict/relaxed/JSON5), `nox.xxhash` (`xxh3_64`/`xxh3_128_hex` + fast dedup), `nox.pcre2` (JIT regex), `nox.lz4`, `nox.zstd.compress`, and `nox.brotli`. |
+| **SQL & Validation** | [`sql_adapter.nox`](sql_adapter.nox) | SQLite/PostgreSQL DDL schema generation, identifier escaping, parameterized INSERT generation, and `TableValidator` (`expect_regex_match`). |
 
 ---
 
@@ -238,11 +242,47 @@ summary_result: Table = open_csv_stream("large_dataset.csv", chunk_rows=2000) \
 summary_result.print_preview()
 ```
 
+### 8. Exact Decimal (`TYPE_DECIMAL`), DateTime (`TYPE_DATETIME`), & Parallel Execution
+
+```nox
+from atlas import Schema, ColumnDef, TYPE_DECIMAL, TYPE_DATETIME, cell_decimal_str, cell_datetime_str, group_by, agg_sum
+
+# Financial base-10 precision & ISO-8601 timestamps
+s: Schema = Schema([
+    ColumnDef("ts", TYPE_DATETIME, False),
+    ColumnDef("amount", TYPE_DECIMAL, False)
+])
+
+# Opt-in shared-nothing deterministic parallel execution
+filtered: Table = t.filter(predicate, parallel=True)
+agg_res: Table = group_by(t, ["dept"]).aggregate([agg_sum("salary", "total")], parallel=True)
+```
+
+### 9. `@dataclass` Interop & `atlas_fast.nox` Desktop Turbo (`noxclibs`)
+
+```nox
+import nox.json
+from atlas import table_from_json_rows, table_to_json_rows
+from atlas_fast import table_from_json5, dedup_table_fast, filter_pcre2, PCRE2_IGNORECASE
+
+@dataclass
+@derive("json", "order", "copy")
+class OrderRecord:
+    order_id: int
+    sku: str
+    total: float
+
+# Round-trip @dataclass records through Atlas Table and PCRE2 JIT regex filter
+o1: OrderRecord = OrderRecord(101, "SKU-PRO-01", 450.0)
+t_orders: Table = table_from_json_rows([o1.to_json()])
+pro_orders: Table = filter_pcre2(dedup_table_fast(t_orders, ["order_id"]), "sku", "^sku-pro-\\d+$", PCRE2_IGNORECASE, True, True)
+```
+
 ---
 
 ## ⚡ Performance Benchmarks
 
-All benchmarks measured with `noxc 2.0.86` on macOS Darwin (Apple Silicon) and verified for cross-platform parity on Linux and Windows.
+All benchmarks measured with `noxc 2.1.186` on macOS Darwin (Apple Silicon) and verified for cross-platform parity on Linux and Windows.
 
 ### 1. Window Pipeline Benchmark (100,000 Synthetic Rows)
 *Source: [`benchmarks/benchmark_window.nox`](benchmarks/benchmark_window.nox)*
@@ -277,9 +317,9 @@ Atlas is continuously tested on every commit and pull request via GitHub Actions
 
 | Platform | Architecture | Toolchain / Backend | Status |
 | :--- | :--- | :--- | :---: |
-| **Ubuntu Linux** | x86_64, aarch64 | `noxc 2.0.86` (LLVM & freestanding math) | ✅ Passing |
-| **macOS** | Apple Silicon (arm64), Intel (x86_64) | `noxc 2.0.86` (Darwin Clang/LLVM) | ✅ Passing |
-| **Windows 10/11** | x86_64, ARM64 | `noxc 2.0.86` (MSVC / Windows POSIX emulation) | ✅ Passing |
+| **Ubuntu Linux** | x86_64, aarch64 | `noxc 2.1.186` (LLVM & QBE backends) | ✅ Passing |
+| **macOS** | Apple Silicon (arm64), Intel (x86_64) | `noxc 2.1.186` (LLVM & QBE backends) | ✅ Passing |
+| **Windows 10/11** | x86_64, ARM64 | `noxc 2.1.186` (MSVC / Windows POSIX emulation) | ✅ Passing |
 
 ### Cross-Platform Engineering Invariants
 - **Line Ending Agnostic**: Accepts both CRLF (`\r\n`) and LF (`\n`) seamlessly; serialization defaults to standard LF.
@@ -296,7 +336,7 @@ Comprehensive guides and architectural specifications are located in the [`docs/
 | :--- | :--- |
 | [**API Reference**](docs/api.md) | Exhaustive signatures and syntax examples for all public Atlas classes and functions. |
 | [**Architecture**](docs/architecture.md) | Detailed layer architecture, module boundaries, and memory ownership model. |
-| [**Capabilities & Audit**](docs/capabilities.md) | Verification audit against the Nox standard library (`nox.csv`, `nox.json`, `nox.fs`, `nox.mathx`). |
+| [**Capabilities & Audit**](docs/capabilities.md) | Verification audit against the Nox standard library (`nox.csv`, `nox.json`, `nox.fs`, `nox.mathx`, `nox.decimal`, `nox.time`, `noxclibs`). |
 | [**Data Model**](docs/data-model.md) | Deep dive into `Cell`, `ColumnDef`, `Schema`, null semantics, and type promotion rules. |
 | [**CSV & Streaming**](docs/csv.md) | RFC 4180 parsing, streaming state machines, chunk bounds, and formula injection defense. |
 | [**Custom Delimiters**](docs/delimiters.md) | TSV, PSV, and multi-character delimiter parsing and escaping. |
@@ -312,7 +352,7 @@ Comprehensive guides and architectural specifications are located in the [`docs/
 
 ## 🧪 Automated Test Suite
 
-Atlas maintains a **100% passing automated test suite** across **39 specialized test suites**:
+Atlas maintains a **100% passing automated test suite** across **47 specialized test suites**:
 
 ```bash
 noxc test
@@ -321,6 +361,7 @@ noxc test
 ### Test Suite Highlights
 - **Backend Compatibility Matrix** ([`tests/backend_matrix_test.nox`](tests/backend_matrix_test.nox)): INT64 extreme boundaries, IEEE 754 float/NaN/Inf semantics, hash determinism, stable sort tie preservation, and multi-byte UTF-8 (Turkish, CJK, Emojis).
 - **Ground-Truth Reference Verification** ([`tests/reference_comparison_test.nox`](tests/reference_comparison_test.nox)): Verified cell-for-cell against precomputed reference outputs from Pandas 2.x and Polars 1.x.
+- **Property-Based Shrinking Suite** ([`tests/property_test.nox`](tests/property_test.nox)): Generative property tests via `nox.property` across delimited parsing, 64-bit JSON round-trips, sort stability, GroupBy conservation, Decimal summation order-invariance, DateTime monotonic sort, Gzip CSV round-trips, and `@dataclass` JSON row round-trips.
 - **High Cardinality Scaling** ([`tests/high_cardinality_test.nox`](tests/high_cardinality_test.nox)): 50,000 distinct groups on 100,000 rows.
 - **Differential Streaming** ([`tests/streaming_differential_test.nox`](tests/streaming_differential_test.nox)): Comparing streaming chunks against in-memory parsers across 10 varied chunk buffer sizes.
 

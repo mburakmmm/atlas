@@ -1,7 +1,9 @@
 # key_encoding.nox — Canonical hash key encoding for Atlas Join and GroupBy.
 
+import nox.decimal
+from nox.decimal import Decimal
 import values
-from values import Cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+from values import Cell, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME, is_nan, is_inf
 
 def cell_hash_key(c: Cell) -> str:
     if c.is_missing():
@@ -16,6 +18,21 @@ def cell_hash_key(c: Cell) -> str:
         if f_val >= -9223372036854775808.0 and f_val < 9223372036854775808.0 and f_val == float(int(f_val)):
             return "I:" + str(int(f_val))
         return "F:" + str(f_val)
+    if c.kind == TYPE_DECIMAL:
+        d_norm: Decimal = c.as_decimal().normalize()
+        if d_norm.exp >= 0:
+            return "I:" + str(d_norm)
+        try:
+            df: float = d_norm.to_float()
+            if not is_nan(df) and not is_inf(df):
+                f_txt: str = str(df)
+                if d_norm.compare(nox.decimal.parse(f_txt)) == 0:
+                    return "F:" + f_txt
+        except ValueError:
+            pass
+        return "D:" + str(d_norm)
+    if c.kind == TYPE_DATETIME:
+        return "DT:" + str(c.i)
     if c.kind == TYPE_STR:
         s_val: str = c.to_string()
         return "S" + str(len(s_val)) + ":" + s_val

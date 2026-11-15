@@ -1,11 +1,11 @@
 # json_adapter.nox — JSON array-of-objects import, export, and CSV ↔ JSON conversion for Atlas.
 
 import nox.json
-from nox.json import JsonWriter, is_array, is_object, is_null, is_bool, is_number, is_string, as_bool, as_number, as_string, array_len, array_get, object_len, object_key, object_value
+from nox.json import JsonWriter, JsonError, is_array, is_object, is_null, is_bool, is_number, is_string, as_bool, as_number, as_int, as_string, number_text, array_len, array_get, object_len, object_key, object_value, get_or_null
 import errors
 from errors import JsonImportError, ShapeError, TypeConversionError, MissingValueError
 import values
-from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL
+from values import Cell, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_decimal_str, cell_datetime_ms, cell_datetime_str, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -13,17 +13,15 @@ from table import Table
 import csv_adapter
 from csv_adapter import read_csv, to_csv
 
-def _find_json_object_key_index(jv: JsonValue, key: str) -> int:
-    i: int = 0
-    n: int = object_len(jv)
-    while i < n:
-        if object_key(jv, i) == key:
-            return i
-        i = i + 1
-    return -1
+def _is_float_number_text(num_txt: str) -> bool:
+    return "." in num_txt or "e" in num_txt or "E" in num_txt
 
 def table_from_json(json_text: str, explicit_schema: Schema | None = None) -> Table:
-    root: JsonValue = nox.json.parse(json_text)
+    root: JsonValue = nox.json.parse("null")
+    try:
+        root = nox.json.parse(json_text)
+    except JsonError as je:
+        raise JsonImportError("invalid JSON input: " + str(je))
     if not is_array(root):
         raise JsonImportError("root JSON value must be an array of objects")
 
@@ -68,14 +66,19 @@ def table_from_json(json_text: str, explicit_schema: Schema | None = None) -> Ta
                 elif is_bool(k_val):
                     val_type = TYPE_BOOL
                 elif is_number(k_val):
-                    f_val: float = as_number(k_val)
-                    i_val: int = int(f_val)
-                    if float(i_val) == f_val:
-                        val_type = TYPE_INT
-                    else:
+                    num_txt: str = number_text(k_val)
+                    if _is_float_number_text(num_txt):
                         val_type = TYPE_FLOAT
+                    else:
+                        try:
+                            _chk_int: int = as_int(k_val)
+                            val_type = TYPE_INT
+                        except JsonError as je:
+                            raise JsonImportError("JSON integer out of 64-bit signed range for key '" + k_name + "' at row " + str(item_idx) + ": " + str(je))
                 elif is_string(k_val):
                     val_type = TYPE_STR
+                else:
+                    raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
 
                 if existing_idx < 0:
                     discovered_keys.append(k_name)
@@ -84,7 +87,7 @@ def table_from_json(json_text: str, explicit_schema: Schema | None = None) -> Ta
                     curr_type: int = discovered_types[existing_idx]
                     if curr_type == TYPE_NULL and val_type != TYPE_NULL:
                         discovered_types[existing_idx] = val_type
-                    elif curr_type == TYPE_INT and val_type == TYPE_FLOAT:
+                    elif (curr_type == TYPE_INT and val_type == TYPE_FLOAT) or (curr_type == TYPE_FLOAT and val_type == TYPE_INT):
                         discovered_types[existing_idx] = TYPE_FLOAT
                     elif curr_type != val_type and val_type != TYPE_NULL:
                         # Fallback to string if mixed
@@ -115,30 +118,50 @@ def table_from_json(json_text: str, explicit_schema: Schema | None = None) -> Ta
         c_i = 0
         while c_i < expected_cols:
             col_def: ColumnDef = s.columns[c_i]
-            k_pos: int = _find_json_object_key_index(elem_obj, col_def.name)
+            jv_cell: JsonValue = get_or_null(elem_obj, col_def.name)
             cell: Cell = cell_null()
-            if k_pos >= 0:
-                jv_cell: JsonValue = object_value(elem_obj, k_pos)
-                if is_null(jv_cell):
-                    cell = cell_null()
-                elif is_bool(jv_cell):
-                    cell = cell_bool(as_bool(jv_cell))
-                elif is_number(jv_cell):
-                    num_val: float = as_number(jv_cell)
-                    if col_def.data_type == TYPE_INT:
-                        cell = cell_int(int(num_val))
-                    elif col_def.data_type == TYPE_FLOAT:
-                        cell = cell_float(num_val)
-                    else:
-                        i_cand: int = int(num_val)
-                        if float(i_cand) == num_val:
-                            cell = cell_int(i_cand)
-                        else:
-                            cell = cell_float(num_val)
+            if is_null(jv_cell):
+                cell = cell_null()
+            elif col_def.data_type == TYPE_DECIMAL:
+                if is_number(jv_cell):
+                    cell = cell_decimal_str(number_text(jv_cell))
                 elif is_string(jv_cell):
-                    cell = cell_str(as_string(jv_cell))
+                    cell = cell_decimal_str(as_string(jv_cell))
                 else:
-                    raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
+                    raise JsonImportError("invalid Decimal value for column '" + col_def.name + "' at row " + str(r_i))
+            elif col_def.data_type == TYPE_DATETIME:
+                if is_string(jv_cell):
+                    cell = cell_datetime_str(as_string(jv_cell))
+                elif is_number(jv_cell):
+                    try:
+                        cell = cell_datetime_ms(as_int(jv_cell))
+                    except JsonError as je:
+                        raise JsonImportError("invalid DateTime epoch_ms for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je))
+                else:
+                    raise JsonImportError("invalid DateTime value for column '" + col_def.name + "' at row " + str(r_i))
+            elif is_bool(jv_cell):
+                cell = cell_bool(as_bool(jv_cell))
+            elif is_number(jv_cell):
+                if col_def.data_type == TYPE_INT:
+                    try:
+                        cell = cell_int(as_int(jv_cell))
+                    except JsonError as je:
+                        raise JsonImportError("invalid integer value for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je))
+                elif col_def.data_type == TYPE_FLOAT:
+                    cell = cell_float(as_number(jv_cell))
+                else:
+                    raw_num_txt: str = number_text(jv_cell)
+                    if _is_float_number_text(raw_num_txt):
+                        cell = cell_float(as_number(jv_cell))
+                    else:
+                        try:
+                            cell = cell_int(as_int(jv_cell))
+                        except JsonError as je:
+                            raise JsonImportError("invalid integer value for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je))
+            elif is_string(jv_cell):
+                cell = cell_str(as_string(jv_cell))
+            else:
+                raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
 
             if not col_def.nullable and cell.is_missing():
                 raise MissingValueError("column '" + col_def.name + "' is not nullable, but missing value found at row " + str(r_i))
@@ -177,6 +200,8 @@ def table_to_json(t: Table) -> str:
                 w.write_bool(c.b)
             elif c.kind == TYPE_STR:
                 w.write_string(c.s)
+            elif c.kind == TYPE_DECIMAL or c.kind == TYPE_DATETIME:
+                w.write_string(c.to_string())
             else:
                 w.write_string(c.to_string())
             c_idx = c_idx + 1
@@ -193,3 +218,45 @@ def csv_to_json(csv_text: str, has_header: bool = True) -> str:
 def json_to_csv(json_text: str, include_header: bool = True, safe_spreadsheet: bool = False) -> str:
     t: Table = table_from_json(json_text)
     return to_csv(t, include_header, safe_spreadsheet)
+
+# ---------------------------------------------------------------------------
+# @dataclass / @derive("json", "order", "copy") row-level JSON interop
+# ---------------------------------------------------------------------------
+
+def table_to_json_rows(t: Table) -> list[str]:
+    out: list[str] = []
+    r_idx: int = 0
+    num_rows: int = t.row_count()
+    num_cols: int = t.column_count()
+    while r_idx < num_rows:
+        row: list[Cell] = t.rows[r_idx]
+        w: JsonWriter = JsonWriter()
+        w.begin_object()
+        c_idx: int = 0
+        while c_idx < num_cols:
+            col: ColumnDef = t.schema.columns[c_idx]
+            w.write_key(col.name)
+            c: Cell = row[c_idx]
+            if c.is_missing():
+                w.write_null()
+            elif c.kind == TYPE_INT:
+                w.write_int(c.i)
+            elif c.kind == TYPE_FLOAT:
+                w.write_float(c.f)
+            elif c.kind == TYPE_BOOL:
+                w.write_bool(c.b)
+            elif c.kind == TYPE_STR:
+                w.write_string(c.s)
+            else:
+                w.write_string(c.to_string())
+            c_idx = c_idx + 1
+        w.end_object()
+        out.append(w.build())
+        r_idx = r_idx + 1
+    return out
+
+def table_from_json_rows(json_objects: list[str], explicit_schema: Schema | None = None) -> Table:
+    if len(json_objects) == 0:
+        return table_from_json("[]", explicit_schema)
+    arr_text: str = "[" + nox.strings.join(json_objects, ",") + "]"
+    return table_from_json(arr_text, explicit_schema)

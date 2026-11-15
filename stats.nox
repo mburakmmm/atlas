@@ -1,10 +1,12 @@
 # stats.nox — Numerically stable summary statistics for Atlas.
 
 import nox.mathx
+import nox.decimal
+from nox.decimal import Decimal, from_int as decimal_from_int
 import errors
 from errors import AggregationError
 import values
-from values import Cell, checked_add_int64, TYPE_INT, float_inf, float_neg_inf, float_nan, is_nan
+from values import Cell, checked_add_int64, TYPE_INT, TYPE_DECIMAL, float_inf, float_neg_inf, float_nan, is_nan
 
 def stat_count(cells: list[Cell]) -> int:
     return len(cells)
@@ -89,6 +91,32 @@ def stat_sum_int(cells: list[Cell], context_msg: str = "stat_sum_int") -> int:
             total = checked_add_int64(total, c.as_int(), context_msg)
         i = i + 1
     return total
+
+def stat_sum_decimal(cells: list[Cell]) -> Decimal:
+    total: Decimal = decimal_from_int(0)
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            total = total + c.as_decimal()
+        i = i + 1
+    return total
+
+def stat_mean_decimal(cells: list[Cell], places: int = 8) -> Decimal:
+    total: Decimal = decimal_from_int(0)
+    cnt: int = 0
+    i: int = 0
+    n: int = len(cells)
+    while i < n:
+        c: Cell = cells[i]
+        if not c.is_missing() and c.is_numeric():
+            total = total + c.as_decimal()
+            cnt = cnt + 1
+        i = i + 1
+    if cnt == 0:
+        raise AggregationError("cannot compute decimal mean: no non-missing numeric observations")
+    return total.div(decimal_from_int(cnt), places, "half_even").normalize()
 
 def stat_mean(cells: list[Cell]) -> float:
     cnt: int = 0

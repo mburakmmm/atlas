@@ -1,5 +1,7 @@
 # validation.nox — Tabular schema validation framework inspired by Noxen for Atlas.
 
+import nox.strings
+import nox.regex
 import errors
 from errors import ColumnNotFoundError, SchemaError
 import values
@@ -17,24 +19,28 @@ RULE_LENGTH: int = 5
 RULE_ALLOWED_VALUES: int = 6
 RULE_EMAIL: int = 7
 RULE_TYPE: int = 8
+RULE_REGEX: int = 9
 
 def is_valid_email_str(s: str) -> bool:
-    if len(s) < 5:
+    n: int = nox.strings.byte_len(s)
+    if n < 5:
         return False
     at_idx: int = -1
     i: int = 0
-    n: int = len(s)
     dot_after_at: bool = False
 
     while i < n:
-        c: str = s[i]
-        if c == " " or c == "\t" or c == "\n" or c == "\r":
+        b: int = nox.strings.byte_at(s, i)
+        # space (32), tab (9), lf (10), cr (13)
+        if b == 32 or b == 9 or b == 10 or b == 13:
             return False
-        if c == "@":
+        # '@' (64)
+        if b == 64:
             if at_idx >= 0:
                 return False
             at_idx = i
-        elif at_idx >= 0 and c == ".":
+        # '.' (46)
+        elif at_idx >= 0 and b == 46:
             dot_after_at = True
         i = i + 1
 
@@ -42,7 +48,7 @@ def is_valid_email_str(s: str) -> bool:
         return False
     if not dot_after_at:
         return False
-    if s[n - 1] == ".":
+    if nox.strings.byte_at(s, n - 1) == 46:
         return False
     return True
 
@@ -87,18 +93,18 @@ def rule_length(col_name: str, min_len: int, max_len: int) -> ColumnRule:
     return ColumnRule(col_name, RULE_LENGTH, 0.0, 0.0, min_len, max_len, empty_list, "length must be between " + str(min_len) + " and " + str(max_len))
 
 def rule_allowed_values(col_name: str, allowed: list[str]) -> ColumnRule:
-    desc: str = "must be one of: "
-    i: int = 0
-    while i < len(allowed):
-        desc = desc + allowed[i]
-        if i < len(allowed) - 1:
-            desc = desc + ", "
-        i = i + 1
+    desc: str = "must be one of: " + nox.strings.join(allowed, ", ")
     return ColumnRule(col_name, RULE_ALLOWED_VALUES, 0.0, 0.0, 0, 0, allowed, desc)
 
 def rule_email(col_name: str) -> ColumnRule:
     empty_list: list[str] = []
     return ColumnRule(col_name, RULE_EMAIL, 0.0, 0.0, 0, 0, empty_list, "must be a valid email address")
+
+def rule_regex(col_name: str, pattern: str) -> ColumnRule:
+    # Validate regex syntax eagerly
+    _chk: nox.regex.Match | None = nox.regex.full_match(pattern, "")
+    pats: list[str] = [pattern]
+    return ColumnRule(col_name, RULE_REGEX, 0.0, 0.0, 0, 0, pats, "must match regex '" + pattern + "'")
 
 def rule_type(col_name: str, expected_type: int) -> ColumnRule:
     empty_list: list[str] = []
@@ -275,71 +281,44 @@ class TableValidator:
                         if not is_valid_email_str(val_str):
                             errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "invalid email address format", val_str))
 
+                elif rule.rule_kind == RULE_REGEX:
+                    if not cell.is_missing():
+                        pat: str = rule.allowed_values[0]
+                        if nox.regex.full_match(pat, val_str) == None:
+                            errs.append(ValidationError(row_idx, rule.col_name, rule.rule_desc, "value does not match pattern '" + pat + "'", val_str))
+
                 rule_idx = rule_idx + 1
             row_idx = row_idx + 1
 
         return ValidationReport(errs, num_rows)
 
-    def filter_valid(self: TableValidator, t: Table) -> Table:
+    def _invalid_row_map(self: TableValidator, t: Table) -> dict[int, bool]:
         report: ValidationReport = self.validate(t)
-        invalid_row_set: list[int] = []
+        bad: dict[int, bool] = {}
         i: int = 0
         while i < len(report.errors):
-            ridx: int = report.errors[i].row_idx
-            already_in: bool = False
-            k: int = 0
-            while k < len(invalid_row_set):
-                if invalid_row_set[k] == ridx:
-                    already_in = True
-                k = k + 1
-            if not already_in:
-                invalid_row_set.append(ridx)
+            bad[report.errors[i].row_idx] = True
             i = i + 1
+        return bad
 
+    def filter_valid(self: TableValidator, t: Table) -> Table:
+        bad: dict[int, bool] = self._invalid_row_map(t)
         valid_rows: list[list[Cell]] = []
         r_idx: int = 0
         num_rows: int = t.row_count()
         while r_idx < num_rows:
-            is_invalid: bool = False
-            k = 0
-            while k < len(invalid_row_set):
-                if invalid_row_set[k] == r_idx:
-                    is_invalid = True
-                k = k + 1
-            if not is_invalid:
+            if not (r_idx in bad):
                 valid_rows.append(t.rows[r_idx])
             r_idx = r_idx + 1
-
         return Table(t.schema.copy(), valid_rows)
 
     def filter_invalid(self: TableValidator, t: Table) -> Table:
-        report: ValidationReport = self.validate(t)
-        invalid_row_set: list[int] = []
-        i: int = 0
-        while i < len(report.errors):
-            ridx: int = report.errors[i].row_idx
-            already_in: bool = False
-            k: int = 0
-            while k < len(invalid_row_set):
-                if invalid_row_set[k] == ridx:
-                    already_in = True
-                k = k + 1
-            if not already_in:
-                invalid_row_set.append(ridx)
-            i = i + 1
-
+        bad: dict[int, bool] = self._invalid_row_map(t)
         invalid_rows: list[list[Cell]] = []
         r_idx: int = 0
         num_rows: int = t.row_count()
         while r_idx < num_rows:
-            is_invalid: bool = False
-            k = 0
-            while k < len(invalid_row_set):
-                if invalid_row_set[k] == r_idx:
-                    is_invalid = True
-                k = k + 1
-            if is_invalid:
+            if r_idx in bad:
                 invalid_rows.append(t.rows[r_idx])
             r_idx = r_idx + 1
-
         return Table(t.schema.copy(), invalid_rows)

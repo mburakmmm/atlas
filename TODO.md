@@ -29,7 +29,10 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.9.4** | **Ortak Checked Arithmetic, Bağımsız Pipeline Sözleşmesi & Medyan Benchmark** | ✅ **TAMAMLANDI & YAYINLANDI** | 36/36 Test Geçti (`noxc test`) |
 | **v0.9.5** | **Genişletilmiş Checked Aritmetik, Neumaier Toplamı, Backend Matrisi & Referans Testleri** | ✅ **TAMAMLANDI & YAYINLANDI** | 39/39 Test Geçti (`noxc test`) |
 | **v0.9.6** | **Neumaier Inf/NaN Güvenliği, Tamsayı Bölme Semantiği, QBE/LLVM CI & Skewed GroupBy** | ✅ **TAMAMLANDI & YAYINLANDI** | 39/39 Test Geçti (`noxc test`) |
-| **v1.0.0** | **Nihai Stabil Genel API & Topluluk Sürümü** | ⏳ **PLANLANDI (İleride)** | — |
+| **v0.9.7** | **Kısa Vade: JSON Int64 Doğruluğu, Gerçek Chunk Streaming, `safe_join`, `nox.regex` & `nox.property`** | ✅ **TAMAMLANDI** | 41/41 Test Geçti (`noxc test` + QBE/LLVM) |
+| **v0.10.0** | **Orta Vade: `Decimal` & `DateTime/Timezone` Sütunları, Sıkıştırılmış Formatlar & `parallel=True`** | ✅ **TAMAMLANDI** | 45/45 Test Geçti (`noxc test` + QBE/LLVM) |
+| **v0.11.0** | **Uzun Vade: `atlas_fast` (`noxclibs`), İç `enum`/`match` Modernizasyonu & `@dataclass` Ergonomisi** | ✅ **TAMAMLANDI** | 47/47 Test Geçti (`noxc test` + QBE/LLVM) |
+| **v1.0.0** | **Nihai Stabil Genel API, `"source": "nox"`, CI/Release Gate & Topluluk Sürümü** | ✅ **TAMAMLANDI** | 47/47 Test Geçti (`noxc test` + QBE/LLVM) |
 
 ---
 
@@ -650,9 +653,66 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 
 ---
 
-## 🏆 Sürüm 1.0.0 — Nihai Üretim Sürümü (Gelecek Hedef)
+## ✅ Sürüm 0.9.7 — Kısa Vade: Nox 2.1 Doğruluk, Güvenli G/Ç, Regex & Property-Based Testing (Tamamlananlar)
 
-- [ ] Topluluk geri bildirimleri sonrası API dondurma onayı.
-- [ ] Ek dosya biçimleri (Parquet / Arrow entegrasyonu).
-- [ ] Çoklu iş parçacığı (multithreading) ve SIMD hızlandırmaları için Nox stdlib desteği çıktığında optimizasyonlar.
-- [ ] `noxc publish` ile nihai v1.0.0 yayın kapısı.
+- [x] **JSON Int64 Hassasiyet Koruması & Native Tape Arama (`json_adapter.nox`)**:
+  - `nox.json.as_int` ve `nox.json.number_text` kullanarak `$2^{53}$` üstü tam sayılarda oluşan sessiz `float` hassasiyet kaybının giderilmesi.
+  - `_find_json_object_key_index` lineer taramasının `nox.json.get` / `get_or_null` native tape aramasına taşınması.
+  - Büyük 64-bit tam sayı round-trip ve sınır testlerinin eklenmesi.
+- [x] **Güvenli Dosya G/Ç, Atomik Yazma & Gerçek Parça Bazlı Streaming (`io.nox`, `streaming.nox`)**:
+  - `nox.fs.write_string_atomic` ile yarıda kalan yazmalarda hedef dosyayı koruyan atomik yazma seçeneklerinin eklenmesi.
+  - `nox.path.safe_join` kullanarak kök dizin (`base_dir`) dışına çıkmayı (`..` / path traversal) engelleyen güvenli dosya G/Ç sarmalayıcılarının (`read_csv_file_safe`, `write_csv_file_safe`, `read_json_file_safe`, `write_json_file_safe`) eklenmesi.
+  - `nox.fs.open_read` + `FileReader.read_chunk` ile dosyayı tek seferde belleğe almadan parça parça okuyan gerçek dosya akışı (chunked CSV/delimited streaming reader, UTF-8 ve alıntılı satır sınırı korumalı) eklenmesi.
+- [x] **Saf-Nox Sıcak Döngü Optimizasyonları (`delimited.nox`, `validation.nox`)**:
+  - `delimited.nox` içindeki karakter karakter `+` birleştirme döngüsünün `nox.strings.byte_at` + dilimleme (`s[start:end]`) + `nox.strings.join` ile yenilenmesi.
+  - `validation.nox` (`is_valid_email_str`, `rule_allowed_values`) içinde `nox.strings.byte_at` ve `nox.strings.join` kullanılması.
+- [x] **Yeni Taşınabilir Filtre & Doğrulama Operatörleri (`expr.nox`, `validation.nox`, `atlas.nox`)**:
+  - Zig-tabanlı taşınabilir `nox.regex` ile `col_regex_match` (`OP_REGEX_MATCH`) ve `rule_regex` (`RULE_REGEX`).
+  - `nox.strings.ends_with` ve `nox.strings.eq_ignore_case` ile `col_ends_with` (`OP_ENDS_WITH`) ve `col_eq_ignore_case` (`OP_EQ_CI`).
+- [x] **Property-Based Testing (`tests/property_test.nox`)**:
+  - `nox.property` (`check`, `Rng`, shrinking) ile CSV/TSV round-trip, JSON round-trip, stabil `sort`, `GroupBy` vs `Streaming` eşitliği, `Pivot`/`Melt` ve `WindowContext` değişmezlerinin rastgeleleştirilmiş/küçültmeli testleri.
+- [x] **Yetenek & Sürüm Belgelendirmesi (`docs/capabilities.md`, `docs/api.md`, `CHANGELOG.md`, `nox.json`)**:
+  - `docs/capabilities.md` dosyasının `noxc 2.0.86` → `noxc 2.1.186` yetenek ve kısıtlarına göre güncellenmesi.
+  - `nox.json` sürümünün `0.9.7` olarak güncellenmesi ve tüm testlerin (`noxc check`, `noxc test`, QBE/LLVM) geçirilmesi.
+
+---
+
+## ✅ Sürüm 0.10.0 — Orta Vade: `Decimal` & `DateTime/Timezone` Sütunları, Sıkıştırılmış Formatlar & `parallel=True` (Tamamlananlar)
+
+- [x] **Yeni Sütun Tipi: `TYPE_DECIMAL` (`nox.decimal`, `values.nox`, `schema.nox`, `stats.nox`, `sort.nox`, `groupby.nox`, `csv_adapter.nox`, `json_adapter.nox`, `expr.nox`)**:
+  - Finans/muhasebe verilerinde binary `float` yuvarlama hatası olmayan kesin ondalık (`Decimal`) hücre desteği, aritmetik, karşılaştırma, sıralama, GroupBy, toplama/ortalama/min/max.
+- [x] **Yeni Sütun Tipi: `TYPE_DATETIME` / `TYPE_DATE` (`nox.time`, `nox.timezone`)**:
+  - `nox.time.DateTime` (8.2× Hinnant hızlı takvim dönüşümü) ve `nox.timezone` (Unix/macOS IANA `tzdata`, Windows/WASM’de `is_supported()` kontrollü UTC uyumlu davranış) entegrasyonu.
+  - Tarih/zaman ayrıştırma, ISO-8601 formatlama, zaman dilimi dönüşümü, tarih aralığı filtreleme, sıralama ve gruplama.
+- [x] **Tam Taşınabilir Sıkıştırılmış Veri Seti Desteği (`nox.gzip`, `nox.zstd.decompress`, `nox.zip`, `nox.tar`)**:
+  - `.csv.gz`, `.json.gz`, `.delim.gz` okuma ve yazma (`nox.gzip`).
+  - `.csv.zst` / `.json.zst` okuma (`nox.zstd.decompress` — Zig/WASM/mobil taşınabilir).
+  - `.zip` (`nox.zip`) ve `.tar` / `.tar.gz` (`nox.tar`) arşivlerinden `nox.path.safe_join` korumalı tablo okuma/paketleme.
+- [x] **Çok Çekirdekli Paralel Yürütme (`parallel=True` & Eşzamanlılık Denetimi)**:
+  - Nox 2.1 M:N (`LLVM --release`) ve QBE (`noxc check` / `noxc test --backend qbe`) kurallarının bir arada nasıl yaşayacağının küçük derleme kanıtıyla doğrulanması (`nox.thread.pool_run` + paylaşımsız izole paket klonlama + yeniden-girişli `read_delimited`).
+  - Büyük tablolarda (ör. ≥10.000 satırda veya açık `parallel=True` parametresiyle) `GroupBy` agregasyonları, `WindowContext` partition işlemleri ve parçalı CSV okuma için paralel yürütme + tekil yürütmeyle bit-birebir deterministik doğrulama testleri ve benchmark (`benchmarks/benchmark_parallel.nox`).
+
+---
+
+## ✅ Sürüm 0.11.0 — Uzun Vade: `atlas_fast` (`noxclibs`), İç `enum`/`match` Modernizasyonu & `@dataclass` Ergonomisi (Tamamlananlar)
+
+- [x] **Opsiyonel Masaüstü Turbo Modülü (`atlas_fast.nox`)**:
+  - Ana `atlas.nox` cephesinden **tamamen ayrı/opt-in** tutularak çekirdeğin WASM/mobil/freestanding taşınabilirliğini koruyan masaüstü hızlandırıcı modülü:
+    - `nox.yyjson`: Yüksek hızlı JSON / JSON5 / relaxed JSON tablo okuma (`table_from_json_fast`, `table_from_json_relaxed`, `table_from_json5`, `read_json_file_fast`, `read_json_file_fast_safe`), 64-bit tam sayı, `Decimal` ve `DateTime` koruması.
+    - `nox.xxhash`: `xxh3_64` / `xxh3_128_hex` ile tip-önekli karma üretimi (`cell_xxh3_64`, `row_xxh3_64`, `row_xxh3_128_hex`) ve çarpışma-güvenli `dedup_table_fast` / `dedup_all_fast`.
+    - `nox.pcre2`: Derlenmiş regex (`compile_pcre2`) ve JIT destekli filtreleme/dönüştürme (`filter_pcre2`, `filter_pcre2_compiled`, `replace_pcre2`).
+    - `nox.lz4`, `nox.brotli`, `nox.zstd.compress`: Masaüstü hedeflerine özel yüksek hızlı sıkıştırılmış dosya G/Ç (`write_csv_lz4`, `read_csv_lz4`, `write_json_lz4`, `read_json_lz4`, `write_csv_zst_fast`, `read_csv_zst_fast`, `write_json_zst_fast`, `read_json_zst_fast`, `decompress_brotli_text`, `read_csv_br`, `read_json_br`).
+- [x] **İç `Cell` & `Expr` Temsili Modernizasyonu (`enum` + `match/case`)**:
+  - Public API’yi kırmadan `values.nox` (`enum CellKind`) ve `expr.nox` (`enum ExprOp`) yapılarında kapsayıcılık denetimli `match/case` yardımcıları (`cell_kind_from_int`, `cell_kind_to_int`, `cell_kind_name`, `expr_op_from_int`, `expr_op_to_int`, `expr_op_name`, `Cell.cell_kind()`, `Cell.type_name()`, `Expr.expr_op()`, `Expr.op_name()`).
+  - `schema.nox` içinde `col_index_map: dict[str, int]` ile $O(1)$ `index_of` / `has_column` ve `nox.collections.Set[str]` ile $O(1)$ `drop_columns` optimizasyonu.
+- [x] **`@dataclass` / `@derive` Kullanıcı Ergonomisi**:
+  - Nox `@dataclass` ve `@derive("json", "order", "copy")` tiplerinden/tiplerine tablo dönüştürme yardımcıları (`table_to_json_rows`, `table_from_json_rows`), `tests/dataclass_interop_test.nox`, `tests/property_test.nox` (`prop_json_rows_roundtrip`) ve `examples/dataclass_workflow.nox`.
+
+---
+
+## 🏆 Sürüm 1.0.0 — Nihai Üretim Sürümü (Tamamlananlar)
+
+- [x] Genel API ve hata hiyerarşisi denetimi (`errors.nox` içine `ResourceLimitError` ve `UnsupportedFeatureError` eklenmesi, `atlas.nox` ve `atlas_fast.nox` tam tip kontrolü).
+- [x] `AGENTS.md` §1 kapsam dışı kurallarına uygun olarak zorunlu C bağımlılığı olmadan saf-Nox çekirdek (`atlas.nox`) ve opsiyonel masaüstü hızlandırıcı (`atlas_fast.nox`) mimarisinin ayrıştırılması.
+- [x] `nox.json` içinde `"version": "1.0.0"` ve `"source": "nox"` yapılandırması (`noxc 2.1.186` CLI denetimi `docs/capabilities.md` içinde dürüstçe belgelendi).
+- [x] Çapraz platform CI (`.github/workflows/ci.yml`) ve Release Gate (`.github/workflows/release.yml`) iş akışlarının 47 test paketi, QBE/LLVM backend matrisi, yeni örnekler ve benchmark'larla güncellenmesi.

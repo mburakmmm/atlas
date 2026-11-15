@@ -1,0 +1,126 @@
+# dataclass_interop_test.nox — Tests for v0.11.0 CellKind/ExprOp enums, O(1) Schema lookup,
+# and @dataclass @derive("json", "order", "copy") ↔ Atlas Table round-trip interop.
+
+import nox.test
+from nox.test import assert_true, assert_eq_int, assert_eq_str, assert_eq_float
+import nox.json
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, CellKind, Expr, ExprOp, cell_kind_from_int, cell_kind_to_int, cell_kind_name, expr_op_from_int, expr_op_to_int, expr_op_name, cell_null, cell_int, cell_float, cell_str, cell_bool, cell_decimal_str, cell_datetime_str, TYPE_NULL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME, col_eq_str, col_gt_int, col_regex_match, col_eq_ignore_case, expr_and, table_to_json_rows, table_from_json_rows
+
+@dataclass
+@derive("json", "order", "copy")
+class EmployeeRow:
+    id: int
+    name: str
+    dept: str
+    salary: float
+    level: int
+
+def test_cell_kind_and_expr_op_enums() -> None:
+    c_null: Cell = cell_null()
+    c_int: Cell = cell_int(42)
+    c_flt: Cell = cell_float(3.5)
+    c_str: Cell = cell_str("atlas")
+    c_bol: Cell = cell_bool(True)
+    c_dec: Cell = cell_decimal_str("19.99")
+    c_dt: Cell = cell_datetime_str("2026-04-19T12:00:00Z")
+
+    assert_true(c_null.cell_kind() == CellKind.Null, "null kind enum")
+    assert_true(c_int.cell_kind() == CellKind.Int, "int kind enum")
+    assert_true(c_flt.cell_kind() == CellKind.Float, "float kind enum")
+    assert_true(c_str.cell_kind() == CellKind.Str, "str kind enum")
+    assert_true(c_bol.cell_kind() == CellKind.Bool, "bool kind enum")
+    assert_true(c_dec.cell_kind() == CellKind.Decimal, "decimal kind enum")
+    assert_true(c_dt.cell_kind() == CellKind.DateTime, "datetime kind enum")
+
+    assert_eq_str(c_null.type_name(), "NULL", "NULL name")
+    assert_eq_str(c_int.type_name(), "INT", "INT name")
+    assert_eq_str(c_flt.type_name(), "FLOAT", "FLOAT name")
+    assert_eq_str(c_str.type_name(), "STR", "STR name")
+    assert_eq_str(c_bol.type_name(), "BOOL", "BOOL name")
+    assert_eq_str(c_dec.type_name(), "DECIMAL", "DECIMAL name")
+    assert_eq_str(c_dt.type_name(), "DATETIME", "DATETIME name")
+
+    assert_eq_int(cell_kind_to_int(cell_kind_from_int(TYPE_DECIMAL)), TYPE_DECIMAL, "decimal kind roundtrip")
+    assert_eq_int(cell_kind_to_int(cell_kind_from_int(TYPE_DATETIME)), TYPE_DATETIME, "datetime kind roundtrip")
+    assert_eq_str(cell_kind_name(CellKind.Decimal), "DECIMAL", "cell_kind_name decimal")
+
+    e1: Expr = col_eq_str("dept", "Eng")
+    e2: Expr = col_regex_match("name", "^A")
+    e3: Expr = col_eq_ignore_case("dept", "eng")
+    e4: Expr = expr_and(e1, e2)
+
+    assert_true(e1.expr_op() == ExprOp.Eq, "ExprOp.Eq")
+    assert_true(e2.expr_op() == ExprOp.RegexMatch, "ExprOp.RegexMatch")
+    assert_true(e3.expr_op() == ExprOp.EqCi, "ExprOp.EqCi")
+    assert_true(e4.expr_op() == ExprOp.And, "ExprOp.And")
+    assert_eq_str(e2.op_name(), "REGEX_MATCH", "op_name REGEX_MATCH")
+    assert_eq_str(e3.op_name(), "EQ_CI", "op_name EQ_CI")
+    assert_eq_str(expr_op_name(expr_op_from_int(expr_op_to_int(ExprOp.EndsWith))), "ENDS_WITH", "EndsWith roundtrip")
+
+def test_schema_o1_index_and_set_drop() -> None:
+    cols: list[ColumnDef] = []
+    i: int = 0
+    while i < 120:
+        cols.append(ColumnDef("col_" + str(i), TYPE_INT, True))
+        i = i + 1
+    s: Schema = Schema(cols)
+    assert_eq_int(s.column_count(), 120, "120 cols")
+    assert_eq_int(s.index_of("col_0"), 0, "index col_0")
+    assert_eq_int(s.index_of("col_73"), 73, "index col_73")
+    assert_eq_int(s.index_of("col_119"), 119, "index col_119")
+    assert_eq_int(s.index_of("missing_col"), -1, "missing col index")
+    assert_true(s.has_column("col_99"), "has col_99")
+    assert_true(not s.has_column("col_999"), "no col_999")
+
+    to_drop: list[str] = ["col_0", "col_50", "col_119"]
+    s2: Schema = s.drop_columns(to_drop)
+    assert_eq_int(s2.column_count(), 117, "117 cols after drop")
+    assert_true(not s2.has_column("col_0"), "col_0 dropped")
+    assert_true(not s2.has_column("col_50"), "col_50 dropped")
+    assert_true(not s2.has_column("col_119"), "col_119 dropped")
+    assert_eq_int(s2.index_of("col_1"), 0, "col_1 shifted to 0")
+    assert_eq_int(s2.index_of("col_51"), 49, "col_51 shifted to 49")
+
+def test_dataclass_derive_json_table_roundtrip() -> None:
+    e1: EmployeeRow = EmployeeRow(1, "Alice", "Eng", 125000.0, 4)
+    e2: EmployeeRow = EmployeeRow(2, "Bob", "Sales", 92000.0, 3)
+    e3: EmployeeRow = EmployeeRow(3, "Charlie", "Eng", 140000.0, 5)
+
+    # Verify @derive("copy") and @derive("order")
+    e1_copy: EmployeeRow = e1.copy()
+    assert_true(e1 == e1_copy, "dataclass copy equality")
+    assert_true(e1 < e2, "dataclass lexicographic order")
+
+    json_rows: list[str] = [e1.to_json(), e2.to_json(), e3.to_json()]
+    s: Schema = Schema([
+        ColumnDef("id", TYPE_INT, False),
+        ColumnDef("name", TYPE_STR, False),
+        ColumnDef("dept", TYPE_STR, False),
+        ColumnDef("salary", TYPE_FLOAT, False),
+        ColumnDef("level", TYPE_INT, False)
+    ])
+
+    t: Table = table_from_json_rows(json_rows, s)
+    assert_eq_int(t.row_count(), 3, "row count 3")
+    assert_eq_int(t.column_count(), 5, "col count 5")
+
+    # Filter Eng employees and sort by salary descending
+    eng_t: Table = t.filter(col_eq_str("dept", "Eng")).sort_by(["salary"], False)
+    assert_eq_int(eng_t.row_count(), 2, "filtered row count 2")
+
+    out_json_rows: list[str] = table_to_json_rows(eng_t)
+    assert_eq_int(len(out_json_rows), 2, "json rows 2")
+
+    top_emp: EmployeeRow = EmployeeRow.from_json(out_json_rows[0])
+    second_emp: EmployeeRow = EmployeeRow.from_json(out_json_rows[1])
+
+    assert_eq_int(top_emp.id, 3, "top emp id")
+    assert_eq_str(top_emp.name, "Charlie", "top emp name")
+    assert_eq_str(top_emp.dept, "Eng", "top emp dept")
+    assert_eq_float(top_emp.salary, 140000.0, "top emp salary")
+    assert_eq_int(top_emp.level, 5, "top emp level")
+
+    assert_eq_int(second_emp.id, 1, "second emp id")
+    assert_eq_str(second_emp.name, "Alice", "second emp name")
+    assert_true(second_emp == e1, "reconstructed EmployeeRow equals original e1")

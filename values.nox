@@ -1,5 +1,12 @@
 # values.nox — Typed cell value representation and missing value semantics for Atlas.
 
+import nox.strings
+import nox.decimal
+from nox.decimal import Decimal, DecimalError, from_int as decimal_from_int, parse as decimal_parse
+import nox.bigint
+from nox.bigint import BigInt
+import nox.time
+from nox.time import DateTime, from_epoch_ms
 import errors
 from errors import TypeConversionError, ShapeError
 
@@ -103,6 +110,230 @@ TYPE_INT: int = 1
 TYPE_FLOAT: int = 2
 TYPE_STR: int = 3
 TYPE_BOOL: int = 4
+TYPE_DECIMAL: int = 5
+TYPE_DATETIME: int = 6
+TYPE_DATE: int = 6
+
+enum CellKind:
+    Null
+    Int
+    Float
+    Str
+    Bool
+    Decimal
+    DateTime
+
+def cell_kind_from_int(kind: int) -> CellKind:
+    if kind == TYPE_INT:
+        return CellKind.Int
+    if kind == TYPE_FLOAT:
+        return CellKind.Float
+    if kind == TYPE_STR:
+        return CellKind.Str
+    if kind == TYPE_BOOL:
+        return CellKind.Bool
+    if kind == TYPE_DECIMAL:
+        return CellKind.Decimal
+    if kind == TYPE_DATETIME:
+        return CellKind.DateTime
+    return CellKind.Null
+
+def cell_kind_to_int(ck: CellKind) -> int:
+    out: int = TYPE_NULL
+    match ck:
+        case CellKind.Null:
+            out = TYPE_NULL
+        case CellKind.Int:
+            out = TYPE_INT
+        case CellKind.Float:
+            out = TYPE_FLOAT
+        case CellKind.Str:
+            out = TYPE_STR
+        case CellKind.Bool:
+            out = TYPE_BOOL
+        case CellKind.Decimal:
+            out = TYPE_DECIMAL
+        case CellKind.DateTime:
+            out = TYPE_DATETIME
+    return out
+
+def cell_kind_name(ck: CellKind) -> str:
+    label: str = "NULL"
+    match ck:
+        case CellKind.Null:
+            label = "NULL"
+        case CellKind.Int:
+            label = "INT"
+        case CellKind.Float:
+            label = "FLOAT"
+        case CellKind.Str:
+            label = "STR"
+        case CellKind.Bool:
+            label = "BOOL"
+        case CellKind.Decimal:
+            label = "DECIMAL"
+        case CellKind.DateTime:
+            label = "DATETIME"
+    return label
+
+def _is_ascii_digit_byte(b: int) -> bool:
+    return b >= 48 and b <= 57
+
+def _parse_int_digits_slice(text: str, start: int, end: int) -> int:
+    if start < 0 or end <= start or end > nox.strings.byte_len(text):
+        raise TypeConversionError("invalid integer slice in datetime/numeric: '" + text + "'")
+    val: int = 0
+    i: int = start
+    while i < end:
+        b: int = nox.strings.byte_at(text, i)
+        if not _is_ascii_digit_byte(b):
+            raise TypeConversionError("expected digit in '" + text + "'")
+        val = val * 10 + (b - 48)
+        i = i + 1
+    return val
+
+def _parse_decimal_strict(text: str) -> Decimal:
+    trimmed: str = nox.strings.trim(text)
+    if trimmed == "":
+        raise TypeConversionError("cannot parse empty string as Decimal")
+    if nox.strings.byte_len(trimmed) > 0 and nox.strings.byte_at(trimmed, 0) == 43:
+        trimmed = trimmed[1:nox.strings.byte_len(trimmed)]
+    n_b: int = nox.strings.byte_len(trimmed)
+    if n_b == 0:
+        raise TypeConversionError("cannot parse '" + text + "' as Decimal")
+    # Reject NaN/Inf tokens or whitespace inside
+    i: int = 0
+    if nox.strings.byte_at(trimmed, 0) == 45:
+        i = 1
+    dot_seen: bool = False
+    exp_seen: bool = False
+    mantissa_digits: int = 0
+    exp_digits: int = 0
+    exp_start: bool = False
+    while i < n_b:
+        b: int = nox.strings.byte_at(trimmed, i)
+        if _is_ascii_digit_byte(b):
+            if exp_seen:
+                exp_digits = exp_digits + 1
+                exp_start = False
+            else:
+                mantissa_digits = mantissa_digits + 1
+        elif b == 46 and not dot_seen and not exp_seen:
+            dot_seen = True
+        elif (b == 101 or b == 69) and not exp_seen and mantissa_digits > 0:
+            exp_seen = True
+            exp_start = True
+        elif (b == 43 or b == 45) and exp_seen and exp_start:
+            exp_start = False
+        else:
+            raise TypeConversionError("cannot parse '" + text + "' as Decimal")
+        i = i + 1
+    if mantissa_digits == 0 or (exp_seen and exp_digits == 0):
+        raise TypeConversionError("cannot parse '" + text + "' as Decimal")
+    try:
+        return decimal_parse(trimmed)
+    except ValueError:
+        raise TypeConversionError("cannot parse '" + text + "' as Decimal")
+    except DecimalError:
+        raise TypeConversionError("cannot parse '" + text + "' as Decimal")
+
+def parse_datetime_ms(text: str) -> int:
+    s: str = nox.strings.trim(text)
+    n: int = nox.strings.byte_len(s)
+    # Formats supported:
+    #   YYYY-MM-DD (10)
+    #   YYYY-MM-DD[T| ]HH:MM:SS[.fff][Z|+HH:MM|-HH:MM|+HHMM|-HHMM]
+    if n < 10:
+        raise TypeConversionError("cannot parse '" + text + "' as DateTime (expected ISO YYYY-MM-DD[ HH:MM:SS])")
+    if nox.strings.byte_at(s, 4) != 45 or nox.strings.byte_at(s, 7) != 45:
+        raise TypeConversionError("cannot parse '" + text + "' as DateTime (invalid date separator)")
+    year: int = _parse_int_digits_slice(s, 0, 4)
+    month: int = _parse_int_digits_slice(s, 5, 7)
+    day: int = _parse_int_digits_slice(s, 8, 10)
+    hour: int = 0
+    minute: int = 0
+    second: int = 0
+    ms_frac: int = 0
+    offset_ms: int = 0
+
+    if n > 10:
+        sep_b: int = nox.strings.byte_at(s, 10)
+        # 'T' (84) or ' ' (32) or 't' (116)
+        if sep_b != 84 and sep_b != 32 and sep_b != 116:
+            raise TypeConversionError("cannot parse '" + text + "' as DateTime (expected 'T' or space)")
+        if n < 19:
+            raise TypeConversionError("cannot parse '" + text + "' as DateTime (incomplete time component)")
+        if nox.strings.byte_at(s, 13) != 58 or nox.strings.byte_at(s, 16) != 58:
+            raise TypeConversionError("cannot parse '" + text + "' as DateTime (invalid time separator)")
+        hour = _parse_int_digits_slice(s, 11, 13)
+        minute = _parse_int_digits_slice(s, 14, 16)
+        second = _parse_int_digits_slice(s, 17, 19)
+
+        pos: int = 19
+        if pos < n and nox.strings.byte_at(s, pos) == 46:
+            pos = pos + 1
+            frac_start: int = pos
+            while pos < n and _is_ascii_digit_byte(nox.strings.byte_at(s, pos)):
+                pos = pos + 1
+            frac_len: int = pos - frac_start
+            if frac_len == 0:
+                raise TypeConversionError("cannot parse '" + text + "' as DateTime (empty fractional seconds)")
+            # Extract millisecond scale from up to first 3 digits
+            mult: int = 100
+            fi: int = 0
+            while fi < 3 and frac_start + fi < pos:
+                ms_frac = ms_frac + (nox.strings.byte_at(s, frac_start + fi) - 48) * mult
+                mult = mult // 10
+                fi = fi + 1
+
+        if pos < n:
+            tz_b: int = nox.strings.byte_at(s, pos)
+            if tz_b == 90 or tz_b == 122: # Z or z
+                if pos + 1 != n:
+                    raise TypeConversionError("cannot parse '" + text + "' as DateTime (trailing chars after Z)")
+            elif tz_b == 43 or tz_b == 45: # + or -
+                sign: int = 1
+                if tz_b == 45:
+                    sign = -1
+                rem_len: int = n - (pos + 1)
+                oh: int = 0
+                om: int = 0
+                if rem_len == 5 and nox.strings.byte_at(s, pos + 3) == 58:
+                    oh = _parse_int_digits_slice(s, pos + 1, pos + 3)
+                    om = _parse_int_digits_slice(s, pos + 4, pos + 6)
+                elif rem_len == 4:
+                    oh = _parse_int_digits_slice(s, pos + 1, pos + 3)
+                    om = _parse_int_digits_slice(s, pos + 3, pos + 5)
+                else:
+                    raise TypeConversionError("cannot parse '" + text + "' as DateTime (invalid timezone offset)")
+                if oh > 23 or om > 59:
+                    raise TypeConversionError("cannot parse '" + text + "' as DateTime (timezone offset out of range)")
+                offset_ms = sign * (oh * 3600 + om * 60) * 1000
+            else:
+                raise TypeConversionError("cannot parse '" + text + "' as DateTime (unexpected suffix)")
+
+    if month < 1 or month > 12 or day < 1 or day > 31 or hour < 0 or hour > 23 or minute < 0 or minute > 59 or second < 0 or second > 59:
+        raise TypeConversionError("cannot parse '" + text + "' as DateTime (calendar component out of range)")
+
+    dt: DateTime = DateTime(year, month, day, hour, minute, second)
+    sec_ms: int = dt.to_epoch_ms()
+    rt: DateTime = from_epoch_ms(sec_ms)
+    if rt.year != year or rt.month != month or rt.day != day or rt.hour != hour or rt.minute != minute or rt.second != second:
+        raise TypeConversionError("cannot parse '" + text + "' as DateTime (invalid calendar date)")
+    return sec_ms + ms_frac - offset_ms
+
+def _format_epoch_ms(ms: int) -> str:
+    sec: int = ms // 1000
+    rem: int = ms - sec * 1000
+    base: str = from_epoch_ms(sec * 1000).to_str()
+    if rem == 0:
+        return base
+    rem_s: str = str(rem)
+    if rem < 10:
+        rem_s = "00" + rem_s
+    elif rem < 100:
+        rem_s = "0" + rem_s
+    return base + "." + rem_s
 
 def _int_float_equals(i: int, f: float) -> bool:
     if not (f == f):
@@ -144,21 +375,29 @@ class Cell:
     f: float
     s: str
     b: bool
+    d: Decimal | None
 
-    def __init__(self: Cell, kind: int, i: int, f: float, s: str, b: bool) -> None:
+    def __init__(self: Cell, kind: int, i: int, f: float, s: str, b: bool, d: Decimal | None = None) -> None:
         self.kind = kind
         self.i = i
         self.f = f
         self.s = s
         self.b = b
+        self.d = d
 
     def is_missing(self: Cell) -> bool:
 
         return self.kind == TYPE_NULL
 
+    def cell_kind(self: Cell) -> CellKind:
+        return cell_kind_from_int(self.kind)
+
+    def type_name(self: Cell) -> str:
+        return cell_kind_name(self.cell_kind())
+
     def is_numeric(self: Cell) -> bool:
 
-        return self.kind == TYPE_INT or self.kind == TYPE_FLOAT
+        return self.kind == TYPE_INT or self.kind == TYPE_FLOAT or self.kind == TYPE_DECIMAL
 
     def as_int(self: Cell) -> int:
 
@@ -166,6 +405,16 @@ class Cell:
             return self.i
         if self.kind == TYPE_FLOAT:
             return int(self.f)
+        if self.kind == TYPE_DECIMAL:
+            dec_v: Decimal | None = self.d
+            if dec_v is None:
+                return 0
+            try:
+                return int(str(dec_v.to_bigint()))
+            except ValueError:
+                raise TypeConversionError("Decimal value '" + str(dec_v) + "' is out of 64-bit int range")
+        if self.kind == TYPE_DATETIME:
+            return self.i
         if self.kind == TYPE_STR:
             try:
                 return int(self.s)
@@ -183,6 +432,16 @@ class Cell:
             return self.f
         if self.kind == TYPE_INT:
             return float(self.i)
+        if self.kind == TYPE_DECIMAL:
+            dec_v: Decimal | None = self.d
+            if dec_v is None:
+                return 0.0
+            try:
+                return dec_v.to_float()
+            except ValueError:
+                raise TypeConversionError("cannot convert Decimal '" + str(dec_v) + "' to float")
+        if self.kind == TYPE_DATETIME:
+            return float(self.i)
         if self.kind == TYPE_STR:
             try:
                 return float(self.s)
@@ -193,6 +452,39 @@ class Cell:
                 return 1.0
             return 0.0
         raise TypeConversionError("cannot convert missing Cell to float")
+
+    def as_decimal(self: Cell) -> Decimal:
+        if self.kind == TYPE_DECIMAL:
+            dec_v: Decimal | None = self.d
+            if dec_v is not None:
+                return dec_v
+            return decimal_from_int(0)
+        if self.kind == TYPE_INT:
+            return decimal_from_int(self.i)
+        if self.kind == TYPE_FLOAT:
+            if is_nan(self.f) or is_inf(self.f):
+                raise TypeConversionError("cannot convert NaN/Infinity float to exact Decimal")
+            return _parse_decimal_strict(str(self.f))
+        if self.kind == TYPE_STR:
+            return _parse_decimal_strict(self.s)
+        raise TypeConversionError("cannot convert Cell of kind " + str(self.kind) + " to Decimal")
+
+    def as_datetime(self: Cell) -> DateTime:
+        if self.kind == TYPE_DATETIME or self.kind == TYPE_INT:
+            sec: int = self.i // 1000
+            return from_epoch_ms(sec * 1000)
+        if self.kind == TYPE_STR:
+            ms: int = parse_datetime_ms(self.s)
+            sec2: int = ms // 1000
+            return from_epoch_ms(sec2 * 1000)
+        raise TypeConversionError("cannot convert Cell of kind " + str(self.kind) + " to DateTime")
+
+    def as_epoch_ms(self: Cell) -> int:
+        if self.kind == TYPE_DATETIME or self.kind == TYPE_INT:
+            return self.i
+        if self.kind == TYPE_STR:
+            return parse_datetime_ms(self.s)
+        raise TypeConversionError("cannot extract epoch_ms from Cell of kind " + str(self.kind))
 
     def as_str(self: Cell) -> str:
 
@@ -228,6 +520,13 @@ class Cell:
             if self.b:
                 return "true"
             return "false"
+        if self.kind == TYPE_DECIMAL:
+            dec_v: Decimal | None = self.d
+            if dec_v is not None:
+                return str(dec_v)
+            return "0"
+        if self.kind == TYPE_DATETIME:
+            return _format_epoch_ms(self.i)
         return ""
 
     def equals(self: Cell, other: Cell) -> bool:
@@ -249,12 +548,28 @@ class Cell:
             return _int_float_equals(self.i, other.f)
         if self.kind == TYPE_FLOAT and other.kind == TYPE_INT:
             return _int_float_equals(other.i, self.f)
+        if self.kind == TYPE_DECIMAL and other.kind == TYPE_DECIMAL:
+            return self.as_decimal().compare(other.as_decimal()) == 0
+        if self.kind == TYPE_DECIMAL and other.kind == TYPE_INT:
+            return self.as_decimal().compare(decimal_from_int(other.i)) == 0
+        if self.kind == TYPE_INT and other.kind == TYPE_DECIMAL:
+            return decimal_from_int(self.i).compare(other.as_decimal()) == 0
+        if self.kind == TYPE_DECIMAL and other.kind == TYPE_FLOAT:
+            if is_nan(other.f) or is_inf(other.f):
+                return False
+            return self.as_decimal().compare(_parse_decimal_strict(str(other.f))) == 0
+        if self.kind == TYPE_FLOAT and other.kind == TYPE_DECIMAL:
+            if is_nan(self.f) or is_inf(self.f):
+                return False
+            return _parse_decimal_strict(str(self.f)).compare(other.as_decimal()) == 0
         if self.kind != other.kind:
             return False
         if self.kind == TYPE_STR:
             return self.s == other.s
         if self.kind == TYPE_BOOL:
             return self.b == other.b
+        if self.kind == TYPE_DATETIME:
+            return self.i == other.i
         return self.i == other.i and self.s == other.s and self.b == other.b
 
     def compare(self: Cell, other: Cell, nulls_first: bool = False) -> int:
@@ -271,7 +586,7 @@ class Cell:
                 return 1
             return -1
 
-        # Global NaN sorting: NaN sorts last across ALL types (int, float, str, bool, etc.)
+        # Global NaN sorting: NaN sorts last across ALL types (int, float, decimal, str, bool, etc.)
         self_nan: bool = self.kind == TYPE_FLOAT and not (self.f == self.f)
         other_nan: bool = other.kind == TYPE_FLOAT and not (other.f == other.f)
         if self_nan and other_nan:
@@ -301,6 +616,36 @@ class Cell:
 
         if self.kind == TYPE_FLOAT and other.kind == TYPE_INT:
             return -_int_float_compare(other.i, self.f)
+
+        if self.kind == TYPE_DECIMAL and other.kind == TYPE_DECIMAL:
+            return self.as_decimal().compare(other.as_decimal())
+
+        if self.kind == TYPE_DECIMAL and other.kind == TYPE_INT:
+            return self.as_decimal().compare(decimal_from_int(other.i))
+
+        if self.kind == TYPE_INT and other.kind == TYPE_DECIMAL:
+            return decimal_from_int(self.i).compare(other.as_decimal())
+
+        if self.kind == TYPE_DECIMAL and other.kind == TYPE_FLOAT:
+            if is_pos_inf(other.f):
+                return -1
+            if is_neg_inf(other.f):
+                return 1
+            return self.as_decimal().compare(_parse_decimal_strict(str(other.f)))
+
+        if self.kind == TYPE_FLOAT and other.kind == TYPE_DECIMAL:
+            if is_pos_inf(self.f):
+                return 1
+            if is_neg_inf(self.f):
+                return -1
+            return _parse_decimal_strict(str(self.f)).compare(other.as_decimal())
+
+        if self.kind == TYPE_DATETIME and other.kind == TYPE_DATETIME:
+            if self.i < other.i:
+                return -1
+            if self.i > other.i:
+                return 1
+            return 0
 
         if self.kind == TYPE_STR and other.kind == TYPE_STR:
             if self.s < other.s:
@@ -338,6 +683,31 @@ def cell_str(s: str) -> Cell:
 
 def cell_bool(b: bool) -> Cell:
     return Cell(TYPE_BOOL, 0, 0.0, "", b)
+
+def cell_decimal(d: Decimal) -> Cell:
+    return Cell(TYPE_DECIMAL, 0, 0.0, "", False, d)
+
+def cell_decimal_str(text: str) -> Cell:
+    return cell_decimal(_parse_decimal_strict(text))
+
+def cell_datetime_ms(epoch_ms: int) -> Cell:
+    return Cell(TYPE_DATETIME, epoch_ms, 0.0, "", False, None)
+
+def cell_datetime(dt: DateTime) -> Cell:
+    return cell_datetime_ms(dt.to_epoch_ms())
+
+def cell_date(year: int, month: int, day: int) -> Cell:
+    if month < 1 or month > 12 or day < 1 or day > 31:
+        raise TypeConversionError("invalid calendar date: " + str(year) + "-" + str(month) + "-" + str(day))
+    dt: DateTime = DateTime(year, month, day, 0, 0, 0)
+    ms: int = dt.to_epoch_ms()
+    rt: DateTime = from_epoch_ms(ms)
+    if rt.year != year or rt.month != month or rt.day != day:
+        raise TypeConversionError("invalid calendar date: " + str(year) + "-" + str(month) + "-" + str(day))
+    return cell_datetime_ms(ms)
+
+def cell_datetime_str(text: str) -> Cell:
+    return cell_datetime_ms(parse_datetime_ms(text))
 
 def is_nan(f: float) -> bool:
     return not (f == f)
@@ -393,6 +763,12 @@ def parse_cell(text: str, target_type: int, blank_is_missing: bool = True) -> Ce
         if text == "false" or text == "False" or text == "0" or text == "no":
             return cell_bool(False)
         raise TypeConversionError("cannot parse '" + text + "' as bool")
+
+    if target_type == TYPE_DECIMAL:
+        return cell_decimal_str(text)
+
+    if target_type == TYPE_DATETIME:
+        return cell_datetime_str(text)
 
     if target_type == TYPE_STR:
         return cell_str(text)

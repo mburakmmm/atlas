@@ -5,6 +5,73 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-11-15
+
+### Added & Improved
+- **Stable Production v1.0.0 Release (`nox.json`, `atlas.nox`, `atlas_fast.nox`, `main.nox`)**:
+  - Finalized `nox.json` (`"version": "1.0.0"`, `"source": "nox"`) and audited all public exports across `atlas.nox` and `atlas_fast.nox`.
+  - Added `ResourceLimitError` and `UnsupportedFeatureError` to `errors.nox` and re-exported them in `atlas.nox`, completing the `AGENTS.md` §13 error hierarchy.
+  - Updated cross-platform CI (`.github/workflows/ci.yml`) and Release Gate (`.github/workflows/release.yml`) workflows to type-check `atlas.nox`, `atlas_fast.nox`, and `main.nox`, run all **47** test suites, verify the expanded QBE & LLVM cross-backend test matrix, and execute both window and parallel benchmarks.
+  - Updated `README.md`, `docs/api.md`, `docs/capabilities.md`, `docs/roadmap.md`, and `docs/compatibility.md` for `v1.0.0`.
+
+## [0.11.0] - 2026-11-15
+
+### Added & Improved
+- **Opt-In Desktop Turbo Module (`atlas_fast.nox` — `noxclibs`)**:
+  - Created standalone `atlas_fast.nox` keeping core `atlas.nox` 100% free of `noxclibs.a` for freestanding/minimal targets:
+    - **`nox.yyjson`**: `table_from_json_fast`, `table_from_json_relaxed` (comments + trailing commas), `table_from_json5` (unquoted keys + single quotes), `read_json_file_fast`, `read_json_file_fast_safe` with exact 64-bit integer, `TYPE_DECIMAL`, and `TYPE_DATETIME` preservation.
+    - **`nox.xxhash`**: `cell_xxh3_64`, `row_xxh3_64`, `row_xxh3_128_hex`, and collision-safe `dedup_table_fast` / `dedup_all_fast` with type-prefixed canonical keys and Decimal normalization.
+    - **`nox.pcre2`**: `compile_pcre2`, `filter_pcre2`, `filter_pcre2_compiled`, and `replace_pcre2` with JIT compilation support and `PCRE2_IGNORECASE` / `PCRE2_MULTILINE` / `PCRE2_DOTALL` / `PCRE2_EXTENDED` flags.
+    - **High-Speed Compression (`nox.lz4`, `nox.zstd.compress`, `nox.brotli`)**: `write_csv_lz4`, `read_csv_lz4`, `write_json_lz4`, `read_json_lz4`, `write_csv_zst_fast`, `read_csv_zst_fast` (interoperable with portable `atlas.read_csv_zst`), `write_json_zst_fast`, `read_json_zst_fast`, `decompress_brotli_text`, `read_csv_br`, `read_json_br`.
+- **Typed `enum` / `match` Modernization & $O(1)$ Schema Lookup (`values.nox`, `expr.nox`, `schema.nox`)**:
+  - Added `enum CellKind` (`Null`, `Int`, `Float`, `Str`, `Bool`, `Decimal`, `DateTime`) and `enum ExprOp` (`Eq` .. `EqCi`) with exhaustive `match / case` converters and `Cell.cell_kind()`, `Cell.type_name()`, `Expr.expr_op()`, `Expr.op_name()` while preserving 100% backward compatibility with `TYPE_*` and `OP_*` integer constants.
+  - Upgraded `Schema` with `col_index_map: dict[str, int]` for $O(1)$ `index_of` / `has_column` and `nox.collections.Set[str]` in `drop_columns`.
+- **`@dataclass` + `@derive("json", "order", "copy")` Row Interop (`json_adapter.nox`, `examples/dataclass_workflow.nox`)**:
+  - Added `table_to_json_rows(t)` and `table_from_json_rows(json_objects, explicit_schema)` for seamless round-trip conversion between `@dataclass @derive("json", "order", "copy")` records and `Table` rows, plus `prop_json_rows_roundtrip` in `tests/property_test.nox`.
+- **Test Suite Scale**:
+  - Total test suites: **47** (added `tests/fast_adapter_test.nox` and `tests/dataclass_interop_test.nox`), passing 100% across LLVM and QBE.
+
+## [0.10.0] - 2026-11-15
+
+### Added & Improved
+- **Exact Base-10 Decimal Column Type (`TYPE_DECIMAL = 5`, `values.nox`, `stats.nox`, `table.nox`, `groupby.nox`, `window.nox`, `reshape.nox`, `streaming.nox`, `json_adapter.nox`, `sql_adapter.nox`)**:
+  - Integrated `nox.decimal.Decimal` as first-class `TYPE_DECIMAL` cells (`cell_decimal`, `cell_decimal_str`, `Cell.as_decimal`) for exact financial and accounting math without binary floating-point rounding drift (`0.10 + 0.20 == 0.30`).
+  - Added `stat_sum_decimal`, `stat_mean_decimal`, `Table.sum_decimal`, `Table.mean_decimal`, `StreamingCsvReader.sum_decimal`, and Decimal support across `GroupBy` (`agg_sum`, `agg_mean`), `StreamingGroupedTable`, `WindowContext` (`with_cumulative_sum`, `with_moving_average`), `pivot_table`, `melt`, and SQL DDL (`NUMERIC` / `DECIMAL(38, 10)`).
+  - Canonical hash-key normalization (`key_encoding.nox`) ensures `10.00` (Decimal), `10` (Int), and `10.0` (Float) share identical group/join keys while preserving full precision for non-dyadic and >53-bit decimals (`D:<normalized>`).
+- **DateTime & Timezone Support (`TYPE_DATETIME = 6`, `TYPE_DATE = 6`, `values.nox`, `temporal.nox`, `expr.nox`)**:
+  - Added UTC epoch-millisecond `TYPE_DATETIME` / `TYPE_DATE` cells (`cell_datetime`, `cell_datetime_ms`, `cell_date`, `cell_datetime_str`, `parse_datetime_ms`) with strict ISO-8601 date/timestamp/offset parsing and Hinnant calendar round-trip validation.
+  - Added `temporal.nox` (`timezone_is_supported`, `datetime_utc_offset`, `datetime_to_local`, `datetime_from_local`, `datetime_format_iso`, `table_parse_datetime`, `table_format_datetime_iso`) with universal `"UTC"` support and `nox.timezone.is_supported()` gating for IANA timezone databases.
+- **Portable Compressed & Archive Dataset Adapters (`archive.nox`)**:
+  - Added `.csv.gz`, `.json.gz`, `.delim.gz` read/write (`compress_gzip_text`, `decompress_gzip_text`, `read_csv_gz`, `write_csv_gz`, `read_json_gz`, `write_json_gz`, plus `*_safe` path-confined variants).
+  - Added portable `.csv.zst` and `.json.zst` decompression via pure-Zig `nox.zstd.decompress`.
+  - Added multi-table `.zip` (`pack_zip_tables`, `write_zip_tables`, `unpack_zip_tables`, `read_zip_tables`) and `.tar.gz` (`pack_tar_tables`, `write_tar_gz_tables`, `unpack_tar_tables`, `read_tar_gz_tables`) bundle adapters using binary-safe `compress_gzip_bytes`/`decompress_gzip_bytes` and strict archive entry path-traversal guards.
+- **Shared-Nothing Deterministic Parallel Execution (`parallel_exec.nox`, `io.nox`, `table.nox`, `groupby.nox`, `window.nox`)**:
+  - Added opt-in `parallel: bool = False` execution to `Table.filter`, `GroupedTable.aggregate` / `agg`, and `WindowContext`, plus `read_csv_files_parallel` and `read_csv_files_concat_parallel`.
+  - Constructed disjoint, per-worker deep-cloned packets (`_FilterSlicePacket`, `_AggSlicePacket`, `_SortPartSlicePacket`, `_ReadCsvPacket`) and re-entrant CSV parsing to eliminate cross-thread ARC reference-count races and `nox.csv` global state collisions across both LLVM and QBE backends.
+- **Test Suite Scale**:
+  - Total test suites: **45** (`decimal_test`, `datetime_timezone_test`, `archive_test`, `parallel_test`, plus expanded `property_test`), passing 100% across LLVM and QBE.
+
+## [0.9.7] - 2026-11-15
+
+### Added & Improved
+- **JSON Int64 Precision & Native Tape Key Lookup (`json_adapter.nox`)**:
+  - Migrated integer detection and parsing to `nox.json.as_int` and `nox.json.number_text`, preserving exact 64-bit signed integers above $2^{53}$ (e.g. `9007199254740993`) and rejecting out-of-range integers explicitly with `JsonImportError` rather than truncating silently via `float`.
+  - Replaced linear object key scanning with `nox.json.get_or_null` native tape lookup and fixed symmetric `TYPE_INT` / `TYPE_FLOAT` numeric promotion during schema discovery regardless of row order.
+- **Path-Confined I/O & Atomic Writes (`io.nox`, `streaming.nox`, `atlas.nox`)**:
+  - Added optional `atomic: bool = False` (`nox.fs.write_string_atomic`) to file write helpers.
+  - Added `nox.path.safe_join`-backed confinement helpers (`resolve_safe_path`, `read_*_file_safe`, `write_*_file_safe` with `atomic=True` default, and `open_csv_stream_safe`) rejecting `..` and root-escaping paths.
+- **Slice-Based Delimited Parsing & Multi-Char Delimiter Safety (`delimited.nox`)**:
+  - Replaced character-by-character string concatenation in `parse_delimited` with slice-based segment accumulation + `nox.strings.join`.
+  - Rewrote `dump_delimited` using `nox.strings.contains`, `nox.strings.replace`, and `nox.strings.join`, and fixed a multi-character delimiter boundary bug caught by `nox.property` where fields containing partial delimiter prefixes (e.g. `"|"` under delimiter `"||"`) were left unquoted.
+- **Portable Regex, Suffix, and Case-Insensitive Filters & Validation (`expr.nox`, `validation.nox`, `atlas.nox`)**:
+  - Added `col_ends_with`, `col_regex_match` (`nox.regex`), `col_eq_ignore_case`, and `rule_regex`.
+  - Upgraded `is_valid_email_str` to zero-allocation `nox.strings.byte_at` scanning and reduced `TableValidator.filter_valid` / `filter_invalid` from quadratic scanning to $O(N)$ dict membership checks.
+- **Seeded Property-Based Test Suite (`tests/property_test.nox` & `tests/nox_2_1_features_test.nox`)**:
+  - Added shrinking property tests (`nox.property`) for delimited round-trip, JSON int64 precision round-trip, stable sort ordering, GroupBy conservation, and WindowContext/melt invariants.
+  - Updated `docs/capabilities.md` audit baseline from `noxc 2.0.86` to `noxc 2.1.186`.
+- **Test Suite Scale**:
+  - Total test suites: **41**, verified across QBE and LLVM backends.
+
 ## [0.9.6] - 2026-11-02
 
 ### Added & Improved
