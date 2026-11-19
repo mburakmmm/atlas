@@ -506,3 +506,16 @@ from atlas_fast import write_csv_lz4, read_csv_lz4, write_json_lz4, read_json_lz
 from atlas_fast import write_csv_zst_fast, read_csv_zst_fast, write_json_zst_fast, read_json_zst_fast
 from atlas_fast import decompress_brotli_text, read_csv_br, read_json_br
 ```
+
+## 20. Variadic Convenience Helpers & Type Aliases (`atlas.nox` — v1.2.0 / Nox 2.2)
+
+```nox
+import atlas
+from atlas import TableRow, select_cols, drop_cols, concat_all
+
+# Explicit type alias (`list[Cell]`) and variadic ergonomics (alongside existing list-based methods)
+r1: TableRow = [cell_int(1), cell_str("Alice"), cell_float(95.0)]
+projected: Table = select_cols(table, "id", "name")
+trimmed: Table = drop_cols(table, "internal_note")
+combined: Table = concat_all(t1, t2, t3)
+```

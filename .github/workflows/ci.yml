@@ -44,17 +44,20 @@ jobs:
           irm https://noxlang.com/install.ps1 | iex
           echo "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Verify Nox Toolchain
+      - name: Verify Nox Toolchain & Supply-Chain SBOM
         run: |
           noxc version
+          noxc sbom .
 
-      - name: Typecheck Atlas Package, Fast Adapters & CLI Entry
+      - name: Typecheck Atlas Package, Fast Adapters & Strict Concurrency Lint
         run: |
           noxc check atlas.nox
+          noxc check --strict-spawn-shared atlas.nox
           noxc check atlas_fast.nox
+          noxc check --strict-spawn-shared atlas_fast.nox
           noxc check main.nox
 
-      - name: Run Test Suite (All 47 Suites)
+      - name: Run Test Suite (All 48 Suites)
         run: |
           noxc test
 
@@ -72,11 +75,13 @@ jobs:
           noxc test --backend qbe tests/property_test.nox
           noxc test --backend qbe tests/dataclass_interop_test.nox
           noxc test --backend qbe tests/fast_adapter_test.nox
+          noxc test --backend qbe tests/nox_2_2_features_test.nox
 
       - name: Run Performance Benchmarks
         run: |
           noxc run benchmarks/benchmark_window.nox
           noxc run benchmarks/benchmark_parallel.nox
+          noxc run benchmarks/benchmark_json.nox
 
       - name: Run Representative Examples
         run: |

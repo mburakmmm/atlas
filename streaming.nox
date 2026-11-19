@@ -1008,7 +1008,7 @@ def open_csv_stream_safe(base_dir: str, relative_path: str, chunk_rows: int = 10
     try:
         safe_path = nox.path.safe_join(base_dir, relative_path)
     except PathError as pe:
-        raise AtlasError("unsafe stream file path rejected ('" + relative_path + "' under '" + base_dir + "'): " + str(pe))
+        raise AtlasError("unsafe stream file path rejected ('" + relative_path + "' under '" + base_dir + "'): " + str(pe)) from pe
     return StreamingCsvReader(safe_path, options, explicit_schema, chunk_rows)
 
 def stream_count(path: str, options: CsvOptions | None = None) -> int:

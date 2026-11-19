@@ -8,10 +8,10 @@ Atlas is a lightweight, zero-dependency, statically typed tabular processing lib
 
 [![CI Matrix](https://github.com/mburakmmm/atlas/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/atlas/actions/workflows/ci.yml)
 [![Release Gate](https://github.com/mburakmmm/atlas/actions/workflows/release.yml/badge.svg)](https://github.com/mburakmmm/atlas/actions/workflows/release.yml)
-[![Version](https://img.shields.io/badge/version-v1.0.0-orange.svg)](nox.json)
+[![Version](https://img.shields.io/badge/version-v1.2.0-orange.svg)](nox.json)
 [![Platform Support](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#-cross-platform--compatibility-matrix)
-[![Tests](https://img.shields.io/badge/tests-47%20passed%20%28100%25%29-brightgreen.svg)](tests/)
-[![Compiler](https://img.shields.io/badge/noxc-2.1.186-purple.svg)](https://github.com/mburakmmm/nox-lang)
+[![Tests](https://img.shields.io/badge/tests-48%20passed%20%28100%25%29-brightgreen.svg)](tests/)
+[![Compiler](https://img.shields.io/badge/noxc-2.2.38-purple.svg)](https://github.com/mburakmmm/nox-lang)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
@@ -282,7 +282,7 @@ pro_orders: Table = filter_pcre2(dedup_table_fast(t_orders, ["order_id"]), "sku"
 
 ## ⚡ Performance Benchmarks
 
-All benchmarks measured with `noxc 2.1.186` on macOS Darwin (Apple Silicon) and verified for cross-platform parity on Linux and Windows.
+All benchmarks measured with `noxc 2.2.38` on macOS Darwin (Apple Silicon) and verified for cross-platform parity on Linux and Windows.
 
 ### 1. Window Pipeline Benchmark (100,000 Synthetic Rows)
 *Source: [`benchmarks/benchmark_window.nox`](benchmarks/benchmark_window.nox)*
@@ -317,9 +317,9 @@ Atlas is continuously tested on every commit and pull request via GitHub Actions
 
 | Platform | Architecture | Toolchain / Backend | Status |
 | :--- | :--- | :--- | :---: |
-| **Ubuntu Linux** | x86_64, aarch64 | `noxc 2.1.186` (LLVM & QBE backends) | ✅ Passing |
-| **macOS** | Apple Silicon (arm64), Intel (x86_64) | `noxc 2.1.186` (LLVM & QBE backends) | ✅ Passing |
-| **Windows 10/11** | x86_64, ARM64 | `noxc 2.1.186` (MSVC / Windows POSIX emulation) | ✅ Passing |
+| **Ubuntu Linux** | x86_64, aarch64 | `noxc 2.2.38` (LLVM & QBE backends) | ✅ Passing |
+| **macOS** | Apple Silicon (arm64), Intel (x86_64) | `noxc 2.2.38` (LLVM & QBE backends) | ✅ Passing |
+| **Windows 10/11** | x86_64, ARM64 | `noxc 2.2.38` (MSVC / Windows POSIX emulation) | ✅ Passing |
 
 ### Cross-Platform Engineering Invariants
 - **Line Ending Agnostic**: Accepts both CRLF (`\r\n`) and LF (`\n`) seamlessly; serialization defaults to standard LF.
@@ -352,7 +352,7 @@ Comprehensive guides and architectural specifications are located in the [`docs/
 
 ## 🧪 Automated Test Suite
 
-Atlas maintains a **100% passing automated test suite** across **47 specialized test suites**:
+Atlas maintains a **100% passing automated test suite** across **48 specialized test suites** (verified with `noxc check --strict-spawn-shared` and both LLVM & QBE backends):
 
 ```bash
 noxc test

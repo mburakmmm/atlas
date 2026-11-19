@@ -1,5 +1,12 @@
 # stats.nox — Numerically stable summary statistics for Atlas.
 
+__all__: list[str] = [
+    "stat_count", "stat_count_non_missing", "stat_count_missing", "stat_sum",
+    "stat_sum_int", "stat_sum_decimal", "stat_mean_decimal", "stat_mean",
+    "stat_variance", "stat_std", "stat_median", "stat_min", "stat_max",
+    "stat_quantile", "stat_iqr"
+]
+
 import nox.mathx
 import nox.decimal
 from nox.decimal import Decimal, from_int as decimal_from_int

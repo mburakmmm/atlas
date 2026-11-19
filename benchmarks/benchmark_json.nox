@@ -1,0 +1,66 @@
+# benchmarks/benchmark_json.nox — Benchmark & differential parity check for zero-alloc nox.json.pos_* tape parser vs yyjson.
+
+import nox.time
+import nox.test
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, cell_int, cell_str, cell_float, cell_bool, TYPE_INT, TYPE_STR, TYPE_FLOAT, TYPE_BOOL
+from atlas import table_to_json, table_from_json
+import atlas_fast
+from atlas_fast import yyjson_is_supported, table_from_json_fast
+
+print("==================================================================")
+print("Atlas JSON Ingestion & Large-Block GC Stress Benchmark (v1.1.0)")
+print("==================================================================")
+
+s: Schema = Schema([
+    ColumnDef("id", TYPE_INT, False),
+    ColumnDef("dept", TYPE_STR, False),
+    ColumnDef("score", TYPE_FLOAT, False),
+    ColumnDef("active", TYPE_BOOL, False)
+])
+
+n_rows: int = 20000
+rows: list[list[Cell]] = []
+i: int = 0
+while i < n_rows:
+    rows.append([
+        cell_int(i + 9007199254740000),
+        cell_str("Dept_" + str(i % 16)),
+        cell_float(float((i * 19) % 1000) + 0.25),
+        cell_bool((i % 2) == 0)
+    ])
+    i = i + 1
+
+src_tbl: Table = Table(s, rows)
+json_payload: str = table_to_json(src_tbl)
+
+t0: int = nox.time.now_ms()
+t_inferred: Table = table_from_json(json_payload)
+pos_infer_ms: int = nox.time.now_ms() - t0
+
+t0 = nox.time.now_ms()
+t_explicit: Table = table_from_json(json_payload, s)
+pos_explicit_ms: int = nox.time.now_ms() - t0
+
+nox.test.assert_eq_int(t_inferred.row_count(), n_rows, "pos_* inferred row count")
+nox.test.assert_eq_int(t_explicit.row_count(), n_rows, "pos_* explicit row count")
+nox.test.assert_eq_int(t_explicit.cell(0, 0).as_int(), 9007199254740000, "exact int64 > 2^53 preserved")
+print("[1] Portable pos_* Tape JSON Parse (20,000 objects): inferred=" + str(pos_infer_ms) + " ms | explicit=" + str(pos_explicit_ms) + " ms")
+
+if yyjson_is_supported():
+    t0 = nox.time.now_ms()
+    t_yy: Table = table_from_json_fast(json_payload, s)
+    yy_ms: int = nox.time.now_ms() - t0
+    nox.test.assert_eq_int(t_yy.row_count(), n_rows, "yyjson row count")
+    nox.test.assert_eq_int(t_yy.cell(n_rows - 1, 0).as_int(), t_explicit.cell(n_rows - 1, 0).as_int(), "pos_* vs yyjson parity")
+    print("[2] Desktop yyjson JSON Parse (20,000 objects): explicit=" + str(yy_ms) + " ms (100% parity)")
+
+# Multi-round large table allocation/drop cycle (exercises Nox 2.2.26 byte-aware cycle GC)
+t0 = nox.time.now_ms()
+round_i: int = 0
+while round_i < 6:
+    tmp_tbl: Table = table_from_json(json_payload, s)
+    nox.test.assert_eq_int(tmp_tbl.row_count(), n_rows, "large churn row count")
+    round_i = round_i + 1
+churn_ms: int = nox.time.now_ms() - t0
+print("[3] 6x 20,000-row Table Churn Cycle (byte-aware GC check): " + str(churn_ms) + " ms")

@@ -1,6 +1,6 @@
 # Nox Standard Library Capabilities & Verification Audit
 
-Audit performed against `noxc 2.1.186` on macOS (darwin) (previously audited against `noxc 2.0.86`).
+Audit performed against `noxc 2.2.38` on macOS (darwin) (previously audited against `noxc 2.0.86` and `noxc 2.1.186`).
 
 ## 1. Verified Stdlib Primitives
 
@@ -11,8 +11,8 @@ Audit performed against `noxc 2.1.186` on macOS (darwin) (previously audited aga
 
 ### `nox.json`
 - `parse(text: str) -> JsonValue`: Single-pass lazy tape-backed JSON parser (Zig runtime).
-- Precision & Key Lookup (`2.1.7+`): `as_int`, `number_text`, `get`, `get_or_null` preserve full 64-bit signed integer precision above $2^{53}$ and perform native tape key searches without materializing all sibling keys.
-- Accessors: `is_null`, `is_bool`, `is_number`, `is_string`, `is_array`, `is_object`, `as_bool`, `as_number`, `as_string`, `array_len`, `array_get`, `object_len`, `object_key`, `object_value`.
+- Zero-Allocation Position Tape Navigation (`2.2.4+`): `pos_root`, `pos_len`, `pos_at`, `pos_kind`, `pos_key`, `pos_key_is`, `pos_find`, `pos_get`, `pos_bool`, `pos_number`, `pos_int`, `pos_str`, `pos_dump`. `json_adapter.nox` uses `pos_*` directly in `table_from_json` / `table_from_json_rows` to avoid per-cell `JsonValue` and key string allocations.
+- Precision & Key Lookup (`2.1.7+`): `as_int` / `pos_int`, `number_text` / `pos_dump`, `get`, `get_or_null` preserve full 64-bit signed integer precision above $2^{53}$ and perform native tape key searches without materializing sibling keys.
 - `JsonWriter`: Incremental memory-buffered JSON construction with $O(N)$ concatenation and `write_int` for lossless 64-bit integer serialization.
 
 ### `nox.mathx`
@@ -240,6 +240,8 @@ CSV File -> Streaming Reader -> Filter -> Select -> Online Hash GroupBy -> Aggre
 - **Opt-In Desktop Turbo Module (`atlas_fast.nox`)**:
   - Kept strictly separate from portable `atlas.nox` so core `atlas.nox` never links `noxclibs.a`.
   - Wraps `nox.yyjson` (strict, relaxed with comments/trailing commas, and JSON5 with unquoted keys/single quotes, preserving 64-bit integers and `TYPE_DECIMAL`/`TYPE_DATETIME`), `nox.xxhash` (`cell_xxh3_64`, `row_xxh3_64`, `row_xxh3_128_hex`, collision-safe `dedup_table_fast` / `dedup_all_fast`), `nox.pcre2` (`compile_pcre2`, `filter_pcre2`, `filter_pcre2_compiled`, `replace_pcre2` with JIT support), `nox.lz4` (`.csv.lz4`, `.json.lz4`), `nox.zstd.compress` (`.csv.zst`, `.json.zst` interoperable with portable `atlas.read_csv_zst`), and `nox.brotli` (`.csv.br`, `.json.br` decompression).
-- **Verified `noxc 2.1.186` CLI Subcommands**:
-  - Verified subcommands: `build`, `run`, `test`, `check`, `expand`, `bindgen`, `explain`, `fmt`, `init`, `fetch`, `update`, `search`, `add`, `delete`, `publish`, `login`, `logout`, `whoami`, `upgrade`, `install`, `uninstall`, `list`, `refresh`, `cache prune`, `version`.
-  - Note: `noxc sbom` and `noxc sign` are not subcommands in `noxc 2.1.186` (`unknown command or file`); per `AGENTS.md` Principle 9 ("Honest compatibility"), release automation uses verified `noxc check`, `noxc test`, and tag-version validation in `.github/workflows/release.yml`.
+- **Verified `noxc 2.2.38` CLI, Language, & Supply-Chain Baseline (v1.0.1 – v1.2.0)**:
+  - Subcommands verified: `build`, `run`, `test`, `check` (including `--strict-spawn-shared`), `expand`, `bindgen`, `explain [--release]`, `fmt`, `init`, `fetch`, `update`, `search`, `add`, `delete`, `publish`, `login`, `logout`, `whoami`, `upgrade`, `install`, `uninstall`, `list`, `refresh`, `cache prune`, `version`, plus CycloneDX 1.5 SBOM generation (`noxc sbom .` -> `nox:native=false`, `nox:bin=true`) and package signing (`noxc sign keygen <name>` + `noxc publish --key`).
+  - **Module Visibility (`__all__` in `2.2.5`)**: `__all__` in `noxc 2.2.38` permits functions, classes, and enums defined directly in that module (blocking external access to unlisted symbols, including module-level constants/`type` aliases if `__all__` is declared). Accordingly, 18 clean Atlas core modules declare `__all__` to hide `_...` helpers, while constant/facade modules (`values.nox`, `expr.nox`, `groupby.nox`, `validation.nox`, `atlas_fast.nox`, `atlas.nox`) preserve open re-exports and constants.
+  - **ARC/ASAP & GC (`2.2.9`–`2.2.38`)**: Atlas's hot-path representation (`Cell.kind: int`, `Expr.op: int`) remains empirically optimal under `noxc 2.2.38` (D1.3/D1.4: empty enum variant allocation ~3.2 ns vs scalar `int` jump tables ~0.4–1 ns). All list-bucket mutations strictly write back local copies (`parent[idx] = list`) per D1.2 (`v2.2.33`/`v2.2.37`). `noxc check --strict-spawn-shared` passes with zero warnings/errors across both `atlas.nox` and `atlas_fast.nox`.
+  - **Structured Exception Chaining (`raise ... from e` in `2.2.22`)**: Lower-level stdlib errors (`JsonError`, `PathError`, `GzipError`, `ZstdError`, `ZipError`, `TarError`, `TimezoneError`, `YyjsonError`, `Pcre2Error`, `Lz4Error`, `BrotliError`, `ValueError`, `DecimalError`) preserve `.cause` across Atlas exception wrappers.

@@ -1,5 +1,7 @@
 # concat.nox — Vertical row concatenation and horizontal column concatenation for Atlas.
 
+__all__: list[str] = ["concat_rows", "concat_cols"]
+
 import errors
 from errors import ShapeError, SchemaError
 import values

@@ -2,13 +2,13 @@
 
 import nox.test
 import values
-from values import Cell, cell_int, cell_str, cell_float, cell_null, TYPE_INT, TYPE_FLOAT, TYPE_STR
+from values import Cell, cell_int, cell_str, cell_float, cell_null, cell_decimal_str, cell_datetime_str, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_DECIMAL, TYPE_DATETIME
 import schema
 from schema import Schema, ColumnDef
 import table
 from table import Table
 import validation
-from validation import TableValidator, ValidationReport, ValidationError, rule_non_empty, rule_range, rule_length, rule_allowed_values, rule_email, rule_type
+from validation import TableValidator, ValidationReport, ValidationError, ColumnRule, rule_non_empty, rule_range, rule_length, rule_allowed_values, rule_email, rule_type
 
 cols: list[ColumnDef] = [
     ColumnDef("id", TYPE_INT, False),
@@ -83,11 +83,27 @@ rep_strict: ValidationReport = v_strict.validate(t_strict)
 assert not rep_strict.is_valid()
 nox.test.assert_eq_int(rep_strict.error_count(), 1, "1 error caught for non-numeric value in range")
 
-# 6. rule_type test
+# 6. rule_type test (including Decimal and DateTime labels)
 v_type: TableValidator = TableValidator()
 v_type.add_rule(rule_type("val", TYPE_INT))
 rep_type: ValidationReport = v_type.validate(t_strict)
 assert not rep_type.is_valid()
 assert "type mismatch" in rep_type.errors[0].message
+
+r_dec: ColumnRule = rule_type("amount", TYPE_DECIMAL)
+r_dt: ColumnRule = rule_type("created_at", TYPE_DATETIME)
+assert "decimal" in r_dec.rule_desc
+assert "datetime" in r_dt.rule_desc
+
+s_dd: Schema = Schema([ColumnDef("amount", TYPE_DECIMAL, True), ColumnDef("created_at", TYPE_DATETIME, True)])
+t_dd: Table = Table(s_dd, [
+    [cell_decimal_str("12.34"), cell_datetime_str("2026-11-19T12:00:00Z")],
+    [cell_str("bad"), cell_int(123)]
+])
+v_dd: TableValidator = TableValidator()
+v_dd.add_rule(r_dec)
+v_dd.add_rule(r_dt)
+rep_dd: ValidationReport = v_dd.validate(t_dd)
+nox.test.assert_eq_int(rep_dd.error_count(), 2, "Decimal and DateTime type rules catch mismatches")
 
 print("validation_test passed")

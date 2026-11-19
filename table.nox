@@ -1,7 +1,10 @@
 # table.nox — In-memory 2D tabular data structure for Atlas.
 
+__all__: list[str] = ["Table", "create_table"]
+
 import nox.decimal
 from nox.decimal import Decimal
+import nox.strings
 import errors
 from errors import ShapeError, ColumnNotFoundError, MissingValueError, SchemaError
 import values
@@ -394,11 +397,10 @@ class Table:
         if num_cols == 0:
             return "+--+\n|  |\n+--+\n"
 
-        col_widths: list[int] = []
+        col_widths: list[int] = [0] * num_cols
         c: int = 0
         while c < num_cols:
-            w: int = len(names[c])
-            col_widths.append(w)
+            col_widths[c] = len(names[c])
             c = c + 1
 
         limit: int = max_rows
@@ -419,38 +421,35 @@ class Table:
                 c = c + 1
             r_idx = r_idx + 1
 
-        border: str = "+"
+        border_parts: list[str] = ["+"]
         c = 0
         while c < num_cols:
-            k: int = 0
-            seg: str = ""
-            while k < col_widths[c] + 2:
-                seg = seg + "-"
-                k = k + 1
-            border = border + seg + "+"
+            border_parts.append(nox.strings.repeat("-", col_widths[c] + 2))
+            border_parts.append("+")
             c = c + 1
-        border = border + "\n"
+        border_parts.append("\n")
+        border: str = nox.strings.join(border_parts, "")
 
-        header_line: str = "|"
+        header_parts: list[str] = ["|"]
         c = 0
         while c < num_cols:
             name: str = names[c]
-            header_line = header_line + " " + name
-            pad: int = col_widths[c] - len(name)
-            k: int = 0
-            while k < pad:
-                header_line = header_line + " "
-                k = k + 1
-            header_line = header_line + " |"
+            pad_h: int = col_widths[c] - len(name)
+            header_parts.append(" ")
+            header_parts.append(name)
+            if pad_h > 0:
+                header_parts.append(nox.strings.repeat(" ", pad_h))
+            header_parts.append(" |")
             c = c + 1
-        header_line = header_line + "\n"
+        header_parts.append("\n")
+        header_line: str = nox.strings.join(header_parts, "")
 
-        out: str = border + header_line + border
+        out_parts: list[str] = [border, header_line, border]
 
         r_idx = 0
         while r_idx < limit:
             row: list[Cell] = self.rows[r_idx]
-            row_line: str = "|"
+            out_parts.append("|")
             c = 0
             while c < num_cols:
                 val: str = row[c].to_string()
@@ -459,22 +458,20 @@ class Table:
                         val = val[:max_col_width - 3] + "..."
                     else:
                         val = val[:max_col_width]
-                row_line = row_line + " " + val
                 pad: int = col_widths[c] - len(val)
-                k: int = 0
-                while k < pad:
-                    row_line = row_line + " "
-                    k = k + 1
-                row_line = row_line + " |"
+                out_parts.append(" ")
+                out_parts.append(val)
+                if pad > 0:
+                    out_parts.append(nox.strings.repeat(" ", pad))
+                out_parts.append(" |")
                 c = c + 1
-            row_line = row_line + "\n"
-            out = out + row_line
+            out_parts.append("\n")
             r_idx = r_idx + 1
 
-        out = out + border
+        out_parts.append(border)
         if len(self.rows) > limit:
-            out = out + "... (" + str(len(self.rows) - limit) + " more rows)\n"
-        return out
+            out_parts.append(f"... ({len(self.rows) - limit} more rows)\n")
+        return nox.strings.join(out_parts, "")
 
     def print_grid(self: Table, max_rows: int = 10, max_col_width: int = 30) -> None:
 
@@ -483,19 +480,10 @@ class Table:
     def print_preview(self: Table, max_rows: int = 10) -> None:
 
         names: list[str] = self.column_names()
-        header_str: str = ""
-        sep_str: str = ""
-        i: int = 0
         n: int = len(names)
-        while i < n:
-            header_str = header_str + names[i]
-            sep_str = sep_str + "---"
-            if i < n - 1:
-                header_str = header_str + " | "
-                sep_str = sep_str + " + "
-            i = i + 1
-        print(header_str)
-        print(sep_str)
+        seps: list[str] = ["---"] * n
+        print(nox.strings.join(names, " | "))
+        print(nox.strings.join(seps, " + "))
 
         limit: int = max_rows
         if limit > len(self.rows):
@@ -503,17 +491,15 @@ class Table:
         r_idx: int = 0
         while r_idx < limit:
             r: list[Cell] = self.rows[r_idx]
-            line: str = ""
+            row_strs: list[str] = []
             c_idx: int = 0
             while c_idx < n:
-                line = line + r[c_idx].to_string()
-                if c_idx < n - 1:
-                    line = line + " | "
+                row_strs.append(r[c_idx].to_string())
                 c_idx = c_idx + 1
-            print(line)
+            print(nox.strings.join(row_strs, " | "))
             r_idx = r_idx + 1
         if len(self.rows) > limit:
-            print("... (" + str(len(self.rows) - limit) + " more rows)")
+            print(f"... ({len(self.rows) - limit} more rows)")
 
     # Relational Join operations
     def join_inner(self: Table, right: Table, on: list[str], suffix_left: str = "_left", suffix_right: str = "_right") -> Table:

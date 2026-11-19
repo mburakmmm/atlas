@@ -1,5 +1,7 @@
 # key_encoding.nox — Canonical hash key encoding for Atlas Join and GroupBy.
 
+__all__: list[str] = ["cell_hash_key", "composite_hash_key"]
+
 import nox.decimal
 from nox.decimal import Decimal
 import values

@@ -5,6 +5,36 @@ All notable changes to the Atlas library are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-19
+
+### Added & Improved
+- **Explicit Module Visibility (`__all__`, Nox `v2.2.5`)**:
+  - Added `__all__: list[str]` across 18 core modules (`errors`, `schema`, `sort`, `stats`, `csv_adapter`, `json_adapter`, `delimited`, `io`, `temporal`, `archive`, `parallel_exec`, `join`, `window`, `reshape`, `concat`, `sql_adapter`, `key_encoding`, `table`) to encapsulate internal `_...` helpers at compile time while keeping constant/facade modules open.
+- **Nox 2.2 Ergonomics (`atlas.nox`, `window.nox`)**:
+  - Added `type TableRow = list[Cell]` module-level alias and non-breaking variadic convenience functions `select_cols(t, *cols)`, `drop_cols(t, *cols)`, and `concat_all(*tables)` in `atlas.nox`.
+  - Updated `WindowContext` null-policy validation to use scalar `match / case` and verified pointer-Optional attribute-path narrowing (`v2.2.37`) and raw regex literals (`r"..."`).
+- **CI, SBOM & Cross-Backend Matrix (`.github/workflows/ci.yml`, `.github/workflows/release.yml`, `tests/nox_2_2_features_test.nox`)**:
+  - Added `tests/nox_2_2_features_test.nox` (total **48** test suites) and added `--strict-spawn-shared`, `noxc sbom .`, `benchmark_json.nox`, and QBE `nox_2_2_features_test` verification to CI and Release Gate.
+
+## [1.1.0] - 2026-11-19
+
+### Added & Improved
+- **Zero-Allocation `nox.json.pos_*` Tape JSON Parser (`json_adapter.nox`)**:
+  - Upgraded `table_from_json` (and `table_from_json_rows`) to traverse parsed JSON documents using `pos_root`, `pos_at`, `pos_kind`, `pos_len`, `pos_find`, `pos_key`, `pos_int`, `pos_number`, `pos_bool`, `pos_str`, and `pos_dump` with $O(1)$ schema key tracking — parsing 20,000 objects in **9 ms** (explicit schema) without per-cell `JsonValue` allocations.
+- **Hot-Loop Concatenation & Pre-Allocation Optimizations (`table.nox`, `parallel_exec.nox`, `benchmarks/benchmark_json.nox`)**:
+  - Rewrote `Table.to_grid_string` and `Table.print_preview` using `nox.strings.repeat`, `[0] * n` / `["---"] * n`, and `nox.strings.join`.
+  - Added `[0] * n` single-allocation pre-allocation in `parallel_exec.sort_partition_indices` and added `benchmarks/benchmark_json.nox` (including 6-round 20,000-row GC churn verification).
+
+## [1.0.1] - 2026-11-19
+
+### Added & Improved
+- **`--strict-spawn-shared` Concurrency Lint Compliance (`parallel_exec.nox`)**:
+  - Isolated per-worker slice inputs inside `_sort_part_slice_worker` so `noxc check --strict-spawn-shared` passes across `atlas.nox`, `atlas_fast.nox`, and `tests/parallel_test.nox` with zero errors.
+- **Structured Exception Chaining (`raise X from Y` / `Exception.cause`, Nox `v2.2.22`)**:
+  - Preserved lower-level `.cause` across wrapped exceptions in `json_adapter.nox`, `io.nox`, `streaming.nox`, `archive.nox`, `temporal.nox`, `atlas_fast.nox`, and `values.nox`.
+- **Schema Validation & Regression Hardening (`validation.nox`, `tests/validation_test.nox`, `tests/parallel_test.nox`, `tests/tsv_test.nox`)**:
+  - Added explicit `"decimal"` and `"datetime"` labels to `validation.rule_type`, verified `D1.2` copy-back list mutations across all core modules, and added concurrent worker overflow exception propagation and CRLF delimited boundary tests.
+
 ## [1.0.0] - 2026-11-15
 
 ### Added & Improved

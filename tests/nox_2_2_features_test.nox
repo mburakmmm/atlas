@@ -1,0 +1,104 @@
+# tests/nox_2_2_features_test.nox — Verification of Nox 2.2.38 integrations in Atlas:
+# raise ... from e (.cause), __all__ visibility, zero-alloc pos_* JSON tape,
+# variadic API (select_cols, drop_cols, concat_all), type alias (TableRow),
+# scalar match, pointer Optional attribute narrowing, and raw strings r"...".
+
+import nox.test
+from nox.test import assert_true, assert_eq_int, assert_eq_str
+import atlas
+from atlas import Table, Schema, ColumnDef, Cell, TableRow, cell_null, cell_int, cell_str, cell_decimal_str, TYPE_INT, TYPE_STR, TYPE_DECIMAL, TYPE_DATETIME
+from atlas import AtlasError, CsvImportError, JsonImportError, TypeConversionError
+from atlas import table_from_json, table_to_json, resolve_safe_path, decompress_gzip_text, datetime_to_local, parse_cell
+from atlas import col_regex_match, select_cols, drop_cols, concat_all, WindowContext
+
+def test_exception_chaining_cause() -> None:
+    # 1. JSON parse error preserves underlying JsonError.cause
+    caught_json: bool = False
+    try:
+        bad_t := table_from_json("{invalid json")
+    except JsonImportError as je:
+        caught_json = True
+        assert_true(len(je.cause) > 0, "JsonImportError preserves non-empty cause")
+    assert_true(caught_json, "invalid JSON raises JsonImportError")
+
+    # 2. Path traversal error preserves underlying PathError.cause
+    caught_path: bool = False
+    try:
+        _p := resolve_safe_path("data_dir", "../secret.csv")
+    except AtlasError as ae:
+        caught_path = True
+        assert_true(len(ae.cause) > 0, "AtlasError preserves PathError.cause")
+    assert_true(caught_path, "path traversal raises AtlasError")
+
+    # 3. Gzip decode error preserves underlying GzipError.cause
+    caught_gz: bool = False
+    try:
+        _raw := decompress_gzip_text("not_gzip_bytes")
+    except CsvImportError as ce:
+        caught_gz = True
+        assert_true(len(ce.cause) > 0, "CsvImportError preserves GzipError.cause")
+    assert_true(caught_gz, "invalid gzip raises CsvImportError")
+
+    # 4. parse_cell int conversion preserves ValueError.cause
+    caught_val: bool = False
+    try:
+        _c := parse_cell("not_an_int", TYPE_INT)
+    except TypeConversionError as te:
+        caught_val = True
+        assert_true(len(te.cause) > 0, "TypeConversionError preserves ValueError.cause")
+    assert_true(caught_val, "invalid int string raises TypeConversionError")
+
+def test_variadic_type_alias_raw_regex_and_narrowing() -> None:
+    s := Schema([
+        ColumnDef("id", TYPE_INT, False),
+        ColumnDef("code", TYPE_STR, False),
+        ColumnDef("amount", TYPE_DECIMAL, True)
+    ])
+    r1: TableRow = [cell_int(1), cell_str("INV-2026-01"), cell_decimal_str("100.50")]
+    r2: TableRow = [cell_int(2), cell_str("ORD-2026-02"), cell_decimal_str("49.25")]
+    r3: TableRow = [cell_int(3), cell_str("INV-2025-99"), cell_null()]
+
+    t1 := Table(s, [r1, r2])
+    t2 := Table(s, [r3])
+
+    # Variadic concat_all, select_cols, drop_cols
+    merged := concat_all(t1, t2)
+    assert_eq_int(merged.row_count(), 3, "concat_all combines 3 rows")
+
+    sel := select_cols(merged, "code", "amount")
+    assert_eq_int(sel.column_count(), 2, "select_cols keeps 2 cols")
+    assert_eq_str(sel.column_names()[0], "code", "select_cols col 0")
+
+    drp := drop_cols(merged, "id")
+    assert_eq_int(drp.column_count(), 2, "drop_cols leaves 2 cols")
+
+    # Raw string literal regex pattern r"..."
+    inv := merged.filter(col_regex_match("code", r"^INV-\d{4}-\d+$"))
+    assert_eq_int(inv.row_count(), 2, "raw regex r'...' matched 2 INV rows")
+
+    # Pointer Optional attribute narrowing (v2.2.37) directly on c1.d
+    c1 := r1[2]
+    if c1.d != None:
+        assert_eq_str(str(c1.d), "100.50", "pointer attribute narrowing on Cell.d")
+    else:
+        assert_true(False, "c1.d should not be None")
+
+    # Scalar match in WindowContext null_policy (propagate / skip / null_row)
+    w_prop := WindowContext(merged, None, ["id"], True).with_cumulative_sum("amount", "cs_prop", False, "propagate").to_table()
+    assert_true(w_prop.cell_by_name(2, "cs_prop").is_missing(), "scalar match propagate yields null after missing")
+
+def test_pos_tape_json_mixed_schema_and_types() -> None:
+    s := Schema([
+        ColumnDef("id", TYPE_INT, False),
+        ColumnDef("amount", TYPE_DECIMAL, False),
+        ColumnDef("ts", TYPE_DATETIME, False)
+    ])
+    payload := "[{\"id\":9007199254740993,\"amount\":\"99999999999999.125\",\"ts\":\"2026-11-19T15:00:00Z\"}]"
+    t := table_from_json(payload, s)
+    assert_eq_int(t.cell(0, 0).as_int(), 9007199254740993, "pos_* exact int64 > 2^53")
+    assert_eq_str(t.cell(0, 1).to_string(), "99999999999999.125", "pos_* exact decimal")
+    assert_eq_str(t.cell(0, 2).to_string(), "2026-11-19T15:00:00Z", "pos_* exact datetime")
+
+    rt_json := table_to_json(t)
+    t_inferred := table_from_json(rt_json)
+    assert_eq_int(t_inferred.cell(0, 0).as_int(), 9007199254740993, "pos_* inferred int64 roundtrip")

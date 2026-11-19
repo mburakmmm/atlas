@@ -1,5 +1,14 @@
 # io.nox — Filesystem CSV and JSON convenience operations with overwrite protection for Atlas.
 
+__all__: list[str] = [
+    "resolve_safe_path", "read_csv_file", "write_csv_file",
+    "read_json_file", "write_json_file", "read_delimited_file",
+    "write_delimited_file", "read_tsv_file", "write_tsv_file",
+    "read_csv_file_safe", "write_csv_file_safe", "read_json_file_safe",
+    "write_json_file_safe", "read_delimited_file_safe", "write_delimited_file_safe",
+    "read_csv_files_parallel", "read_csv_files_concat_parallel"
+]
+
 import nox.fs
 import nox.path
 from nox.path import PathError
@@ -25,7 +34,7 @@ def resolve_safe_path(base_dir: str, relative_path: str) -> str:
     try:
         return nox.path.safe_join(base_dir, relative_path)
     except PathError as pe:
-        raise AtlasError("unsafe file path rejected ('" + relative_path + "' under '" + base_dir + "'): " + str(pe))
+        raise AtlasError("unsafe file path rejected ('" + relative_path + "' under '" + base_dir + "'): " + str(pe)) from pe
 
 def _write_text(path: str, content: str, overwrite: bool, atomic: bool) -> None:
     if not overwrite and nox.fs.exists(path):

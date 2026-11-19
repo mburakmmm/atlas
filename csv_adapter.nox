@@ -1,5 +1,7 @@
 # csv_adapter.nox — RFC 4180 CSV parsing, type inference, and serialization for Atlas.
 
+__all__: list[str] = ["infer_schema", "read_csv", "to_csv"]
+
 import nox.csv
 import errors
 from errors import CsvImportError, ShapeError, TypeConversionError, MissingValueError

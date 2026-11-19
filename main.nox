@@ -9,7 +9,7 @@ from atlas import col_mean, col_median, col_std, col_min, col_max, col_sum, col_
 from atlas import TYPE_INT, TYPE_FLOAT, TYPE_STR
 
 print("======================================================================")
-print("Atlas 1.0.0 — Lightweight Tabular Data Analysis & Statistics for Nox")
+print("Atlas 1.2.0 — Lightweight Tabular Data Analysis & Statistics for Nox")
 print("======================================================================")
 
 # 1. Parse CSV dataset
@@ -87,5 +87,5 @@ print("Recovered CSV:")
 print(csv_from_json)
 
 print("======================================================================")
-print("All Atlas 1.0.0 demonstration steps completed successfully!")
+print("All Atlas 1.2.0 demonstration steps completed successfully!")
 print("======================================================================")

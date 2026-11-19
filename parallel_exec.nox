@@ -2,6 +2,13 @@
 # Builds disjoint, per-worker cloned packets before spawning tasks so concurrent workers share
 # zero ARC-managed heap objects across OS threads (deterministic across both QBE and LLVM).
 
+__all__: list[str] = [
+    "clone_isolated_str", "clone_isolated_cell", "clone_isolated_row",
+    "clone_isolated_schema", "clone_isolated_expr", "sort_partition_indices",
+    "parallel_filter_rows", "compute_agg_cell", "compute_agg_slice",
+    "parallel_compute_agg_rows", "parallel_sort_partitions", "async_filter_rows"
+]
+
 import nox.thread
 import nox.decimal
 from nox.decimal import Decimal
@@ -123,44 +130,51 @@ def sort_partition_indices(rows: list[list[Cell]], indices: list[int],
         return res
 
     mid: int = n // 2
-    left_ind: list[int] = []
+    right_len: int = n - mid
+    left_ind: list[int] = [0] * mid
     i: int = 0
     while i < mid:
-        left_ind.append(indices[i])
+        left_ind[i] = indices[i]
         i = i + 1
 
-    right_ind: list[int] = []
+    right_ind: list[int] = [0] * right_len
+    ri_off: int = 0
     while i < n:
-        right_ind.append(indices[i])
+        right_ind[ri_off] = indices[i]
+        ri_off = ri_off + 1
         i = i + 1
 
     sorted_left: list[int] = sort_partition_indices(rows, left_ind, order_col_indices, ascending_flags)
     sorted_right: list[int] = sort_partition_indices(rows, right_ind, order_col_indices, ascending_flags)
 
-    merged: list[int] = []
-    l_idx: int = 0
-    r_idx: int = 0
     nl: int = len(sorted_left)
     nr: int = len(sorted_right)
+    merged: list[int] = [0] * (nl + nr)
+    l_idx: int = 0
+    r_idx: int = 0
+    m_idx: int = 0
 
     while l_idx < nl and r_idx < nr:
         row_l: list[Cell] = rows[sorted_left[l_idx]]
         row_r: list[Cell] = rows[sorted_right[r_idx]]
         cmp_val: int = compare_rows(row_l, row_r, order_col_indices, ascending_flags, False)
         if cmp_val <= 0:
-            merged.append(sorted_left[l_idx])
+            merged[m_idx] = sorted_left[l_idx]
             l_idx = l_idx + 1
         else:
-            merged.append(sorted_right[r_idx])
+            merged[m_idx] = sorted_right[r_idx]
             r_idx = r_idx + 1
+        m_idx = m_idx + 1
 
     while l_idx < nl:
-        merged.append(sorted_left[l_idx])
+        merged[m_idx] = sorted_left[l_idx]
         l_idx = l_idx + 1
+        m_idx = m_idx + 1
 
     while r_idx < nr:
-        merged.append(sorted_right[r_idx])
+        merged[m_idx] = sorted_right[r_idx]
         r_idx = r_idx + 1
+        m_idx = m_idx + 1
 
     return merged
 
@@ -505,12 +519,20 @@ _active_sort_packets: list[_SortPartSlicePacket] = []
 _active_sort_out: list[list[int]] = []
 
 async def _sort_part_slice_worker(pkt: _SortPartSlicePacket) -> list[list[int]]:
+    rows_local: list[list[Cell]] = []
+    ri: int = 0
+    while ri < len(pkt.local_rows):
+        rows_local.append(clone_isolated_row(pkt.local_rows[ri]))
+        ri = ri + 1
+    ord_local: list[int] = _clone_int_list(pkt.order_col_indices)
+    asc_local: list[bool] = _clone_bool_list(pkt.asc_flags)
+
     res: list[list[int]] = []
     pi: int = 0
     n_p: int = len(pkt.part_local_indices)
     while pi < n_p:
-        loc_ind: list[int] = pkt.part_local_indices[pi]
-        sorted_loc: list[int] = sort_partition_indices(pkt.local_rows, loc_ind, pkt.order_col_indices, pkt.asc_flags)
+        loc_ind: list[int] = _clone_int_list(pkt.part_local_indices[pi])
+        sorted_loc: list[int] = sort_partition_indices(rows_local, loc_ind, ord_local, asc_local)
         mapped: list[int] = []
         k: int = 0
         while k < len(sorted_loc):

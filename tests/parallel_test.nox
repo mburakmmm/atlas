@@ -3,8 +3,10 @@
 import nox.test
 import nox.fs
 import nox.thread
+import errors
+from errors import ShapeError
 import values
-from values import Cell, cell_int, cell_float, cell_str, TYPE_INT, TYPE_FLOAT, TYPE_STR
+from values import Cell, cell_int, cell_float, cell_str, TYPE_INT, TYPE_FLOAT, TYPE_STR, INT64_MAX
 import schema
 from schema import Schema, ColumnDef
 import table
@@ -104,5 +106,27 @@ async def _verify_async_entry() -> None:
 
 nox.thread.pool_run(2, _verify_async_entry)
 nox.test.assert_true(async_ok, "async_filter_rows pool_run completed")
+
+# 6. Parallel worker exception isolation (v2.2.25 PoolExtension.pending_exceptions parity)
+s_ov: Schema = Schema([ColumnDef("grp", TYPE_STR, False), ColumnDef("big", TYPE_INT, False)])
+rows_ov: list[list[Cell]] = [
+    [cell_str("G0"), cell_int(INT64_MAX)],
+    [cell_str("G0"), cell_int(1)],
+    [cell_str("G1"), cell_int(INT64_MAX)],
+    [cell_str("G1"), cell_int(2)],
+    [cell_str("G2"), cell_int(10)],
+    [cell_str("G3"), cell_int(20)]
+]
+t_ov: Table = Table(s_ov, rows_ov)
+caught_ov: bool = False
+try:
+    _bad_par: Table = group_by(t_ov, ["grp"]).aggregate([agg_sum("big", "tot")], True)
+except ShapeError:
+    caught_ov = True
+nox.test.assert_true(caught_ov, "parallel aggregate propagates worker ShapeError cleanly")
+
+# Ensure pool remains clean after worker exception
+after_par: Table = group_by(t, ["grp"]).aggregate([agg_count("n")], True)
+nox.test.assert_eq_int(after_par.row_count(), 24, "pool remains healthy after worker exception")
 
 print("parallel_test passed")

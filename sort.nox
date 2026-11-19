@@ -1,5 +1,7 @@
 # sort.nox — Multi-column stable merge sort for table rows.
 
+__all__: list[str] = ["compare_rows", "sort_rows"]
+
 import errors
 from errors import SortError
 import values

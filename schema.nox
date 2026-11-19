@@ -1,5 +1,7 @@
 # schema.nox — Table schema, column definitions, and structural invariants for Atlas.
 
+__all__: list[str] = ["ColumnDef", "Schema", "schema_from_names_and_types", "schema_from_names"]
+
 import nox.collections
 from nox.collections import Set
 import errors

@@ -232,10 +232,10 @@ def _parse_decimal_strict(text: str) -> Decimal:
         raise TypeConversionError("cannot parse '" + text + "' as Decimal")
     try:
         return decimal_parse(trimmed)
-    except ValueError:
-        raise TypeConversionError("cannot parse '" + text + "' as Decimal")
-    except DecimalError:
-        raise TypeConversionError("cannot parse '" + text + "' as Decimal")
+    except ValueError as ve:
+        raise TypeConversionError("cannot parse '" + text + "' as Decimal") from ve
+    except DecimalError as de:
+        raise TypeConversionError("cannot parse '" + text + "' as Decimal") from de
 
 def parse_datetime_ms(text: str) -> int:
     s: str = nox.strings.trim(text)
@@ -411,15 +411,15 @@ class Cell:
                 return 0
             try:
                 return int(str(dec_v.to_bigint()))
-            except ValueError:
-                raise TypeConversionError("Decimal value '" + str(dec_v) + "' is out of 64-bit int range")
+            except ValueError as ve:
+                raise TypeConversionError("Decimal value '" + str(dec_v) + "' is out of 64-bit int range") from ve
         if self.kind == TYPE_DATETIME:
             return self.i
         if self.kind == TYPE_STR:
             try:
                 return int(self.s)
-            except ValueError:
-                raise TypeConversionError("cannot convert string '" + self.s + "' to int")
+            except ValueError as ve:
+                raise TypeConversionError("cannot convert string '" + self.s + "' to int") from ve
         if self.kind == TYPE_BOOL:
             if self.b:
                 return 1
@@ -438,15 +438,15 @@ class Cell:
                 return 0.0
             try:
                 return dec_v.to_float()
-            except ValueError:
-                raise TypeConversionError("cannot convert Decimal '" + str(dec_v) + "' to float")
+            except ValueError as ve:
+                raise TypeConversionError("cannot convert Decimal '" + str(dec_v) + "' to float") from ve
         if self.kind == TYPE_DATETIME:
             return float(self.i)
         if self.kind == TYPE_STR:
             try:
                 return float(self.s)
-            except ValueError:
-                raise TypeConversionError("cannot convert string '" + self.s + "' to float")
+            except ValueError as ve:
+                raise TypeConversionError("cannot convert string '" + self.s + "' to float") from ve
         if self.kind == TYPE_BOOL:
             if self.b:
                 return 1.0
@@ -748,14 +748,14 @@ def parse_cell(text: str, target_type: int, blank_is_missing: bool = True) -> Ce
     if target_type == TYPE_INT:
         try:
             return cell_int(int(text))
-        except ValueError:
-            raise TypeConversionError("cannot parse '" + text + "' as int")
+        except ValueError as ve:
+            raise TypeConversionError("cannot parse '" + text + "' as int") from ve
 
     if target_type == TYPE_FLOAT:
         try:
             return cell_float(float(text))
-        except ValueError:
-            raise TypeConversionError("cannot parse '" + text + "' as float")
+        except ValueError as ve:
+            raise TypeConversionError("cannot parse '" + text + "' as float") from ve
 
     if target_type == TYPE_BOOL:
         if text == "true" or text == "True" or text == "1" or text == "yes":

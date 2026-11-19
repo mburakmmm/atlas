@@ -2,6 +2,16 @@
 # Supports .gz (nox.gzip), .zst decompression (nox.zstd.decompress), .zip (nox.zip), and .tar/.tar.gz (nox.tar)
 # without any external C library dependency in Atlas core.
 
+__all__: list[str] = [
+    "compress_gzip_text", "decompress_gzip_text", "compress_gzip_bytes", "decompress_gzip_bytes",
+    "read_csv_gz", "write_csv_gz", "read_delimited_gz", "write_delimited_gz",
+    "read_json_gz", "write_json_gz", "read_csv_gz_safe", "write_csv_gz_safe",
+    "read_json_gz_safe", "write_json_gz_safe", "decompress_zst_text",
+    "read_csv_zst", "read_json_zst", "read_csv_zst_safe",
+    "pack_zip_tables", "write_zip_tables", "unpack_zip_tables", "read_zip_tables",
+    "pack_tar_tables", "write_tar_gz_tables", "unpack_tar_tables", "read_tar_gz_tables"
+]
+
 import nox.fs
 import nox.path
 from nox.path import PathError
@@ -64,14 +74,14 @@ def compress_gzip_text(text: str) -> str:
         compressed_bytes: list[int] = nox.gzip.compress(text)
         return nox.bytes.str_from_list(compressed_bytes)
     except GzipError as ge:
-        raise CsvImportError("gzip compression failed: " + str(ge))
+        raise CsvImportError("gzip compression failed: " + str(ge)) from ge
 
 def decompress_gzip_text(raw_gz: str) -> str:
     try:
         byte_list: list[int] = nox.bytes.list_from_str(raw_gz)
         return nox.gzip.decompress(byte_list)
     except GzipError as ge:
-        raise CsvImportError("gzip decompression failed: " + str(ge))
+        raise CsvImportError("gzip decompression failed: " + str(ge)) from ge
 
 def compress_gzip_bytes(raw_bytes: str) -> str:
     try:
@@ -79,7 +89,7 @@ def compress_gzip_bytes(raw_bytes: str) -> str:
         compressed_bytes: list[int] = nox.gzip.compress_bytes(in_bytes)
         return nox.bytes.str_from_list(compressed_bytes)
     except GzipError as ge:
-        raise CsvImportError("gzip binary compression failed: " + str(ge))
+        raise CsvImportError("gzip binary compression failed: " + str(ge)) from ge
 
 def decompress_gzip_bytes(raw_gz: str) -> str:
     try:
@@ -87,7 +97,7 @@ def decompress_gzip_bytes(raw_gz: str) -> str:
         out_bytes: list[int] = nox.gzip.decompress_bytes(byte_list)
         return nox.bytes.str_from_list(out_bytes)
     except GzipError as ge:
-        raise CsvImportError("gzip binary decompression failed: " + str(ge))
+        raise CsvImportError("gzip binary decompression failed: " + str(ge)) from ge
 
 def read_csv_gz(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
     raw: str = nox.fs.read_to_string(path)
@@ -140,7 +150,7 @@ def decompress_zst_text(raw_zst: str) -> str:
     try:
         return nox.zstd.decompress(raw_zst)
     except ZstdError as ze:
-        raise CsvImportError("zstd decompression failed: " + str(ze))
+        raise CsvImportError("zstd decompression failed: " + str(ze)) from ze
 
 def read_csv_zst(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True) -> Table:
     raw: str = nox.fs.read_to_string(path)
@@ -189,7 +199,7 @@ def pack_zip_tables(names: list[str], tables: list[Table], include_header: bool 
     try:
         return nox.zip.pack(entries, True)
     except ZipError as ze:
-        raise CsvImportError("zip archive pack failed: " + str(ze))
+        raise CsvImportError("zip archive pack failed: " + str(ze)) from ze
 
 def write_zip_tables(path: str, names: list[str], tables: list[Table], include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True) -> None:
     archive_bytes: str = pack_zip_tables(names, tables, include_header, safe_spreadsheet)
@@ -208,7 +218,7 @@ def unpack_zip_tables(zip_bytes: str, has_header: bool = True, blank_is_missing:
             i = i + 1
         return out
     except ZipError as ze:
-        raise CsvImportError("zip archive unpack failed: " + str(ze))
+        raise CsvImportError("zip archive unpack failed: " + str(ze)) from ze
 
 def read_zip_tables(path: str, has_header: bool = True, blank_is_missing: bool = True) -> dict[str, Table]:
     raw: str = nox.fs.read_to_string(path)
@@ -227,7 +237,7 @@ def pack_tar_tables(names: list[str], tables: list[Table], include_header: bool 
     try:
         return nox.tar.pack(entries)
     except TarError as te:
-        raise CsvImportError("tar archive pack failed: " + str(te))
+        raise CsvImportError("tar archive pack failed: " + str(te)) from te
 
 def write_tar_gz_tables(path: str, names: list[str], tables: list[Table], include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True) -> None:
     tar_bytes: str = pack_tar_tables(names, tables, include_header, safe_spreadsheet)
@@ -247,7 +257,7 @@ def unpack_tar_tables(tar_bytes: str, has_header: bool = True, blank_is_missing:
             i = i + 1
         return out
     except TarError as te:
-        raise CsvImportError("tar archive unpack failed: " + str(te))
+        raise CsvImportError("tar archive unpack failed: " + str(te)) from te
 
 def read_tar_gz_tables(path: str, has_header: bool = True, blank_is_missing: bool = True) -> dict[str, Table]:
     raw_gz: str = nox.fs.read_to_string(path)

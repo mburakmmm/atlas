@@ -5,7 +5,7 @@ import nox.regex
 import errors
 from errors import ColumnNotFoundError, SchemaError
 import values
-from values import Cell
+from values import Cell, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_BOOL, TYPE_DECIMAL, TYPE_DATETIME
 import schema
 from schema import Schema
 import table
@@ -109,14 +109,18 @@ def rule_regex(col_name: str, pattern: str) -> ColumnRule:
 def rule_type(col_name: str, expected_type: int) -> ColumnRule:
     empty_list: list[str] = []
     t_name: str = "unknown"
-    if expected_type == 1:
+    if expected_type == TYPE_INT:
         t_name = "int"
-    elif expected_type == 2:
+    elif expected_type == TYPE_FLOAT:
         t_name = "float"
-    elif expected_type == 3:
+    elif expected_type == TYPE_STR:
         t_name = "str"
-    elif expected_type == 4:
+    elif expected_type == TYPE_BOOL:
         t_name = "bool"
+    elif expected_type == TYPE_DECIMAL:
+        t_name = "decimal"
+    elif expected_type == TYPE_DATETIME:
+        t_name = "datetime"
     return ColumnRule(col_name, RULE_TYPE, float(expected_type), 0.0, 0, 0, empty_list, "must be of type " + t_name)
 
 class ValidationError:

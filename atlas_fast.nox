@@ -223,7 +223,7 @@ def table_from_json_fast(json_text: str, explicit_schema: Schema | None = None, 
     try:
         root = nox.yyjson.open_doc(json_text, mode)
     except YyjsonError as e:
-        raise JsonImportError("yyjson parse failed: " + str(e))
+        raise JsonImportError("yyjson parse failed: " + str(e)) from e
 
     if not nox.yyjson.is_array(root):
         raise JsonImportError("JSON root must be an array of objects")
@@ -418,7 +418,7 @@ def compile_pcre2(pattern: str, flags: int = 0, jit: bool = True) -> Pcre2:
     try:
         return nox.pcre2.compile(pattern, flags, use_jit)
     except Pcre2Error as e:
-        raise AtlasError("PCRE2 compile failed for pattern '" + pattern + "': " + str(e))
+        raise AtlasError("PCRE2 compile failed for pattern '" + pattern + "': " + str(e)) from e
 
 def filter_pcre2_compiled(t: Table, col_name: str, compiled: Pcre2, full_match: bool = False) -> Table:
     col_idx: int = t.schema.index_of(col_name)
@@ -440,7 +440,7 @@ def filter_pcre2_compiled(t: Table, col_name: str, compiled: Pcre2, full_match: 
                 else:
                     matched = compiled.is_match(cell.s)
             except Pcre2Error as e:
-                raise AtlasError("PCRE2 match failed at row " + str(r) + ": " + str(e))
+                raise AtlasError("PCRE2 match failed at row " + str(r) + ": " + str(e)) from e
             if matched:
                 out_rows.append(_clone_cell_list(row))
         r = r + 1
@@ -486,7 +486,7 @@ def replace_pcre2(t: Table, col_name: str, pattern: str, repl: str, out_col: str
             try:
                 new_cell = cell_str(compiled.replace(repl, cell.s, 0))
             except Pcre2Error as e:
-                raise AtlasError("PCRE2 replace failed at row " + str(r) + ": " + str(e))
+                raise AtlasError("PCRE2 replace failed at row " + str(r) + ": " + str(e)) from e
         row_cells: list[Cell] = []
         ci: int = 0
         while ci < t.column_count():
@@ -511,7 +511,7 @@ def compress_lz4_text(text: str, level: int = 0) -> str:
     try:
         return nox.lz4.compress(text, level)
     except Lz4Error as e:
-        raise CsvImportError("LZ4 compression failed: " + str(e))
+        raise CsvImportError("LZ4 compression failed: " + str(e)) from e
 
 def decompress_lz4_text(raw_lz4: str) -> str:
     if not nox.lz4.is_supported():
@@ -519,7 +519,7 @@ def decompress_lz4_text(raw_lz4: str) -> str:
     try:
         return nox.lz4.decompress(raw_lz4)
     except Lz4Error as e:
-        raise CsvImportError("LZ4 decompression failed: " + str(e))
+        raise CsvImportError("LZ4 decompression failed: " + str(e)) from e
 
 def write_csv_lz4(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True, level: int = 0) -> None:
     csv_txt: str = to_csv(t, include_header, safe_spreadsheet)
@@ -545,7 +545,7 @@ def compress_zst_fast(text: str, level: int = 3) -> str:
     try:
         return nox.zstd.compress(text, level)
     except ZstdError as e:
-        raise CsvImportError("Zstandard compression failed: " + str(e))
+        raise CsvImportError("Zstandard compression failed: " + str(e)) from e
 
 def write_csv_zst_fast(t: Table, path: str, include_header: bool = True, safe_spreadsheet: bool = False, atomic: bool = True, level: int = 3) -> None:
     csv_txt: str = to_csv(t, include_header, safe_spreadsheet)
@@ -571,7 +571,7 @@ def decompress_brotli_text(raw_br: str, max_output: int = 0) -> str:
     try:
         return nox.brotli.decompress(raw_br, max_output)
     except BrotliError as e:
-        raise CsvImportError("Brotli decompression failed: " + str(e))
+        raise CsvImportError("Brotli decompression failed: " + str(e)) from e
 
 def read_csv_br(path: str, has_header: bool = True, explicit_schema: Schema | None = None, blank_is_missing: bool = True, max_output: int = 0) -> Table:
     raw: str = nox.fs.read_to_string(path)

@@ -1,5 +1,10 @@
 # join.nox — Relational Inner, Left Outer, Full Outer, and Cross Joins for Atlas Tables.
 
+__all__: list[str] = [
+    "join_inner_keys", "join_inner", "join_left_keys", "join_left",
+    "join_full_keys", "join_full", "join_cross"
+]
+
 import errors
 from errors import ShapeError, ColumnNotFoundError, SchemaError
 import values

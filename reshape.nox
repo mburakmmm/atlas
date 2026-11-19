@@ -1,5 +1,7 @@
 # reshape.nox — Table reshaping operations: melt, pivot, and pivot_table.
 
+__all__: list[str] = ["melt", "pivot", "pivot_table"]
+
 import nox.decimal
 from nox.decimal import Decimal, from_int as decimal_from_int
 import errors

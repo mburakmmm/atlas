@@ -2,7 +2,7 @@
 
 ## 1. Compiler & Platform Requirements
 
-- **Nox Compiler**: `noxc >= 2.1.186` (verified on `noxc 2.1.186`).
+- **Nox Compiler**: `noxc >= 2.2.38` (verified on `noxc 2.2.38`).
 - **Operating Systems**: macOS (Darwin x86_64 / arm64), Linux (x86_64 / aarch64), Windows (x86_64).
 - **Backends**: LLVM (`--backend llvm`) and QBE (`--backend qbe`), verified continuously in CI.
 - **Profiles**:

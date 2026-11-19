@@ -1,5 +1,11 @@
 # errors.nox — Atlas error hierarchy
 
+__all__: list[str] = [
+    "AtlasError", "SchemaError", "ColumnNotFoundError", "TypeConversionError",
+    "MissingValueError", "CsvImportError", "JsonImportError", "ShapeError",
+    "AggregationError", "SortError", "ResourceLimitError", "UnsupportedFeatureError"
+]
+
 class AtlasError(Exception):
     pass
 

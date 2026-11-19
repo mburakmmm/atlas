@@ -1,7 +1,11 @@
-# json_adapter.nox — JSON array-of-objects import, export, and CSV ↔ JSON conversion for Atlas.
+# json_adapter.nox — JSON array-of-objects import, export, and CSV <-> JSON conversion for Atlas.
+# Uses Nox 2.2+ zero-allocation position-based tape navigation (nox.json.pos_*) for high-speed JSON parsing.
+
+__all__: list[str] = ["table_from_json", "table_to_json", "csv_to_json", "json_to_csv", "table_to_json_rows", "table_from_json_rows"]
 
 import nox.json
-from nox.json import JsonWriter, JsonError, is_array, is_object, is_null, is_bool, is_number, is_string, as_bool, as_number, as_int, as_string, number_text, array_len, array_get, object_len, object_key, object_value, get_or_null
+from nox.json import JsonWriter, JsonError, pos_root, pos_kind, pos_len, pos_at, pos_key, pos_find, pos_bool, pos_number, pos_int, pos_str, pos_dump
+import nox.strings
 import errors
 from errors import JsonImportError, ShapeError, TypeConversionError, MissingValueError
 import values
@@ -16,16 +20,81 @@ from csv_adapter import read_csv, to_csv
 def _is_float_number_text(num_txt: str) -> bool:
     return "." in num_txt or "e" in num_txt or "E" in num_txt
 
+def _infer_schema_from_tape(root: JsonValue, root_pos: int, num_items: int) -> Schema:
+    discovered_keys: list[str] = []
+    discovered_types: list[int] = []
+    seen_key_idx: dict[str, int] = {}
+
+    item_idx: int = 0
+    while item_idx < num_items:
+        elem_p: int = pos_at(root, root_pos, item_idx)
+        if pos_kind(root, elem_p) != 5:
+            raise JsonImportError("array element at index " + str(item_idx) + " is not a JSON object")
+        num_keys: int = pos_len(root, elem_p)
+        k_idx: int = 0
+        while k_idx < num_keys:
+            k_name: str = pos_key(root, elem_p, k_idx)
+            val_p: int = pos_at(root, elem_p, k_idx)
+            vk: int = pos_kind(root, val_p)
+
+            val_type: int = TYPE_STR
+            if vk == 0:
+                val_type = TYPE_NULL
+            elif vk == 1:
+                val_type = TYPE_BOOL
+            elif vk == 2:
+                num_txt: str = pos_dump(root, val_p)
+                if _is_float_number_text(num_txt):
+                    val_type = TYPE_FLOAT
+                else:
+                    try:
+                        _chk_int: int = pos_int(root, val_p)
+                        val_type = TYPE_INT
+                    except JsonError as je:
+                        raise JsonImportError("JSON integer out of 64-bit signed range for key '" + k_name + "' at row " + str(item_idx) + ": " + str(je)) from je
+            elif vk == 3:
+                val_type = TYPE_STR
+            else:
+                raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
+
+            if k_name not in seen_key_idx:
+                seen_key_idx[k_name] = len(discovered_keys)
+                discovered_keys.append(k_name)
+                discovered_types.append(val_type)
+            else:
+                existing_idx: int = seen_key_idx[k_name]
+                curr_type: int = discovered_types[existing_idx]
+                if curr_type == TYPE_NULL and val_type != TYPE_NULL:
+                    discovered_types[existing_idx] = val_type
+                elif (curr_type == TYPE_INT and val_type == TYPE_FLOAT) or (curr_type == TYPE_FLOAT and val_type == TYPE_INT):
+                    discovered_types[existing_idx] = TYPE_FLOAT
+                elif curr_type != val_type and val_type != TYPE_NULL:
+                    discovered_types[existing_idx] = TYPE_STR
+            k_idx = k_idx + 1
+        item_idx = item_idx + 1
+
+    cols: list[ColumnDef] = []
+    c_i: int = 0
+    while c_i < len(discovered_keys):
+        t: int = discovered_types[c_i]
+        if t == TYPE_NULL:
+            t = TYPE_STR
+        cols.append(ColumnDef(discovered_keys[c_i], t, True))
+        c_i = c_i + 1
+    return Schema(cols)
+
 def table_from_json(json_text: str, explicit_schema: Schema | None = None) -> Table:
     root: JsonValue = nox.json.parse("null")
     try:
         root = nox.json.parse(json_text)
     except JsonError as je:
-        raise JsonImportError("invalid JSON input: " + str(je))
-    if not is_array(root):
+        raise JsonImportError("invalid JSON input: " + str(je)) from je
+
+    root_pos: int = pos_root(root)
+    if pos_kind(root, root_pos) != 4:
         raise JsonImportError("root JSON value must be an array of objects")
 
-    num_items: int = array_len(root)
+    num_items: int = pos_len(root, root_pos)
     if num_items == 0:
         if explicit_schema != None:
             empty_rows: list[list[Cell]] = []
@@ -39,129 +108,67 @@ def table_from_json(json_text: str, explicit_schema: Schema | None = None) -> Ta
     if explicit_schema != None:
         s = explicit_schema
     else:
-        # Collect distinct keys across all objects in array to determine schema
-        discovered_keys: list[str] = []
-        discovered_types: list[int] = []
-        item_idx: int = 0
-        while item_idx < num_items:
-            elem: JsonValue = array_get(root, item_idx)
-            if not is_object(elem):
-                raise JsonImportError("array element at index " + str(item_idx) + " is not a JSON object")
-            num_keys: int = object_len(elem)
-            k_idx: int = 0
-            while k_idx < num_keys:
-                k_name: str = object_key(elem, k_idx)
-                k_val: JsonValue = object_value(elem, k_idx)
-                # Check if k_name is already in discovered_keys
-                existing_idx: int = -1
-                scan: int = 0
-                while scan < len(discovered_keys):
-                    if discovered_keys[scan] == k_name:
-                        existing_idx = scan
-                    scan = scan + 1
-
-                val_type: int = TYPE_STR
-                if is_null(k_val):
-                    val_type = TYPE_NULL
-                elif is_bool(k_val):
-                    val_type = TYPE_BOOL
-                elif is_number(k_val):
-                    num_txt: str = number_text(k_val)
-                    if _is_float_number_text(num_txt):
-                        val_type = TYPE_FLOAT
-                    else:
-                        try:
-                            _chk_int: int = as_int(k_val)
-                            val_type = TYPE_INT
-                        except JsonError as je:
-                            raise JsonImportError("JSON integer out of 64-bit signed range for key '" + k_name + "' at row " + str(item_idx) + ": " + str(je))
-                elif is_string(k_val):
-                    val_type = TYPE_STR
-                else:
-                    raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
-
-                if existing_idx < 0:
-                    discovered_keys.append(k_name)
-                    discovered_types.append(val_type)
-                else:
-                    curr_type: int = discovered_types[existing_idx]
-                    if curr_type == TYPE_NULL and val_type != TYPE_NULL:
-                        discovered_types[existing_idx] = val_type
-                    elif (curr_type == TYPE_INT and val_type == TYPE_FLOAT) or (curr_type == TYPE_FLOAT and val_type == TYPE_INT):
-                        discovered_types[existing_idx] = TYPE_FLOAT
-                    elif curr_type != val_type and val_type != TYPE_NULL:
-                        # Fallback to string if mixed
-                        discovered_types[existing_idx] = TYPE_STR
-                k_idx = k_idx + 1
-            item_idx = item_idx + 1
-
-        cols: list[ColumnDef] = []
-        c_i: int = 0
-        while c_i < len(discovered_keys):
-            t: int = discovered_types[c_i]
-            if t == TYPE_NULL:
-                t = TYPE_STR
-            cols.append(ColumnDef(discovered_keys[c_i], t, True))
-            c_i = c_i + 1
-        s = Schema(cols)
+        s = _infer_schema_from_tape(root, root_pos, num_items)
 
     expected_cols: int = s.column_count()
     rows: list[list[Cell]] = []
     r_i: int = 0
 
     while r_i < num_items:
-        elem_obj: JsonValue = array_get(root, r_i)
-        if not is_object(elem_obj):
+        elem_p: int = pos_at(root, root_pos, r_i)
+        if pos_kind(root, elem_p) != 5:
             raise JsonImportError("array element at index " + str(r_i) + " is not a JSON object")
 
         row: list[Cell] = []
-        c_i = 0
+        c_i: int = 0
         while c_i < expected_cols:
             col_def: ColumnDef = s.columns[c_i]
-            jv_cell: JsonValue = get_or_null(elem_obj, col_def.name)
+            val_p: int = pos_find(root, elem_p, col_def.name)
             cell: Cell = cell_null()
-            if is_null(jv_cell):
-                cell = cell_null()
-            elif col_def.data_type == TYPE_DECIMAL:
-                if is_number(jv_cell):
-                    cell = cell_decimal_str(number_text(jv_cell))
-                elif is_string(jv_cell):
-                    cell = cell_decimal_str(as_string(jv_cell))
-                else:
-                    raise JsonImportError("invalid Decimal value for column '" + col_def.name + "' at row " + str(r_i))
-            elif col_def.data_type == TYPE_DATETIME:
-                if is_string(jv_cell):
-                    cell = cell_datetime_str(as_string(jv_cell))
-                elif is_number(jv_cell):
-                    try:
-                        cell = cell_datetime_ms(as_int(jv_cell))
-                    except JsonError as je:
-                        raise JsonImportError("invalid DateTime epoch_ms for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je))
-                else:
-                    raise JsonImportError("invalid DateTime value for column '" + col_def.name + "' at row " + str(r_i))
-            elif is_bool(jv_cell):
-                cell = cell_bool(as_bool(jv_cell))
-            elif is_number(jv_cell):
-                if col_def.data_type == TYPE_INT:
-                    try:
-                        cell = cell_int(as_int(jv_cell))
-                    except JsonError as je:
-                        raise JsonImportError("invalid integer value for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je))
-                elif col_def.data_type == TYPE_FLOAT:
-                    cell = cell_float(as_number(jv_cell))
-                else:
-                    raw_num_txt: str = number_text(jv_cell)
-                    if _is_float_number_text(raw_num_txt):
-                        cell = cell_float(as_number(jv_cell))
+            if val_p >= 0:
+                vk: int = pos_kind(root, val_p)
+                if vk == 0:
+                    cell = cell_null()
+                elif col_def.data_type == TYPE_DECIMAL:
+                    if vk == 2:
+                        cell = cell_decimal_str(pos_dump(root, val_p))
+                    elif vk == 3:
+                        cell = cell_decimal_str(pos_str(root, val_p))
                     else:
+                        raise JsonImportError("invalid Decimal value for column '" + col_def.name + "' at row " + str(r_i))
+                elif col_def.data_type == TYPE_DATETIME:
+                    if vk == 3:
+                        cell = cell_datetime_str(pos_str(root, val_p))
+                    elif vk == 2:
                         try:
-                            cell = cell_int(as_int(jv_cell))
+                            cell = cell_datetime_ms(pos_int(root, val_p))
                         except JsonError as je:
-                            raise JsonImportError("invalid integer value for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je))
-            elif is_string(jv_cell):
-                cell = cell_str(as_string(jv_cell))
-            else:
-                raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
+                            raise JsonImportError("invalid DateTime epoch_ms for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je)) from je
+                    else:
+                        raise JsonImportError("invalid DateTime value for column '" + col_def.name + "' at row " + str(r_i))
+                elif vk == 1:
+                    cell = cell_bool(pos_bool(root, val_p))
+                elif vk == 2:
+                    if col_def.data_type == TYPE_INT:
+                        try:
+                            cell = cell_int(pos_int(root, val_p))
+                        except JsonError as je:
+                            raise JsonImportError("invalid integer value for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je)) from je
+                    elif col_def.data_type == TYPE_FLOAT:
+                        cell = cell_float(pos_number(root, val_p))
+                    else:
+                        raw_num_txt: str = pos_dump(root, val_p)
+                        if _is_float_number_text(raw_num_txt):
+                            cell = cell_float(pos_number(root, val_p))
+                        else:
+                            try:
+                                cell = cell_int(pos_int(root, val_p))
+                            except JsonError as je:
+                                raise JsonImportError("invalid integer value for column '" + col_def.name + "' at row " + str(r_i) + ": " + str(je)) from je
+                elif vk == 3:
+                    cell = cell_str(pos_str(root, val_p))
+                else:
+                    raise JsonImportError("nested structures (arrays/objects) are not supported in 2D tabular cell")
 
             if not col_def.nullable and cell.is_missing():
                 raise MissingValueError("column '" + col_def.name + "' is not nullable, but missing value found at row " + str(r_i))

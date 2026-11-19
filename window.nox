@@ -1,5 +1,10 @@
 # window.nox — Window functions and WindowContext pipeline for Atlas tables.
 
+__all__: list[str] = [
+    "WindowContext", "row_number", "rank", "dense_rank",
+    "lag", "lead", "cumulative_sum", "moving_average"
+]
+
 import nox.decimal
 from nox.decimal import Decimal, from_int as decimal_from_int
 import errors
@@ -504,8 +509,11 @@ class WindowContext:
         if not skip_null and null_policy == "skip":
             actual_policy = "null_row"
 
-        if actual_policy != "skip" and actual_policy != "null_row" and actual_policy != "propagate":
-            raise ShapeError("unsupported null_policy: '" + actual_policy + "', must be 'skip', 'null_row', or 'propagate'")
+        match actual_policy:
+            case "skip" | "null_row" | "propagate":
+                pass
+            case _:
+                raise ShapeError("unsupported null_policy: '" + actual_policy + "', must be 'skip', 'null_row', or 'propagate'")
 
         out_nullable: bool = (actual_policy != "skip")
         if self.num_rows == 0:

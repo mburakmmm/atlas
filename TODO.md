@@ -33,6 +33,9 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 | **v0.10.0** | **Orta Vade: `Decimal` & `DateTime/Timezone` Sütunları, Sıkıştırılmış Formatlar & `parallel=True`** | ✅ **TAMAMLANDI** | 45/45 Test Geçti (`noxc test` + QBE/LLVM) |
 | **v0.11.0** | **Uzun Vade: `atlas_fast` (`noxclibs`), İç `enum`/`match` Modernizasyonu & `@dataclass` Ergonomisi** | ✅ **TAMAMLANDI** | 47/47 Test Geçti (`noxc test` + QBE/LLVM) |
 | **v1.0.0** | **Nihai Stabil Genel API, `"source": "nox"`, CI/Release Gate & Topluluk Sürümü** | ✅ **TAMAMLANDI** | 47/47 Test Geçti (`noxc test` + QBE/LLVM) |
+| **v1.0.1** | **Nox 2.2.38 Faz A: `--strict-spawn-shared` Uyumu, `raise ... from e` & D1.2 Denetimi** | ✅ **TAMAMLANDI** | LLVM + QBE (`--strict-spawn-shared` Yeşil) |
+| **v1.1.0** | **Nox 2.2.38 Faz B: Zero-Alloc JSON Tape (`pos_*`), `[x]*n` & Sıcak Döngü Optimizasyonu** | ✅ **TAMAMLANDI** | 7/7 + QBE + `benchmark_json.nox` Geçti |
+| **v1.2.0** | **Nox 2.2.38 Faz C: `__all__`, Variadik/`match`/`type` Ergonomisi & SBOM/CI Matrisi** | ✅ **TAMAMLANDI** | 48/48 Test + QBE + `--strict-spawn-shared` + SBOM |
 
 ---
 
@@ -716,3 +719,43 @@ Bu dosya, `AGENTS.md` bağlayıcı mühendislik sözleşmesi temel alınarak haz
 - [x] `AGENTS.md` §1 kapsam dışı kurallarına uygun olarak zorunlu C bağımlılığı olmadan saf-Nox çekirdek (`atlas.nox`) ve opsiyonel masaüstü hızlandırıcı (`atlas_fast.nox`) mimarisinin ayrıştırılması.
 - [x] `nox.json` içinde `"version": "1.0.0"` ve `"source": "nox"` yapılandırması (`noxc 2.1.186` CLI denetimi `docs/capabilities.md` içinde dürüstçe belgelendi).
 - [x] Çapraz platform CI (`.github/workflows/ci.yml`) ve Release Gate (`.github/workflows/release.yml`) iş akışlarının 47 test paketi, QBE/LLVM backend matrisi, yeni örnekler ve benchmark'larla güncellenmesi.
+
+---
+
+## ✅ Sürüm 1.0.1 — Nox 2.2.38 Faz A: Statik Eşzamanlılık, İstisna Zinciri & D1.2 Denetimi (Tamamlananlar)
+
+- [x] **`--strict-spawn-shared` Tam Uyumu (`parallel_exec.nox`, `io.nox`)**:
+  - `parallel_exec.nox` (`_sort_part_slice_worker`) içindeki paylaşılan `pkt` alanlarının yerel kopyalara ayrıştırılması; `noxc check --strict-spawn-shared atlas.nox`, `atlas_fast.nox` ve `tests/parallel_test.nox` %100 yeşil hale getirildi.
+- [x] **Yapılandırılmış İstisna Zinciri (`raise X from Y` / `Exception.cause`, `v2.2.22`)**:
+  - `json_adapter.nox`, `io.nox`, `streaming.nox`, `archive.nox`, `temporal.nox`, `atlas_fast.nox` ve `values.nox` modüllerinde alt seviye `JsonError`, `PathError`, `GzipError`, `ZstdError`, `ZipError`, `TarError`, `TimezoneError`, `YyjsonError`, `Pcre2Error`, `Lz4Error`, `BrotliError`, `ValueError`, `DecimalError` istisnaları `raise ... from e` ile `.cause` bilgisini koruyacak şekilde yükseltildi.
+- [x] **`validation.nox` (`rule_type`) & `D1.2` Bayat Liste Takma Adı Denetimi**:
+  - `validation.nox` `rule_type` fonksiyonuna `TYPE_DECIMAL` (`"decimal"`) ve `TYPE_DATETIME` (`"datetime"`) desteği ve testleri eklendi.
+  - Tüm çekirdek modüllerde `alias = obj.field` + `alias.append(...)` (D1.2) taraması yapıldı; tüm güncellemelerin geri-yazma sözleşmesine uyduğu doğrulandı.
+- [x] **Eşzamanlı İşçi İstisna İzolasyonu & CRLF Regresyon Testleri**:
+  - `tests/parallel_test.nox` içine eşzamanlı işçilerde `ShapeError` taşma/istisna izolasyon testi ve `tests/tsv_test.nox` içine CRLF (`\r\n`) sınır testi eklendi; LLVM + QBE'de geçti.
+
+---
+
+## ✅ Sürüm 1.1.0 — Nox 2.2.38 Faz B: Zero-Alloc JSON Tape (`pos_*`) & Sıcak Döngü Optimizasyonu (Tamamlananlar)
+
+- [x] **Zero-Alloc `nox.json.pos_*` Tape Tabanlı JSON Okuma (`json_adapter.nox`)**:
+  - `table_from_json` ve `table_from_json_rows` içinde düğüm/dize tahsissiz `pos_root`, `pos_len`, `pos_at`, `pos_kind`, `pos_find`, `pos_key`, `pos_int`, `pos_number`, `pos_bool`, `pos_str`, `pos_dump` + $O(1)$ şema anahtarı keşfi uygulandı.
+  - `benchmarks/benchmark_json.nox` ile 20.000 JSON nesnesinde **9 ms** explicit okuma (yyjson 6 ms ile birebir parity) doğrulandı.
+- [x] **Sıcak Döngü & Ön-Tahsis İyileştirmeleri (`table.nox`, `parallel_exec.nox`)**:
+  - `table.nox` (`to_grid_string`, `print_preview`) içinde `nox.strings.repeat` + `[0]*n` / `["---"]*n` + `nox.strings.join` kullanımına geçildi.
+  - `parallel_exec.nox` (`sort_partition_indices`) içinde `[0] * n` tek-tahsis ön ayırması uygulandı.
+- [x] **Büyük Blok & Döngüsel Bellek Baskısı Testi (`v2.2.26`)**:
+  - `benchmarks/benchmark_json.nox` içinde 6 turlu 20.000 satırlık tablo üretim/bırakma döngüsü (**52 ms**) ve LLVM/QBE parity doğrulandı.
+
+---
+
+## ✅ Sürüm 1.2.0 — Nox 2.2.38 Faz C: `__all__` Kapsülleme, Dil Ergonomisi & Tedarik Zinciri CI (Tamamlananlar)
+
+- [x] **`__all__` ile Modül Görünürlüğü Kilidi (`v2.2.5`)**:
+  - 18 temiz çekirdek modüle (`errors`, `schema`, `sort`, `stats`, `csv_adapter`, `json_adapter`, `delimited`, `io`, `temporal`, `archive`, `parallel_exec`, `join`, `window`, `reshape`, `concat`, `sql_adapter`, `key_encoding`, `table`) explicit `__all__: list[str]` listeleri eklenerek dahili `_...` yardımcıları derleme zamanında gizlendi (`noxc 2.2.38` sabiti/alias kısıtı `docs/capabilities.md`'de belgelendi).
+- [x] **Nox 2.2 Dil Ergonomisi (Geriye Dönük Uyumlu)**:
+  - `atlas.nox` içinde `type TableRow = list[Cell]` takma adı ve variadik `select_cols`, `drop_cols`, `concat_all` yardımcıları eklendi.
+  - `window.nox` `null_policy` kontrolünde skaler `match/case`, testlerde işaretçi Optional alan daraltması (`c1.d != None`) ve ham dizeler (`r"..."`) doğrulandı.
+- [x] **Kapsamlı `nox 2.2` Test Paketi, Dokümantasyon & CI/Release Gate**:
+  - `tests/nox_2_2_features_test.nox` paketi (48/48 test süiti), `--strict-spawn-shared`, `noxc sbom .` ve LLVM/QBE matrisi `.github/workflows/ci.yml` ve `.github/workflows/release.yml`'e işlendi.
+  - `docs/capabilities.md`, `docs/compatibility.md`, `docs/api.md`, `README.md`, `CHANGELOG.md` ve `nox.json` (`1.2.0`) güncellendi.

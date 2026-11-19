@@ -1,5 +1,11 @@
 # temporal.nox — Portable DateTime and IANA Timezone utilities for Atlas.
 
+__all__: list[str] = [
+    "timezone_is_supported", "datetime_utc_offset", "datetime_to_local",
+    "datetime_from_local", "datetime_format_iso", "table_parse_datetime",
+    "table_format_datetime_iso"
+]
+
 import nox.time
 from nox.time import DateTime, from_epoch_ms
 import nox.timezone
@@ -20,7 +26,7 @@ def datetime_utc_offset(zone: str, epoch_ms: int) -> int:
     try:
         return nox.timezone.utc_offset(zone, epoch_ms // 1000)
     except TimezoneError as te:
-        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te)) from te
 
 def datetime_to_local(zone: str, c: Cell) -> DateTime:
     if c.is_missing():
@@ -29,13 +35,13 @@ def datetime_to_local(zone: str, c: Cell) -> DateTime:
     try:
         return nox.timezone.to_local(zone, ms)
     except TimezoneError as te:
-        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te)) from te
 
 def datetime_from_local(zone: str, dt: DateTime) -> Cell:
     try:
         return cell_datetime_ms(nox.timezone.from_local(zone, dt))
     except TimezoneError as te:
-        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te)) from te
 
 def datetime_format_iso(zone: str, c: Cell) -> str:
     if c.is_missing():
@@ -44,7 +50,7 @@ def datetime_format_iso(zone: str, c: Cell) -> str:
     try:
         return nox.timezone.format_iso(zone, ms)
     except TimezoneError as te:
-        raise TypeConversionError("timezone error for '" + zone + "': " + str(te))
+        raise TypeConversionError("timezone error for '" + zone + "': " + str(te)) from te
 
 def table_parse_datetime(t: Table, col_name: str, out_col: str = "") -> Table:
     col_idx: int = t.schema.index_of(col_name)

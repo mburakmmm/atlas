@@ -113,3 +113,24 @@ def col_iqr(t: Table, col_name: str) -> float:
 
 def filter_outliers(t: Table, col_name: str, multiplier: float = 1.5, keep_missing: bool = True) -> Table:
     return t.filter_outliers_iqr(col_name, multiplier, keep_missing)
+
+# Nox 2.2 type alias & variadic convenience API (non-breaking additions)
+type TableRow = list[Cell]
+
+def select_cols(t: Table, *cols: str) -> Table:
+    col_list: list[str] = []
+    for c in cols:
+        col_list.append(c)
+    return t.select(col_list)
+
+def drop_cols(t: Table, *cols: str) -> Table:
+    col_list: list[str] = []
+    for c in cols:
+        col_list.append(c)
+    return t.drop(col_list)
+
+def concat_all(*tables: Table) -> Table:
+    t_list: list[Table] = []
+    for tbl in tables:
+        t_list.append(tbl)
+    return concat_rows(t_list)

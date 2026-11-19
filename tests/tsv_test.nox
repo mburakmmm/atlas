@@ -93,4 +93,13 @@ nox.test.assert_eq_str(t_fs2.cell(1, 0).as_str(), "Ankara", "Ankara cell")
 if nox.fs.exists(tmp_path):
     nox.fs.remove_file(tmp_path)
 
+# 8. CRLF (\r\n) delimited input with quoted multiline/CRLF fields and ragged blank line check
+raw_crlf: str = "k\tnote\r\n1\t\"he\nllo\"\r\n2\t\"world\"\r\n"
+t_crlf: Table = read_tsv(raw_crlf)
+nox.test.assert_eq_int(t_crlf.row_count(), 2, "CRLF TSV preserves 2 rows")
+nox.test.assert_eq_int(t_crlf.cell(0, 0).as_int(), 1, "CRLF TSV row 0 int")
+nox.test.assert_eq_str(t_crlf.cell(0, 1).as_str(), "he\nllo", "CRLF TSV row 0 quoted newline without CR leak")
+nox.test.assert_eq_int(t_crlf.cell(1, 0).as_int(), 2, "CRLF TSV row 1 int")
+nox.test.assert_eq_str(t_crlf.cell(1, 1).as_str(), "world", "CRLF TSV row 1 str without CR")
+
 print("tsv_test passed")
